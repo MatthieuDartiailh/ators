@@ -1,9 +1,8 @@
 ///
 use pyo3::{
-    pyclass, pymethods,
+    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyResult, Python, pyclass, pymethods,
     sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods},
-    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyResult, Python,
 };
 
 mod default;
@@ -104,7 +103,9 @@ impl Member {
                     None => {
                         // Attempt to create a default value
                         let default = m_ref.default.default(&member, object)?;
-                        let new = m_ref.validator.validate(&member, object, default)?;
+                        let new = m_ref
+                            .validator
+                            .validate(Some(&member), Some(object), default)?;
                         object
                             .borrow_mut()
                             .set_slot(m_ref.slot_index as usize, new.clone());
@@ -148,7 +149,9 @@ impl Member {
             }
 
             // Validate the new value
-            let new = m_ref.validator.validate(&member, object, value)?;
+            let new = m_ref
+                .validator
+                .validate(Some(&member), Some(object), value)?;
             object
                 .borrow_mut()
                 .set_slot(m_ref.slot_index as usize, new.clone());

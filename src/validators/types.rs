@@ -1,14 +1,14 @@
+///
 use pyo3::{
+    Bound, Py, PyAny, PyResult,
     ffi::{PyBool_Check, PyBytes_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check},
     pyclass,
-    types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString, PyTuple, PyTupleMethods,
-        PyType, PyTypeMethods,
-    },
-    Bound, Py, PyAny, PyResult, PyTypeInfo,
+    types::{PyAnyMethods, PyDict, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
 };
 
+///
 #[pyclass(frozen)]
+#[derive(Debug)]
 pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Any {},
@@ -48,22 +48,33 @@ pub enum TypeValidator {
 
 macro_rules! validation_error {
     ($type:expr, $member:expr, $object:expr, $value:expr) => {
-        Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "The member {} from {} expects an {}, got {} ({})",
-            $member.borrow().name,
-            $object.repr()?,
-            $type,
-            $value.repr()?,
-            $value.get_type().name()?
-        )))
+        if let Some(m) = $member
+            && let Some(o) = $object
+        {
+            Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "The member {} from {} expects a {}, got {} ({})",
+                m.borrow().name,
+                o.repr()?,
+                $type,
+                $value.repr()?,
+                $value.get_type().name()?
+            )))
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Expected a {}, got {} ({})",
+                $type,
+                $value.repr()?,
+                $value.get_type().name()?
+            )))
+        }
     };
 }
 
 impl TypeValidator {
     pub fn validate_type<'py>(
         &self,
-        member: &Bound<'py, crate::member::Member>,
-        object: &Bound<'py, crate::core::BaseAtors>,
+        member: Option<&Bound<'py, crate::member::Member>>,
+        object: Option<&Bound<'py, crate::core::BaseAtors>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
@@ -107,13 +118,25 @@ impl TypeValidator {
                 if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
                     let t_length = tuple.len();
                     if t_length != items.len() {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                            "The member {} from {} expects a tuple of length {}, got a tuple of length {}",
-                            member.borrow().name,
-                            object.repr()?,
-                            items.len(),
-                            t_length,
-                        )));
+                        return {
+                            if let Some(m) = member
+                                && let Some(o) = object
+                            {
+                                Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "The member {} from {} expects a tuple of length {}, got a tuple of length {}",
+                                    m.borrow().name,
+                                    o.repr()?,
+                                    items.len(),
+                                    t_length,
+                                )))
+                            } else {
+                                Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Expected a tuple of length {}, got a tuple of length {}",
+                                    items.len(),
+                                    t_length,
+                                )))
+                            }
+                        };
                     }
                     let py = value.py();
                     let mut validated_items = Vec::with_capacity(items.len());
@@ -151,7 +174,10 @@ impl TypeValidator {
                     Some(kw) => Some(kw.bind(py)),
                 },
             ),
-            _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(""))),
+            _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot create a default value using args and kwargs for {:?}",
+                self
+            ))),
         }
     }
 }

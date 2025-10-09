@@ -25,8 +25,8 @@ impl Coercer {
     pub(crate) fn coerce_value<'py>(
         &self,
         type_validator: &TypeValidator,
-        member: &Bound<'py, crate::member::Member>,
-        object: &Bound<'py, crate::core::BaseAtors>,
+        member: Option<&Bound<'py, crate::member::Member>>,
+        object: Option<&Bound<'py, crate::core::BaseAtors>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();
@@ -41,9 +41,36 @@ impl Coercer {
                 TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
-            Self::CallObject { callable } => callable.bind(member.py()).call1((value,)),
-            Self::MemberMethod { meth_name } => member.call_method1(meth_name, (object, value)),
-            Self::ObjectMethod { meth_name } => object.call_method1(meth_name, (member, value)),
+            Self::CallObject { callable } => callable.bind(value.py()).call1((value,)),
+            Self::MemberMethod { meth_name } => member
+                .ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                    "Cannot use MemberMethod coercion when validator is not linked to a member."
+                ))?
+                .call_method1(
+                    meth_name,
+                    (
+                        object.ok_or(
+                            pyo3::exceptions::PyTypeError::new_err(
+                                "Cannot use MemberMethod coercion when validator is not linked to a member."
+                            )
+                        )?,
+                        value,
+                    ),
+                ),
+            Self::ObjectMethod { meth_name } => object
+                .ok_or(pyo3::exceptions::PyTypeError::new_err(
+                    "Cannot use ObjectMethod coercion when validator is not linked to a member."
+                ))?
+                .call_method1(
+                    meth_name,
+                    (
+                        member.ok_or(
+                            pyo3::exceptions::PyTypeError::new_err(
+                                "Cannot use ObjectMethod coercion when validator is not linked to a member."
+                            )
+                        )?,
+                    ),
+                ),
         }
     }
 }

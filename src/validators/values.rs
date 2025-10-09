@@ -1,5 +1,5 @@
 ///
-use pyo3::{pyclass, types::PyFrozenSet, Bound, Py, PyAny, PyResult};
+use pyo3::{Bound, Py, PyAny, PyResult, pyclass, types::PyFrozenSet};
 
 #[pyclass]
 pub enum ValueValidator {
@@ -22,10 +22,10 @@ pub enum ValueValidator {
 impl ValueValidator {
     pub fn validate_value<'py>(
         &self,
-        member: &Bound<'py, crate::member::Member>,
-        object: &Bound<'py, crate::core::BaseAtors>,
+        member: Option<&Bound<'py, crate::member::Member>>,
+        object: Option<&Bound<'py, crate::core::BaseAtors>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        Ok(())
+        Ok(()) // XXX
     }
 }
