@@ -4,6 +4,7 @@ use pyo3::{
     sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods},
 };
+use std::clone::Clone;
 
 mod default;
 use default::DefaultBehavior;
@@ -37,6 +38,7 @@ pub struct Member {
     delattr: DelattrBehavior,
     #[pyo3(get, set)]
     default: DefaultBehavior,
+    #[pyo3(get, set)]
     validator: Validator,
     // Optional metadata dictionary that can be used to store arbitrary information
     // about the member.
@@ -46,6 +48,7 @@ pub struct Member {
 #[pymethods]
 impl Member {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         name: String,
         slot_index: u16,
@@ -54,6 +57,8 @@ impl Member {
         pre_setattr: PreSetattrBehavior,
         post_setattr: PostSetattrBehavior,
         delattr: DelattrBehavior,
+        default: DefaultBehavior,
+        validator: Validator,
     ) -> Self {
         Self {
             name,
@@ -63,6 +68,8 @@ impl Member {
             pre_setattr,
             post_setattr,
             delattr,
+            default,
+            validator,
             metadata: None,
         }
     }
@@ -72,10 +79,10 @@ impl Member {
         if self.metadata.is_none() {
             self.metadata = Some(PyDict::new(py).unbind());
         }
-        if let Some(tags) = tags {
-            self.metadata.as_mut().map(|d| {
-                d.bind(py).update(tags.as_mapping()).unwrap();
-            });
+        if let Some(tags) = tags
+            && let Some(d) = &mut self.metadata
+        {
+            d.bind(py).update(tags.as_mapping()).unwrap();
         };
     }
 

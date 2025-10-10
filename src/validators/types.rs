@@ -1,6 +1,6 @@
 ///
 use pyo3::{
-    Bound, Py, PyAny, PyResult,
+    Bound, Py, PyAny, PyResult, Python,
     ffi::{PyBool_Check, PyBytes_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check},
     pyclass,
     types::{PyAnyMethods, PyDict, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
@@ -12,20 +12,23 @@ use pyo3::{
 pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Any {},
+    #[pyo3(constructor = ())]
     Bool {},
+    #[pyo3(constructor = ())]
     Int {},
+    #[pyo3(constructor = ())]
     Float {},
+    #[pyo3(constructor = ())]
     Str {},
+    #[pyo3(constructor = ())]
     Bytes {},
-    Tuple {
-        items: Vec<Py<TypeValidator>>,
-    },
+    #[pyo3(constructor = (items))]
+    Tuple { items: Vec<TypeValidator> },
     // VarTuple {
     //     item: Py<TypeValidator>,
     // },
-    Typed {
-        type_: Py<PyType>,
-    },
+    #[pyo3(constructor = (type_))]
+    Typed { type_: Py<PyType> },
     // XXX need aslo a custom constructor
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
@@ -141,7 +144,7 @@ impl TypeValidator {
                     let py = value.py();
                     let mut validated_items = Vec::with_capacity(items.len());
                     for (item, validator) in tuple.iter().zip(items) {
-                        let v = validator.borrow(py).validate_type(member, object, item)?;
+                        let v = validator.validate_type(member, object, item)?;
                         validated_items.push(v);
                     }
                     Ok(pyo3::types::PyTuple::new(value.py(), validated_items)?.into_any())
@@ -179,5 +182,27 @@ impl TypeValidator {
                 self
             ))),
         }
+    }
+}
+
+impl Clone for TypeValidator {
+    fn clone(&self) -> Self {
+        Python::attach(|py| match self {
+            Self::Any {} => Self::Any {},
+            Self::Bool {} => Self::Bool {},
+            Self::Int {} => Self::Int {},
+            Self::Float {} => Self::Float {},
+            Self::Str {} => Self::Str {},
+            Self::Bytes {} => Self::Bytes {},
+            Self::Tuple { items } => Self::Tuple {
+                items: items.iter().map(|v| v.clone()).collect(),
+            },
+            // Self::VarTuple { item } => Self::VarTuple {
+            //     item: item.clone_ref(py),
+            // },
+            Self::Typed { type_ } => Self::Typed {
+                type_: type_.clone_ref(py),
+            },
+        })
     }
 }

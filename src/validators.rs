@@ -2,29 +2,70 @@
 
 ///
 use pyo3::{
-    pyclass,
+    Bound, Py, PyAny, PyResult, pyclass, pymethods,
     types::{PyDict, PyTuple},
-    Bound, Py, PyAny, PyResult,
 };
 
 mod coercer;
-use coercer::Coercer;
+pub use coercer::Coercer;
 mod types;
-use types::TypeValidator;
+pub use types::TypeValidator;
 mod values;
-use values::ValueValidator;
+pub use values::ValueValidator;
 
 // NOTE There is no sanity check that value validators make sense in combination
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
-#[pyclass]
+#[pyclass(frozen)]
 pub struct Validator {
     type_validator: TypeValidator,
+    value_validators: Box<[ValueValidator]>,
     coercer: Option<Coercer>,
-    value_validators: Vec<ValueValidator>,
 }
 
-// XXX all validation function should take an option for member and object
+#[pymethods]
+impl Validator {
+    #[new]
+    fn new(
+        type_validator: TypeValidator,
+        value_validators: Option<Vec<ValueValidator>>,
+        coercer: Option<Coercer>,
+    ) -> Self {
+        Self {
+            type_validator,
+            value_validators: value_validators
+                .map(|v| v.into_boxed_slice())
+                .unwrap_or_else(|| Box::new([])),
+            coercer,
+        }
+    }
+
+    fn new_with_extra_value_validators(&self, extra: Vec<ValueValidator>) -> PyResult<Validator> {
+        Ok(Validator {
+            type_validator: self.type_validator.clone(),
+            value_validators: [&self.value_validators, extra.as_slice()]
+                .concat()
+                .into_boxed_slice(),
+            coercer: self.coercer.clone(),
+        })
+    }
+
+    #[getter]
+    fn get_type_validator(&self) -> TypeValidator {
+        self.type_validator.clone()
+    }
+
+    #[getter]
+    fn get_value_validators(&self) -> Vec<ValueValidator> {
+        self.value_validators.to_vec()
+    }
+
+    #[getter]
+    fn get_coercer(&self) -> Option<Coercer> {
+        self.coercer.clone()
+    }
+}
+
 impl Validator {
     ///
     pub fn validate<'py>(
@@ -65,9 +106,9 @@ impl Validator {
             let current = c.coerce_value(&self.type_validator, member, object, value)?;
             Ok(current)
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "No validator related value exist."
-            )))
+            Err(pyo3::exceptions::PyTypeError::new_err(
+                "No coercer defined for {:?}",
+            ))
         }
     }
 
@@ -83,5 +124,15 @@ impl Validator {
             vv.validate_value(member, object, &v)?;
         }
         Ok(v)
+    }
+}
+
+impl Clone for Validator {
+    fn clone(&self) -> Self {
+        Self {
+            type_validator: self.type_validator.clone(),
+            value_validators: self.value_validators.iter().cloned().collect(),
+            coercer: self.coercer.clone(),
+        }
     }
 }

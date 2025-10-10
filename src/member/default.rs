@@ -1,8 +1,7 @@
 ///
 use pyo3::{
-    pyclass,
+    Bound, Py, PyAny, PyResult, Python, pyclass,
     types::{PyAnyMethods, PyDict, PyString, PyTuple},
-    Bound, Py, PyAny, PyResult, Python,
 };
 
 ///
@@ -18,9 +17,9 @@ pub enum DefaultBehavior {
         kwargs: Option<Py<PyDict>>,
     },
     #[pyo3(constructor = (callable))]
-    CallObject { callable: Py<PyAny> },
-    #[pyo3(constructor = (meth_name))]
-    MemberMethod { meth_name: Py<PyString> },
+    Call { callable: Py<PyAny> },
+    #[pyo3(constructor = (callable))]
+    CallMemberObject { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -43,8 +42,10 @@ impl DefaultBehavior {
                 .borrow()
                 .validator
                 .create_default(args.bind(member.py()), kwargs),
-            Self::CallObject { callable } => callable.bind(member.py()).call0(),
-            Self::MemberMethod { meth_name } => member.call_method1(meth_name, (object,)),
+            Self::Call { callable } => callable.bind(member.py()).call0(),
+            Self::CallMemberObject { callable } => {
+                callable.bind(member.py()).call1((member, object))
+            }
             Self::ObjectMethod { meth_name } => object.call_method1(meth_name, (member,)),
         }
     }
@@ -61,11 +62,11 @@ impl Clone for DefaultBehavior {
                 args: args.clone_ref(py),
                 kwargs: kwargs.as_ref().map(|v| v.clone_ref(py)),
             },
-            Self::CallObject { callable } => Self::CallObject {
+            Self::Call { callable } => Self::Call {
                 callable: callable.clone_ref(py),
             },
-            Self::MemberMethod { meth_name } => Self::MemberMethod {
-                meth_name: meth_name.clone_ref(py),
+            Self::CallMemberObject { callable } => Self::CallMemberObject {
+                callable: callable.clone_ref(py),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),

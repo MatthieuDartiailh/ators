@@ -1,20 +1,19 @@
 ///
 use pyo3::{
-    pyclass,
+    Bound, Py, PyResult, Python, pyclass,
+    types::PyString,
     types::{PyAny, PyAnyMethods},
-    Bound, IntoPyObject, PyResult,
 };
 
 ///
 #[pyclass(frozen)]
-#[derive(Clone)]
 pub enum PreGetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
+    #[pyo3(constructor = (callable))]
+    CallMemberObject { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
-    MemberMethod { meth_name: String },
-    #[pyo3(constructor = (meth_name))]
-    ObjectMethod { meth_name: String },
+    ObjectMethod { meth_name: Py<PyString> },
 }
 
 impl PreGetattrBehavior {
@@ -27,9 +26,9 @@ impl PreGetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            Self::MemberMethod { meth_name } => member
-                .into_pyobject(object.py())?
-                .call_method1(meth_name, (object,))
+            Self::CallMemberObject { callable } => callable
+                .bind(member.py())
+                .call1((member, object))
                 .map(|_| ()),
             Self::ObjectMethod { meth_name } => {
                 object.call_method1(meth_name, (member,)).map(|_| ())
@@ -38,20 +37,33 @@ impl PreGetattrBehavior {
     }
 }
 
+impl Clone for PreGetattrBehavior {
+    fn clone(&self) -> Self {
+        Python::attach(|py| match self {
+            Self::NoOp {} => Self::NoOp {},
+            Self::CallMemberObject { callable } => Self::CallMemberObject {
+                callable: callable.clone_ref(py),
+            },
+            Self::ObjectMethod { meth_name } => Self::ObjectMethod {
+                meth_name: meth_name.clone_ref(py),
+            },
+        })
+    }
+}
+
 #[pyclass(frozen)]
-#[derive(Clone)] // using Py<PyString> would be possible by using a custom Clone impl
 pub enum PostGetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
+    #[pyo3(constructor = (callable))]
+    CallMemberObjectValue { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
-    MemberMethod { meth_name: String },
-    #[pyo3(constructor = (meth_name))]
-    ObjectMethod { meth_name: String },
+    ObjectMethod { meth_name: Py<PyString> },
 }
 
 impl PostGetattrBehavior {
     ///
-    // new is unvalidated at this stage
+    // Value cannot be modified this is a design choice
     pub(crate) fn post_get<'py>(
         &self,
         member: &Bound<'py, super::Member>,
@@ -60,14 +72,27 @@ impl PostGetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            // XXX Those cannot modify the value is this desirable
-            // My gut feeling is that it is indeed better (you can record stuff, you cannot lie)
-            Self::MemberMethod { meth_name } => {
-                member.call_method1(meth_name, (object, value)).map(|_| ())
-            }
+            Self::CallMemberObjectValue { callable } => callable
+                .bind(member.py())
+                .call1((member, object, value))
+                .map(|_| ()),
             Self::ObjectMethod { meth_name } => {
                 object.call_method1(meth_name, (member, value)).map(|_| ())
             }
         }
+    }
+}
+
+impl Clone for PostGetattrBehavior {
+    fn clone(&self) -> Self {
+        Python::attach(|py| match self {
+            Self::NoOp {} => Self::NoOp {},
+            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+                callable: callable.clone_ref(py),
+            },
+            Self::ObjectMethod { meth_name } => Self::ObjectMethod {
+                meth_name: meth_name.clone_ref(py),
+            },
+        })
     }
 }

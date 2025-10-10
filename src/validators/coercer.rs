@@ -1,8 +1,7 @@
 ///
 use pyo3::{
-    pyclass,
+    Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyTuple},
-    Bound, Py, PyAny, PyResult, PyTypeInfo, Python,
 };
 
 use super::TypeValidator;
@@ -13,9 +12,9 @@ pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
     #[pyo3(constructor = (callable))]
-    CallObject { callable: Py<PyAny> },
-    #[pyo3(constructor = (meth_name))]
-    MemberMethod { meth_name: Py<PyString> },
+    CallObject { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
+    #[pyo3(constructor = (callable))]
+    CallMemberObjectValue { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -42,16 +41,16 @@ impl Coercer {
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
             Self::CallObject { callable } => callable.bind(value.py()).call1((value,)),
-            Self::MemberMethod { meth_name } => member
-                .ok_or(pyo3::exceptions::PyRuntimeError::new_err(
-                    "Cannot use MemberMethod coercion when validator is not linked to a member."
-                ))?
-                .call_method1(
-                    meth_name,
-                    (
+            Self::CallMemberObjectValue { callable } => callable
+                .bind(value.py())
+                .call1(
+                (
+                        member.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                    "Cannot use CallMemberObjectValue coercion when validator is not linked to a member."
+                        ))?,
                         object.ok_or(
                             pyo3::exceptions::PyTypeError::new_err(
-                                "Cannot use MemberMethod coercion when validator is not linked to a member."
+                                "Cannot use CallMemberObjectValue coercion when validator is not linked to a member."
                             )
                         )?,
                         value,
@@ -82,8 +81,8 @@ impl Clone for Coercer {
             Self::CallObject { callable } => Self::CallObject {
                 callable: callable.clone_ref(py),
             },
-            Self::MemberMethod { meth_name } => Self::MemberMethod {
-                meth_name: meth_name.clone_ref(py),
+            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+                callable: callable.clone_ref(py),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),
