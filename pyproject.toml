@@ -1,6 +1,9 @@
 [project]
   name = "ators"
   requires-python = ">=3.14"
+  license = "BSD-3-Clause"
+  license-files = ["LICENSE"]
+  authors = [{ name = "Matthieu C. Dartiailh", email = "m.dartiailh@gmail.com" }]
   classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
