@@ -7,15 +7,15 @@ use pyo3::{
 use std::clone::Clone;
 
 mod default;
-use default::DefaultBehavior;
+pub use default::DefaultBehavior;
 mod delattr;
-use delattr::DelattrBehavior;
+pub use delattr::DelattrBehavior;
 mod getattr;
-use getattr::{PostGetattrBehavior, PreGetattrBehavior};
+pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 mod pickle;
 mod setattr;
 use crate::validators::Validator;
-use setattr::{PostSetattrBehavior, PreSetattrBehavior};
+pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
 /// A Python descriptor that defines a member of an Ators class.
 #[pyclass]

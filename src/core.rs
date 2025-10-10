@@ -1,9 +1,8 @@
 ///
 use pyo3::{
-    intern, pyclass, pyfunction, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
     sync::with_critical_section,
     types::{PyAnyMethods, PyString, PyType, PyTypeMethods},
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python,
 };
 
 // FIXME reduce memory footprint
@@ -19,8 +18,6 @@ pub struct BaseAtors {
     slots: Box<[Option<Py<PyAny>>]>,
 }
 
-// use Py<T> cannot store a null ptr
-// I can either use Option<Py<T>> or do pointer arithmetic and use Py:from_owned_ptr_or_opt
 #[pymethods]
 impl BaseAtors {
     #[new]
@@ -49,10 +46,8 @@ impl BaseAtors {
     }
 
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        for o in self.slots.iter() {
-            if let Some(slot) = o {
-                visit.call(slot)?;
-            }
+        for slot in self.slots.iter().flatten() {
+            visit.call(slot)?;
         }
         Ok(())
     }
@@ -67,10 +62,7 @@ impl BaseAtors {
 impl BaseAtors {
     /// Get a clone (ref) of the value stored in the slot at index if any
     pub(crate) fn get_slot<'py>(&self, index: usize, py: Python<'py>) -> Option<Py<PyAny>> {
-        match self.slots[index] {
-            Some(ref v) => Some(v.clone_ref(py)),
-            None => None,
-        }
+        self.slots[index].as_ref().map(|v| v.clone_ref(py))
     }
 
     /// Set the slot at index to the specified value
@@ -81,7 +73,7 @@ impl BaseAtors {
     }
 
     /// Check if the slot at index stores a non-None value
-    pub(crate) fn is_slot_set<'py>(&self, index: usize) -> bool {
+    pub(crate) fn is_slot_set(&self, index: usize) -> bool {
         self.slots[index].is_some()
     }
 
