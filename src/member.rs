@@ -1,3 +1,10 @@
+/*-----------------------------------------------------------------------------
+| Copyright (c) 2025, Matthieu C. Dartiailh
+|
+| Distributed under the terms of the Modified BSD License.
+|
+| The full license is in the file LICENSE, distributed with this software.
+|----------------------------------------------------------------------------*/
 ///
 use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyResult, Python, pyclass, pymethods,
@@ -19,6 +26,7 @@ pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
 /// A Python descriptor that defines a member of an Ators class.
 #[pyclass]
+#[derive(Debug)]
 pub struct Member {
     #[pyo3(get)]
     pub name: String,

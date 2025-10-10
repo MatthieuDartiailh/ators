@@ -1,9 +1,16 @@
+/*-----------------------------------------------------------------------------
+| Copyright (c) 2025, Matthieu C. Dartiailh
+|
+| Distributed under the terms of the Modified BSD License.
+|
+| The full license is in the file LICENSE, distributed with this software.
+|----------------------------------------------------------------------------*/
 ///
 use pyo3::{pyclass, types::PyAnyMethods};
 
 ///
 #[pyclass(frozen)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DelattrBehavior {
     #[pyo3(constructor = ())]
     Slot {},

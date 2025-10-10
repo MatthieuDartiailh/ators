@@ -1,3 +1,10 @@
+/*-----------------------------------------------------------------------------
+| Copyright (c) 2025, Matthieu C. Dartiailh
+|
+| Distributed under the terms of the Modified BSD License.
+|
+| The full license is in the file LICENSE, distributed with this software.
+|----------------------------------------------------------------------------*/
 ///
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
@@ -8,6 +15,7 @@ use super::TypeValidator;
 
 ///
 #[pyclass(frozen)]
+#[derive(Debug)]
 pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},

@@ -1,4 +1,10 @@
-// Handle type validation, coercion, default value building
+/*-----------------------------------------------------------------------------
+| Copyright (c) 2025, Matthieu C. Dartiailh
+|
+| Distributed under the terms of the Modified BSD License.
+|
+| The full license is in the file LICENSE, distributed with this software.
+|----------------------------------------------------------------------------*/
 
 ///
 use pyo3::{
@@ -17,6 +23,7 @@ pub use values::ValueValidator;
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
 #[pyclass(frozen)]
+#[derive(Debug)]
 pub struct Validator {
     type_validator: TypeValidator,
     value_validators: Box<[ValueValidator]>,

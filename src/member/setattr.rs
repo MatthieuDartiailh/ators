@@ -1,3 +1,10 @@
+/*-----------------------------------------------------------------------------
+| Copyright (c) 2025, Matthieu C. Dartiailh
+|
+| Distributed under the terms of the Modified BSD License.
+|
+| The full license is in the file LICENSE, distributed with this software.
+|----------------------------------------------------------------------------*/
 ///
 use pyo3::{
     Bound, Py, PyResult, Python, pyclass,
@@ -6,6 +13,7 @@ use pyo3::{
 
 ///
 #[pyclass(frozen)]
+#[derive(Debug)]
 pub enum PreSetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
@@ -72,6 +80,7 @@ impl Clone for PreSetattrBehavior {
 }
 
 #[pyclass(frozen)]
+#[derive(Debug)]
 pub enum PostSetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
