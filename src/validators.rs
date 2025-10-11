@@ -93,6 +93,19 @@ impl Validator {
     }
 
     ///
+    pub fn with_appended_value_validator(self, value_validator: ValueValidator) -> Self {
+        Validator {
+            type_validator: self.type_validator,
+            value_validators: {
+                [self.value_validators.iter().as_slice(), &[value_validator]]
+                    .concat()
+                    .into_boxed_slice()
+            },
+            coercer: self.coercer,
+        }
+    }
+
+    ///
     pub fn with_coercer(self, coercer: Option<Coercer>) -> Self {
         Validator {
             type_validator: self.type_validator,

@@ -6,26 +6,23 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
+use crate::validators::{Coercer, Validator, ValueValidator};
 use pyo3::{
-    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
-    pyclass, pymethods,
+    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, intern, pyclass,
+    pymethods,
     sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction},
 };
 use std::{clone::Clone, collections::HashMap, mem};
 
 mod default;
-pub use default::DefaultBehavior;
 mod delattr;
-pub use delattr::DelattrBehavior;
 mod getattr;
-pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 mod pickle;
 mod setattr;
-use crate::{
-    member,
-    validators::{Coercer, Validator},
-};
+pub use default::DefaultBehavior;
+pub use delattr::DelattrBehavior;
+pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
 /// A Python descriptor that defines a member of an Ators class.
@@ -277,7 +274,30 @@ impl MemberBuilder {
         }
         Ok(self_)
     }
-    // XXX append_value_validators
+
+    ///
+    fn append_value_validator<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        value_validator: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match value_validator.cast::<ValueValidator>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => {
+                let func = value_validator.cast_exact::<PyFunction>()?;
+                ValueValidator::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                }
+            }
+        };
+        {
+            let mself = &mut *self_;
+            // The default Validator is cheap to construct.
+            let v = mem::replace(&mut mself.validator, Validator::default());
+            mself.validator = v.with_appended_value_validator(behavior);
+        }
+        Ok(self_)
+    }
 
     // This come with a foot gun if not used on a function assigned to a method
     // of the same name
@@ -404,6 +424,4 @@ impl MemberBuilder {
             metadata: self.metadata,
         })
     }
-
-    // fn set_pre_getattr(&mut self, )
 }
