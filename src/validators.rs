@@ -75,6 +75,38 @@ impl Validator {
 
 impl Validator {
     ///
+    pub fn with_type_validator(self, type_validator: TypeValidator) -> Self {
+        Validator {
+            type_validator,
+            value_validators: self.value_validators,
+            coercer: self.coercer,
+        }
+    }
+
+    ///
+    pub fn with_value_validators(self, value_validators: Box<[ValueValidator]>) -> Self {
+        Validator {
+            type_validator: self.type_validator,
+            value_validators,
+            coercer: self.coercer,
+        }
+    }
+
+    ///
+    pub fn with_coercer(self, coercer: Option<Coercer>) -> Self {
+        Validator {
+            type_validator: self.type_validator,
+            value_validators: self.value_validators,
+            coercer,
+        }
+    }
+
+    ///
+    pub fn value_validators(&self) -> &Box<[ValueValidator]> {
+        &self.value_validators
+    }
+
+    ///
     pub fn validate<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
@@ -140,6 +172,16 @@ impl Clone for Validator {
             type_validator: self.type_validator.clone(),
             value_validators: self.value_validators.iter().cloned().collect(),
             coercer: self.coercer.clone(),
+        }
+    }
+}
+
+impl Default for Validator {
+    fn default() -> Self {
+        Validator {
+            type_validator: TypeValidator::Any {},
+            value_validators: Box::new([]),
+            coercer: None,
         }
     }
 }

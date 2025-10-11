@@ -9,6 +9,7 @@ use pyo3::pymodule;
 
 mod core;
 mod member;
+mod meta;
 mod validators;
 
 /// A Python module implemented in Rust.

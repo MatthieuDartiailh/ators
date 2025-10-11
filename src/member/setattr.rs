@@ -87,7 +87,7 @@ pub enum PostSetattrBehavior {
     #[pyo3(constructor = (callable))]
     CallMemberObjectOldNew { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
-    ObjectMethod { meth_name: String },
+    ObjectMethod { meth_name: Py<PyString> },
 }
 
 impl PostSetattrBehavior {
@@ -120,7 +120,7 @@ impl Clone for PostSetattrBehavior {
                 callable: callable.clone_ref(py),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
-                meth_name: meth_name.clone(),
+                meth_name: meth_name.clone_ref(py),
             },
         })
     }

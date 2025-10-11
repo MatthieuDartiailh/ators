@@ -7,11 +7,12 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyResult, Python, pyclass, pymethods,
+    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
+    pyclass, pymethods,
     sync::with_critical_section2,
-    types::{PyAnyMethods, PyDict, PyDictMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction},
 };
-use std::clone::Clone;
+use std::{clone::Clone, collections::HashMap, mem};
 
 mod default;
 pub use default::DefaultBehavior;
@@ -21,42 +22,33 @@ mod getattr;
 pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 mod pickle;
 mod setattr;
-use crate::validators::Validator;
+use crate::{
+    member,
+    validators::{Coercer, Validator},
+};
 pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
 /// A Python descriptor that defines a member of an Ators class.
-#[pyclass]
+#[pyclass(frozen, get_all)]
 #[derive(Debug)]
 pub struct Member {
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     slot_index: u16,
     // All attributes below are frozen enums so they cannot be modified at runtime
     // and we can safely return clones of them.
-    #[pyo3(get, set)]
     pre_getattr: PreGetattrBehavior,
-    #[pyo3(get, set)]
     post_getattr: PostGetattrBehavior,
-    #[pyo3(get, set)]
     pre_setattr: PreSetattrBehavior,
-    #[pyo3(get, set)]
     post_setattr: PostSetattrBehavior,
-    #[pyo3(get, set)]
     delattr: DelattrBehavior,
-    #[pyo3(get, set)]
     default: DefaultBehavior,
-    #[pyo3(get, set)]
     validator: Validator,
     // Optional metadata dictionary that can be used to store arbitrary information
     // about the member.
-    metadata: Option<Py<PyDict>>,
+    metadata: Option<HashMap<String, Py<PyAny>>>,
 }
 
-#[pymethods]
 impl Member {
-    #[new]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         name: String,
         slot_index: u16,
@@ -67,6 +59,7 @@ impl Member {
         delattr: DelattrBehavior,
         default: DefaultBehavior,
         validator: Validator,
+        metadata: Option<HashMap<String, Py<PyAny>>>,
     ) -> Self {
         Self {
             name,
@@ -78,22 +71,13 @@ impl Member {
             delattr,
             default,
             validator,
-            metadata: None,
+            metadata,
         }
     }
+}
 
-    #[pyo3(signature = (**tags))]
-    pub fn tag<'py>(&mut self, py: Python<'py>, tags: Option<&Bound<'_, PyDict>>) {
-        if self.metadata.is_none() {
-            self.metadata = Some(PyDict::new(py).unbind());
-        }
-        if let Some(tags) = tags
-            && let Some(d) = &mut self.metadata
-        {
-            d.bind(py).update(tags.as_mapping()).unwrap();
-        };
-    }
-
+#[pymethods]
+impl Member {
     pub fn __get__<'py>(
         self_: PyRef<'py, Self>,
         object: Bound<'py, PyAny>,
@@ -192,4 +176,234 @@ impl Member {
             member.borrow().delattr.del(&member, object)
         })
     }
+}
+
+#[pyclass]
+#[derive(Debug)]
+struct MemberBuilder {
+    pub name: Option<String>,
+    pub slot_index: Option<u16>,
+    pub pre_getattr: PreGetattrBehavior,
+    pub post_getattr: PostGetattrBehavior,
+    pub pre_setattr: PreSetattrBehavior,
+    pub post_setattr: PostSetattrBehavior,
+    pub delattr: DelattrBehavior,
+    pub default: DefaultBehavior,
+    pub validator: Validator,
+    pub metadata: Option<HashMap<String, Py<PyAny>>>,
+}
+
+#[pymethods]
+impl MemberBuilder {
+    #[new]
+    fn py_new() -> Self {
+        MemberBuilder {
+            name: None,
+            slot_index: None,
+            pre_getattr: PreGetattrBehavior::NoOp {},
+            post_getattr: PostGetattrBehavior::NoOp {},
+            pre_setattr: PreSetattrBehavior::NoOp {},
+            post_setattr: PostSetattrBehavior::NoOp {},
+            delattr: DelattrBehavior::Slot {},
+            default: DefaultBehavior::NoDefault {},
+            validator: Validator::default(),
+            metadata: None,
+        }
+    }
+
+    #[pyo3(signature = (**tags))]
+    pub fn tag<'py>(&mut self, tags: Option<&Bound<'_, PyDict>>) {
+        if self.metadata.is_none() {
+            self.metadata = Some(HashMap::with_capacity(
+                tags.and_then(|d| Some(d.len())).unwrap_or(0),
+            ));
+        }
+        if let Some(tags) = tags
+            && let Some(d) = &mut self.metadata
+        {
+            // tags are keyword args so keys are guaranteed to be strings making unwrap safe
+            d.extend(tags.iter().map(|(k, v)| (k.extract().unwrap(), v.unbind())));
+        };
+    }
+
+    ///
+    fn default<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        default_behavior: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match default_behavior.cast::<DefaultBehavior>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => match default_behavior.cast_exact::<PyFunction>() {
+                Ok(func) => DefaultBehavior::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                },
+                Err(_) => DefaultBehavior::Static {
+                    value: default_behavior.unbind(),
+                },
+            },
+        };
+        {
+            let mself = &mut *self_;
+            mself.default = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn coerce<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        coercer: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = if let Some(c) = coercer {
+            Some(match c.cast::<Coercer>() {
+                Ok(b) => b.clone().unbind().extract(py)?,
+                Err(_) => {
+                    let func = c.cast_exact::<PyFunction>()?;
+                    Coercer::ObjectMethod {
+                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                    }
+                }
+            })
+        } else {
+            None
+        };
+        {
+            let mself = &mut *self_;
+            // The default Validator is cheap to construct.
+            let v = mem::replace(&mut mself.validator, Validator::default());
+            mself.validator = v.with_coercer(behavior);
+        }
+        Ok(self_)
+    }
+    // XXX append_value_validators
+
+    // This come with a foot gun if not used on a function assigned to a method
+    // of the same name
+    // XXX implement sanity check on metaclass
+    ///
+    fn preget<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        pre_getattr: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match pre_getattr.cast::<PreGetattrBehavior>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => {
+                let func = pre_getattr.cast_exact::<PyFunction>()?;
+                PreGetattrBehavior::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                }
+            }
+        };
+        {
+            let mself = &mut *self_;
+            mself.pre_getattr = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn postget<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        post_getattr: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match post_getattr.cast::<PostGetattrBehavior>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => {
+                let func = post_getattr.cast_exact::<PyFunction>()?;
+                PostGetattrBehavior::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                }
+            }
+        };
+        {
+            let mself = &mut *self_;
+            mself.post_getattr = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn preset<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        pre_setattr: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match pre_setattr.cast::<PreSetattrBehavior>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => {
+                let func = pre_setattr.cast_exact::<PyFunction>()?;
+                PreSetattrBehavior::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                }
+            }
+        };
+        {
+            let mself = &mut *self_;
+            mself.pre_setattr = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn postset<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        post_setattr: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = match post_setattr.cast::<PostSetattrBehavior>() {
+            Ok(b) => b.clone().unbind().extract(py)?,
+            Err(_) => {
+                let func = post_setattr.cast_exact::<PyFunction>()?;
+                PostSetattrBehavior::ObjectMethod {
+                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                }
+            }
+        };
+        {
+            let mself = &mut *self_;
+            mself.post_setattr = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn del_<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        delattr_behavior: Bound<'py, DelattrBehavior>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        {
+            let mself = &mut *self_;
+            mself.delattr = delattr_behavior.unbind().extract(py)?;
+        }
+        Ok(self_)
+    }
+}
+
+impl MemberBuilder {
+    ///
+    fn build(self) -> PyResult<Member> {
+        let Some(name) = self.name else { todo!() };
+        let Some(index) = self.slot_index else {
+            todo!()
+        };
+        Ok(Member {
+            name,
+            slot_index: index,
+            pre_getattr: self.pre_getattr,
+            post_getattr: self.post_getattr,
+            pre_setattr: self.pre_setattr,
+            post_setattr: self.post_setattr,
+            delattr: self.delattr,
+            default: self.default,
+            validator: self.validator,
+            metadata: self.metadata,
+        })
+    }
+
+    // fn set_pre_getattr(&mut self, )
 }
