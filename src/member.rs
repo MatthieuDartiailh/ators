@@ -13,13 +13,14 @@ use pyo3::{
     sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction},
 };
-use std::{clone::Clone, collections::HashMap, mem};
+use std::{clone::Clone, collections::HashMap, iter, mem};
 
 mod default;
 mod delattr;
 mod getattr;
 mod pickle;
 mod setattr;
+use crate::validators::CoercionMode;
 pub use default::DefaultBehavior;
 pub use delattr::DelattrBehavior;
 pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
@@ -177,7 +178,7 @@ impl Member {
 
 #[pyclass]
 #[derive(Debug)]
-struct MemberBuilder {
+pub struct MemberBuilder {
     pub name: Option<String>,
     pub slot_index: Option<u16>,
     pub pre_getattr: PreGetattrBehavior,
@@ -192,6 +193,7 @@ struct MemberBuilder {
 
 #[pymethods]
 impl MemberBuilder {
+    // FIXME need to pass in args for customization (init)
     #[new]
     fn py_new() -> Self {
         MemberBuilder {
@@ -230,7 +232,7 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match default_behavior.cast::<DefaultBehavior>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => match default_behavior.cast_exact::<PyFunction>() {
                 Ok(func) => DefaultBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
@@ -254,8 +256,8 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = if let Some(c) = coercer {
-            Some(match c.cast::<Coercer>() {
-                Ok(b) => b.clone().unbind().extract(py)?,
+            CoercionMode::Coerce(match c.cast::<Coercer>() {
+                Ok(b) => b.as_any().extract()?,
                 Err(_) => {
                     let func = c.cast_exact::<PyFunction>()?;
                     Coercer::ObjectMethod {
@@ -264,13 +266,37 @@ impl MemberBuilder {
                 }
             })
         } else {
-            None
+            CoercionMode::No()
         };
         {
             let mself = &mut *self_;
-            // The default Validator is cheap to construct.
-            let v = mem::replace(&mut mself.validator, Validator::default());
-            mself.validator = v.with_coercer(behavior);
+            mself.validator.coercer = behavior;
+        }
+        Ok(self_)
+    }
+
+    ///
+    fn coerce_init<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        coercer: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let behavior = if let Some(c) = coercer {
+            CoercionMode::Init(match c.cast::<Coercer>() {
+                Ok(b) => b.as_any().extract()?,
+                Err(_) => {
+                    let func = c.cast_exact::<PyFunction>()?;
+                    Coercer::ObjectMethod {
+                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                    }
+                }
+            })
+        } else {
+            CoercionMode::No()
+        };
+        {
+            let mself = &mut *self_;
+            mself.validator.coercer = behavior;
         }
         Ok(self_)
     }
@@ -282,7 +308,7 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match value_validator.cast::<ValueValidator>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => {
                 let func = value_validator.cast_exact::<PyFunction>()?;
                 ValueValidator::ObjectMethod {
@@ -292,9 +318,14 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            // The default Validator is cheap to construct.
-            let v = mem::replace(&mut mself.validator, Validator::default());
-            mself.validator = v.with_appended_value_validator(behavior);
+            let temp = mem::replace(
+                &mut mself.validator.value_validators,
+                Vec::new().into_boxed_slice(),
+            );
+            mself.validator.value_validators = temp
+                .into_iter()
+                .chain(iter::once(behavior))
+                .collect::<Box<[ValueValidator]>>();
         }
         Ok(self_)
     }
@@ -309,7 +340,7 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match pre_getattr.cast::<PreGetattrBehavior>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => {
                 let func = pre_getattr.cast_exact::<PyFunction>()?;
                 PreGetattrBehavior::ObjectMethod {
@@ -331,7 +362,7 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match post_getattr.cast::<PostGetattrBehavior>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => {
                 let func = post_getattr.cast_exact::<PyFunction>()?;
                 PostGetattrBehavior::ObjectMethod {
@@ -353,7 +384,7 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match pre_setattr.cast::<PreSetattrBehavior>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => {
                 let func = pre_setattr.cast_exact::<PyFunction>()?;
                 PreSetattrBehavior::ObjectMethod {
@@ -369,13 +400,23 @@ impl MemberBuilder {
     }
 
     ///
+    fn constant<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
+        {
+            let mself = &mut *self_;
+            mself.pre_setattr = PreSetattrBehavior::Constant {};
+            mself.delattr = DelattrBehavior::Undeletable {};
+        }
+        Ok(self_)
+    }
+
+    ///
     fn postset<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_setattr: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let py = self_.py();
         let behavior = match post_setattr.cast::<PostSetattrBehavior>() {
-            Ok(b) => b.clone().unbind().extract(py)?,
+            Ok(b) => b.as_any().extract()?,
             Err(_) => {
                 let func = post_setattr.cast_exact::<PyFunction>()?;
                 PostSetattrBehavior::ObjectMethod {
@@ -395,10 +436,9 @@ impl MemberBuilder {
         mut self_: PyRefMut<'py, Self>,
         delattr_behavior: Bound<'py, DelattrBehavior>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        let py = self_.py();
         {
             let mself = &mut *self_;
-            mself.delattr = delattr_behavior.unbind().extract(py)?;
+            mself.delattr = delattr_behavior.as_any().extract()?;
         }
         Ok(self_)
     }
@@ -406,7 +446,7 @@ impl MemberBuilder {
 
 impl MemberBuilder {
     ///
-    fn build(self) -> PyResult<Member> {
+    pub fn build(self) -> PyResult<Member> {
         let Some(name) = self.name else { todo!() };
         let Some(index) = self.slot_index else {
             todo!()
@@ -423,5 +463,22 @@ impl MemberBuilder {
             validator: self.validator,
             metadata: self.metadata,
         })
+    }
+}
+
+impl Default for MemberBuilder {
+    fn default() -> Self {
+        MemberBuilder {
+            name: None,
+            slot_index: None,
+            pre_getattr: PreGetattrBehavior::NoOp {},
+            post_getattr: PostGetattrBehavior::NoOp {},
+            pre_setattr: PreSetattrBehavior::NoOp {},
+            post_setattr: PostSetattrBehavior::NoOp {},
+            delattr: DelattrBehavior::Slot {},
+            default: DefaultBehavior::NoDefault {},
+            validator: Validator::default(),
+            metadata: None,
+        }
     }
 }

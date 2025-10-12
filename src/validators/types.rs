@@ -45,6 +45,7 @@ pub enum TypeValidator {
     // Instance {
     //     types: Py<PyTuple>,
     // },
+    // XXX need a mode for union to cleanly validate list[int] | dict[int, int]
     // Sequence,
     // List,
     // FrozenSet,

@@ -19,25 +19,35 @@ pub use types::TypeValidator;
 mod values;
 pub use values::ValueValidator;
 
+#[pyclass(frozen)]
+#[derive(Debug, Clone)]
+pub enum CoercionMode {
+    No(),
+    Init(Coercer),
+    Coerce(Coercer),
+}
+
 // NOTE There is no sanity check that value validators make sense in combination
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub struct Validator {
-    type_validator: TypeValidator,
-    value_validators: Box<[ValueValidator]>,
-    coercer: Option<Coercer>,
+    pub type_validator: TypeValidator,
+    pub value_validators: Box<[ValueValidator]>,
+    pub coercer: CoercionMode,
 }
 
 #[pymethods]
 impl Validator {
     #[new]
-    fn new(
+    pub fn new(
         type_validator: TypeValidator,
         value_validators: Option<Vec<ValueValidator>>,
-        coercer: Option<Coercer>,
+        coercer: CoercionMode,
     ) -> Self {
+        // XXX implement coherency checks (need a helper function for nested cases)
+        // May do that in class creation
         Self {
             type_validator,
             value_validators: value_validators
@@ -68,57 +78,12 @@ impl Validator {
     }
 
     #[getter]
-    fn get_coercer(&self) -> Option<Coercer> {
+    fn get_coercer(&self) -> CoercionMode {
         self.coercer.clone()
     }
 }
 
 impl Validator {
-    ///
-    pub fn with_type_validator(self, type_validator: TypeValidator) -> Self {
-        Validator {
-            type_validator,
-            value_validators: self.value_validators,
-            coercer: self.coercer,
-        }
-    }
-
-    ///
-    pub fn with_value_validators(self, value_validators: Box<[ValueValidator]>) -> Self {
-        Validator {
-            type_validator: self.type_validator,
-            value_validators,
-            coercer: self.coercer,
-        }
-    }
-
-    ///
-    pub fn with_appended_value_validator(self, value_validator: ValueValidator) -> Self {
-        Validator {
-            type_validator: self.type_validator,
-            value_validators: {
-                [self.value_validators.iter().as_slice(), &[value_validator]]
-                    .concat()
-                    .into_boxed_slice()
-            },
-            coercer: self.coercer,
-        }
-    }
-
-    ///
-    pub fn with_coercer(self, coercer: Option<Coercer>) -> Self {
-        Validator {
-            type_validator: self.type_validator,
-            value_validators: self.value_validators,
-            coercer,
-        }
-    }
-
-    ///
-    pub fn value_validators(&self) -> &Box<[ValueValidator]> {
-        &self.value_validators
-    }
-
     ///
     pub fn validate<'py>(
         &self,
@@ -129,7 +94,7 @@ impl Validator {
         match self.strict_validate(member, object, value.clone()) {
             Ok(v) => Ok(v),
             Err(err) => {
-                if let Some(c) = &self.coercer {
+                if let CoercionMode::Coerce(c) = &self.coercer {
                     c.coerce_value(&self.type_validator, member, object, value)
                 } else {
                     Err(err)
@@ -154,7 +119,7 @@ impl Validator {
         object: Option<&Bound<'py, crate::core::BaseAtors>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if let Some(c) = &self.coercer {
+        if let CoercionMode::Coerce(c) = &self.coercer {
             let current = c.coerce_value(&self.type_validator, member, object, value)?;
             Ok(current)
         } else {
@@ -194,7 +159,7 @@ impl Default for Validator {
         Validator {
             type_validator: TypeValidator::Any {},
             value_validators: Box::new([]),
-            coercer: None,
+            coercer: CoercionMode::No(),
         }
     }
 }
