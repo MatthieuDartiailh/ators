@@ -1,5 +1,3 @@
-use std::{collections::HashMap, mem};
-
 /*-----------------------------------------------------------------------------
 | Copyright (c) 2025, Matthieu C. Dartiailh
 |
@@ -9,15 +7,16 @@ use std::{collections::HashMap, mem};
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, PyAny, PyRefMut, PyResult, intern,
+    Bound, PyAny, PyResult, intern,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString, PyType,
     },
 };
+use std::collections::HashMap;
 
 use crate::validators::{CoercionMode, Validator, ValueValidator};
 use crate::{
-    member::{DelattrBehavior, MemberBuilder, PreSetattrBehavior},
+    member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
     validators::TypeValidator,
 };
 
@@ -153,7 +152,7 @@ fn build_validator_from_annotation<'py>(
 }
 
 fn configure_member_builder_from_annotation<'py>(
-    builder: &mut PyRefMut<'py, MemberBuilder>,
+    builder: &mut MemberBuilder,
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,
     type_containers: i64,
@@ -166,29 +165,29 @@ fn configure_member_builder_from_annotation<'py>(
     // Finally ensure a member that has a ReadOnly or Constant pre set behavior
     // is marked final.
     if origin.is(&tools.types.final_) {
-        configure_member_builder_from_annotation(builder, name, ann, type_containers, &tools);
+        configure_member_builder_from_annotation(builder, name, ann, type_containers, &tools)?;
         match builder.pre_setattr {
-            PreSetattrBehavior::Constant {} => {}
-            _ => builder.pre_setattr = PreSetattrBehavior::ReadOnly {},
+            Some(PreSetattrBehavior::Constant {}) => {}
+            _ => builder.pre_setattr = Some(PreSetattrBehavior::ReadOnly {}),
         };
-        builder.delattr = DelattrBehavior::Undeletable {};
+        builder.delattr = Some(DelattrBehavior::Undeletable {});
     } else {
         match builder.pre_setattr {
-            PreSetattrBehavior::Constant {} | PreSetattrBehavior::ReadOnly {} => {
+            Some(PreSetattrBehavior::Constant {}) | Some(PreSetattrBehavior::ReadOnly {}) => {
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                     "Member {} prevents mutation but type is not annotated as final {}.",
                     name,
                     ann.repr()?
                 )));
             }
-            _ => builder.pre_setattr = PreSetattrBehavior::ReadOnly {},
+            _ => builder.pre_setattr = Some(PreSetattrBehavior::ReadOnly {}),
         };
     }
 
     // Next analyze the annotation to build the validators (Final is not
     // permitted within container or generic).
     // FIXME should not override the existing validators
-    let new = match build_validator_from_annotation(name, ann, type_containers, &tools) {
+    let new = match build_validator_from_annotation(name, ann, type_containers, tools) {
         Ok(v) => Ok(v),
         Err(err) => {
             let new_err = pyo3::exceptions::PyRuntimeError::new_err(
@@ -204,19 +203,19 @@ fn configure_member_builder_from_annotation<'py>(
     }?;
 
     // Set the type validator
-    builder.validator.type_validator = new.type_validator;
+    builder.type_validator = Some(new.type_validator);
 
     // Append the user specified value validators to the ones inferred from type
     // annotation.
-    let temp = mem::replace(
-        &mut builder.validator.value_validators,
-        Vec::new().into_boxed_slice(),
-    );
-    builder.validator.value_validators = new
-        .value_validators
-        .into_iter()
-        .chain(temp.into_iter())
-        .collect::<Box<[ValueValidator]>>();
+    let temp: Option<Vec<ValueValidator>> = builder.value_validators.take();
+    if !new.value_validators.is_empty() || temp.is_some() {
+        builder.value_validators = Some(
+            new.value_validators
+                .into_iter()
+                .chain(temp.unwrap_or_default())
+                .collect(),
+        );
+    }
 
     Ok(())
 }
@@ -225,7 +224,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     name: &Bound<'py, PyString>,
     dct: &Bound<'py, PyDict>,
     type_containers: i64,
-) -> PyResult<HashMap<String, Bound<'py, MemberBuilder>>> {
+) -> PyResult<HashMap<String, MemberBuilder>> {
     let py = name.py();
 
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
@@ -303,34 +302,35 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
 
         // Retrieve the user provided builder, or build one with or without
         // a default value
-        let builder = if dct.contains(&name)? {
+        let mut builder = if dct.contains(&name)? {
             let value = dct.as_any().get_item(&name)?;
+            // Remove the builder from the dict so that we can extract builder
+            // without annotations at a later stage.
+            dct.del_item(&name)?;
             if let Ok(mb) = value.cast::<MemberBuilder>() {
-                mb.clone()
+                mb.clone().extract()?
             } else {
                 let mut mb = MemberBuilder::default();
-                mb.default = crate::member::DefaultBehavior::Static {
+                mb.default = Some(DefaultBehavior::Static {
                     value: value.into(),
-                };
-                Bound::new(py, mb)?
+                });
+                mb
             }
         } else {
-            Bound::new(py, MemberBuilder::default())?
+            MemberBuilder::default()
         };
 
         // Analyze the annotation to configure the builder
-        {
-            let mut bmr = builder.borrow_mut();
-            configure_member_builder_from_annotation(
-                &mut bmr,
-                name.cast()?,
-                &ann,
-                type_containers,
-                &tools,
-            )?;
+        configure_member_builder_from_annotation(
+            &mut builder,
+            name.cast()?,
+            &ann,
+            type_containers,
+            &tools,
+        )?;
 
-            bmr.name = Some(name.extract()?);
-        }
+        // Set the member name
+        builder.name = Some(name.extract()?);
 
         builders.insert(name.extract()?, builder);
     }
