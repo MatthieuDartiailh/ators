@@ -11,7 +11,7 @@ use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
     sync::with_critical_section2,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction, PyList, PyListMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -182,6 +182,32 @@ impl Member {
     }
 }
 
+///
+fn check_is_decorated<'py>(
+    py: Python<'py>,
+    builder_meth_name: &str,
+    func: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let inspect = py.import(intern!(py, "inspect"))?;
+    let lines = inspect
+        .getattr(intern!(py, "stack"))?
+        .call1((2,))?
+        .get_item(1)?
+        .getattr(intern!(py, "code_context"))?;
+    if lines
+        .cast::<PyList>()?
+        .iter()
+        .map(|line| -> PyResult<bool> { line.cast::<PyString>()?.contains(intern!(py, "@")) })
+        .any(|res| res.is_ok_and(|decorated| decorated))
+    {
+        Ok(func)
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Cannot pass a function to {builder_meth_name} without using it as a decorator."
+        )))
+    }
+}
+
 #[pyclass]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
@@ -245,7 +271,7 @@ impl MemberBuilder {
                     mself.default = Some(DefaultBehavior::ObjectMethod {
                         meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                     });
-                    return Ok(default_behavior);
+                    return check_is_decorated(py, "default", default_behavior);
                 }
                 Err(_) => {
                     mself.default = Some(DefaultBehavior::Static {
@@ -272,7 +298,7 @@ impl MemberBuilder {
                     mself.coercer = Some(CoercionMode::Coerce(Coercer::ObjectMethod {
                         meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                     }));
-                    return Ok(c);
+                    return check_is_decorated(py, "coerce", c);
                 }
             }
         } else {
@@ -296,7 +322,7 @@ impl MemberBuilder {
                     mself.coercer = Some(CoercionMode::Init(Coercer::ObjectMethod {
                         meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                     }));
-                    return Ok(c);
+                    return check_is_decorated(py, "coerce_init", c);
                 }
             }
         } else {
@@ -322,7 +348,7 @@ impl MemberBuilder {
                 mself.pre_getattr = Some(PreGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                Ok(pre_getattr)
+                return check_is_decorated(py, "preget", pre_getattr);
             }
         }
     }
@@ -344,7 +370,7 @@ impl MemberBuilder {
                 mself.post_getattr = Some(PostGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                Ok(post_getattr)
+                return check_is_decorated(py, "postget", post_getattr);
             }
         }
     }
@@ -366,7 +392,7 @@ impl MemberBuilder {
                 mself.pre_setattr = Some(PreSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                Ok(pre_setattr)
+                return check_is_decorated(py, "preset", pre_setattr);
             }
         }
     }
@@ -398,7 +424,7 @@ impl MemberBuilder {
                 mself.post_setattr = Some(PostSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                Ok(post_setattr)
+                return check_is_decorated(py, "postset", post_setattr);
             }
         }
     }
