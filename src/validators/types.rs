@@ -36,7 +36,7 @@ pub enum TypeValidator {
     // },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
-    // XXX need aslo a custom constructor
+    // XXX need also a custom constructor
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
     //     resolver: Py<PyAny>,
@@ -185,8 +185,7 @@ impl TypeValidator {
                 },
             ),
             _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot create a default value using args and kwargs for {:?}",
-                self
+                "Cannot create a default value using args and kwargs for {self:?}"
             ))),
         }
     }
@@ -202,7 +201,7 @@ impl Clone for TypeValidator {
             Self::Str {} => Self::Str {},
             Self::Bytes {} => Self::Bytes {},
             Self::Tuple { items } => Self::Tuple {
-                items: items.iter().map(|v| v.clone()).collect(),
+                items: items.iter().cloned().collect(),
             },
             // Self::VarTuple { item } => Self::VarTuple {
             //     item: item.clone_ref(py),
