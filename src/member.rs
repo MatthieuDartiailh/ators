@@ -6,14 +6,14 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
-use crate::validators::{Coercer, Validator, ValueValidator};
+use crate::validators::{Coercer, TypeValidator, Validator, ValueValidator};
 use pyo3::{
-    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, intern, pyclass,
-    pymethods,
+    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
+    pyclass, pymethods,
     sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction},
 };
-use std::{clone::Clone, collections::HashMap, iter, mem};
+use std::{clone::Clone, collections::HashMap};
 
 mod default;
 mod delattr;
@@ -26,12 +26,25 @@ pub use delattr::DelattrBehavior;
 pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
+///
+fn clone_metadata(
+    metadata: &Option<HashMap<String, Py<PyAny>>>,
+) -> Option<HashMap<String, Py<PyAny>>> {
+    Python::attach(|py| {
+        metadata.as_ref().map(|hm| {
+            hm.iter()
+                .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                .collect()
+        })
+    })
+}
+
 /// A Python descriptor that defines a member of an Ators class.
 #[pyclass(frozen, get_all)]
 #[derive(Debug)]
 pub struct Member {
     pub name: String,
-    slot_index: u16,
+    slot_index: u8,
     // All attributes below are frozen enums so they cannot be modified at runtime
     // and we can safely return clones of them.
     pre_getattr: PreGetattrBehavior,
@@ -49,7 +62,7 @@ pub struct Member {
 impl Member {
     fn new(
         name: String,
-        slot_index: u16,
+        slot_index: u8,
         pre_getattr: PreGetattrBehavior,
         post_getattr: PostGetattrBehavior,
         pre_setattr: PreSetattrBehavior,
@@ -71,6 +84,25 @@ impl Member {
             validator,
             metadata,
         }
+    }
+
+    pub fn clone_with_index(&self, new_index: u8) -> Self {
+        Member {
+            name: self.name.clone(),
+            slot_index: new_index,
+            pre_getattr: self.pre_getattr.clone(),
+            post_getattr: self.post_getattr.clone(),
+            pre_setattr: self.pre_setattr.clone(),
+            post_setattr: self.post_setattr.clone(),
+            delattr: self.delattr.clone(),
+            default: self.default.clone(),
+            validator: self.validator.clone(),
+            metadata: clone_metadata(&self.metadata),
+        }
+    }
+
+    pub fn index(&self) -> u8 {
+        self.slot_index
     }
 }
 
@@ -180,42 +212,38 @@ impl Member {
 #[derive(Debug)]
 pub struct MemberBuilder {
     pub name: Option<String>,
-    pub slot_index: Option<u16>,
-    pub pre_getattr: PreGetattrBehavior,
-    pub post_getattr: PostGetattrBehavior,
-    pub pre_setattr: PreSetattrBehavior,
-    pub post_setattr: PostSetattrBehavior,
-    pub delattr: DelattrBehavior,
-    pub default: DefaultBehavior,
-    pub validator: Validator,
+    pub slot_index: Option<u8>,
+    pub pre_getattr: Option<PreGetattrBehavior>,
+    pub post_getattr: Option<PostGetattrBehavior>,
+    pub pre_setattr: Option<PreSetattrBehavior>,
+    pub post_setattr: Option<PostSetattrBehavior>,
+    pub delattr: Option<DelattrBehavior>,
+    pub default: Option<DefaultBehavior>,
+    pub type_validator: Option<TypeValidator>,
+    pub value_validators: Option<Vec<ValueValidator>>,
+    pub coercer: Option<CoercionMode>,
     pub metadata: Option<HashMap<String, Py<PyAny>>>,
+    inherit: bool,
 }
 
+// XXX fix all method that should be able to act as decorator to return the function
+// when used as decorator
 #[pymethods]
 impl MemberBuilder {
     // FIXME need to pass in args for customization (init)
     #[new]
-    fn py_new() -> Self {
-        MemberBuilder {
-            name: None,
-            slot_index: None,
-            pre_getattr: PreGetattrBehavior::NoOp {},
-            post_getattr: PostGetattrBehavior::NoOp {},
-            pre_setattr: PreSetattrBehavior::NoOp {},
-            post_setattr: PostSetattrBehavior::NoOp {},
-            delattr: DelattrBehavior::Slot {},
-            default: DefaultBehavior::NoDefault {},
-            validator: Validator::default(),
-            metadata: None,
-        }
+    pub fn py_new() -> Self {
+        MemberBuilder::default()
+    }
+
+    pub fn inherit(&mut self) {
+        self.inherit = true;
     }
 
     #[pyo3(signature = (**tags))]
-    pub fn tag<'py>(&mut self, tags: Option<&Bound<'_, PyDict>>) {
+    pub fn tag<'py>(&mut self, tags: Option<&Bound<'py, PyDict>>) {
         if self.metadata.is_none() {
-            self.metadata = Some(HashMap::with_capacity(
-                tags.and_then(|d| Some(d.len())).unwrap_or(0),
-            ));
+            self.metadata = Some(HashMap::with_capacity(tags.map(|d| d.len()).unwrap_or(0)));
         }
         if let Some(tags) = tags
             && let Some(d) = &mut self.metadata
@@ -226,7 +254,8 @@ impl MemberBuilder {
     }
 
     ///
-    fn default<'py>(
+    #[pyo3(name = "default")]
+    pub fn py_default<'py>(
         mut self_: PyRefMut<'py, Self>,
         default_behavior: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -244,13 +273,13 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.default = behavior;
+            mself.default = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn coerce<'py>(
+    pub fn coerce<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -270,13 +299,13 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.validator.coercer = behavior;
+            mself.coercer = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn coerce_init<'py>(
+    pub fn coerce_init<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -296,13 +325,13 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.validator.coercer = behavior;
+            mself.coercer = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn append_value_validator<'py>(
+    pub fn append_value_validator<'py>(
         mut self_: PyRefMut<'py, Self>,
         value_validator: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -318,14 +347,11 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            let temp = mem::replace(
-                &mut mself.validator.value_validators,
-                Vec::new().into_boxed_slice(),
-            );
-            mself.validator.value_validators = temp
-                .into_iter()
-                .chain(iter::once(behavior))
-                .collect::<Box<[ValueValidator]>>();
+            if let Some(vv) = &mut mself.value_validators {
+                vv.push(behavior);
+            } else {
+                mself.value_validators.replace(vec![behavior]);
+            }
         }
         Ok(self_)
     }
@@ -334,7 +360,7 @@ impl MemberBuilder {
     // of the same name
     // XXX implement sanity check on metaclass
     ///
-    fn preget<'py>(
+    pub fn preget<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_getattr: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -350,13 +376,13 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.pre_getattr = behavior;
+            mself.pre_getattr = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn postget<'py>(
+    pub fn postget<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_getattr: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -372,13 +398,13 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.post_getattr = behavior;
+            mself.post_getattr = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn preset<'py>(
+    pub fn preset<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_setattr: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -394,23 +420,23 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.pre_setattr = behavior;
+            mself.pre_setattr = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn constant<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
+    pub fn constant<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
-            mself.pre_setattr = PreSetattrBehavior::Constant {};
-            mself.delattr = DelattrBehavior::Undeletable {};
+            mself.pre_setattr = Some(PreSetattrBehavior::Constant {});
+            mself.delattr = Some(DelattrBehavior::Undeletable {});
         }
         Ok(self_)
     }
 
     ///
-    fn postset<'py>(
+    pub fn postset<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_setattr: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
@@ -426,19 +452,19 @@ impl MemberBuilder {
         };
         {
             let mself = &mut *self_;
-            mself.post_setattr = behavior;
+            mself.post_setattr = Some(behavior);
         }
         Ok(self_)
     }
 
     ///
-    fn del_<'py>(
+    pub fn del_<'py>(
         mut self_: PyRefMut<'py, Self>,
         delattr_behavior: Bound<'py, DelattrBehavior>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
-            mself.delattr = delattr_behavior.as_any().extract()?;
+            mself.delattr = Some(delattr_behavior.as_any().extract()?);
         }
         Ok(self_)
     }
@@ -446,23 +472,92 @@ impl MemberBuilder {
 
 impl MemberBuilder {
     ///
+    pub fn should_inherit(&self) -> bool {
+        self.inherit
+    }
+
+    ///
+    pub fn get_inherited_behavior_from_member(&mut self, member: &Member) -> () {
+        if self.pre_getattr.is_none() {
+            self.pre_getattr = Some(member.pre_getattr.clone());
+        }
+        if self.post_getattr.is_none() {
+            self.post_getattr = Some(member.post_getattr.clone());
+        }
+        if self.pre_setattr.is_none() {
+            self.pre_setattr = Some(member.pre_setattr.clone());
+        }
+        if self.post_setattr.is_none() {
+            self.post_setattr = Some(member.post_setattr.clone());
+        }
+        if self.delattr.is_none() {
+            self.delattr = Some(member.delattr.clone());
+        }
+        if self.default.is_none() {
+            self.default = Some(member.default.clone());
+        }
+        if self.type_validator.is_none() {
+            self.type_validator = Some(member.validator.type_validator.clone());
+        }
+        if self.value_validators.is_none() {
+            self.value_validators = Some(member.validator.value_validators.to_vec());
+        }
+        if self.coercer.is_none() {
+            self.coercer = Some(member.validator.coercer.clone());
+        }
+        if self.metadata.is_none() {
+            self.metadata = clone_metadata(&member.metadata);
+        }
+    }
+
+    ///
     pub fn build(self) -> PyResult<Member> {
         let Some(name) = self.name else { todo!() };
         let Some(index) = self.slot_index else {
             todo!()
         };
+        let Some(tv) = self.type_validator else {
+            todo!()
+        };
         Ok(Member {
             name,
             slot_index: index,
-            pre_getattr: self.pre_getattr,
-            post_getattr: self.post_getattr,
-            pre_setattr: self.pre_setattr,
-            post_setattr: self.post_setattr,
-            delattr: self.delattr,
-            default: self.default,
-            validator: self.validator,
+            pre_getattr: self.pre_getattr.unwrap_or(PreGetattrBehavior::NoOp {}),
+            post_getattr: self.post_getattr.unwrap_or(PostGetattrBehavior::NoOp {}),
+            pre_setattr: self.pre_setattr.unwrap_or(PreSetattrBehavior::NoOp {}),
+            post_setattr: self.post_setattr.unwrap_or(PostSetattrBehavior::NoOp {}),
+            delattr: self.delattr.unwrap_or(DelattrBehavior::Slot {}),
+            default: self.default.unwrap_or(DefaultBehavior::NoDefault {}),
+            validator: Validator {
+                type_validator: tv,
+                value_validators: self
+                    .value_validators
+                    .unwrap_or(Vec::new())
+                    .into_boxed_slice(),
+                coercer: self.coercer.unwrap_or(CoercionMode::No()),
+            },
             metadata: self.metadata,
         })
+    }
+}
+
+impl Clone for MemberBuilder {
+    fn clone(&self) -> Self {
+        MemberBuilder {
+            name: self.name.clone(),
+            slot_index: self.slot_index,
+            pre_getattr: self.pre_getattr.clone(),
+            post_getattr: self.post_getattr.clone(),
+            pre_setattr: self.pre_setattr.clone(),
+            post_setattr: self.post_setattr.clone(),
+            delattr: self.delattr.clone(),
+            default: self.default.clone(),
+            type_validator: self.type_validator.clone(),
+            value_validators: self.value_validators.clone(),
+            coercer: self.coercer.clone(),
+            metadata: clone_metadata(&self.metadata),
+            inherit: self.inherit,
+        }
     }
 }
 
@@ -471,14 +566,17 @@ impl Default for MemberBuilder {
         MemberBuilder {
             name: None,
             slot_index: None,
-            pre_getattr: PreGetattrBehavior::NoOp {},
-            post_getattr: PostGetattrBehavior::NoOp {},
-            pre_setattr: PreSetattrBehavior::NoOp {},
-            post_setattr: PostSetattrBehavior::NoOp {},
-            delattr: DelattrBehavior::Slot {},
-            default: DefaultBehavior::NoDefault {},
-            validator: Validator::default(),
+            pre_getattr: None,
+            post_getattr: None,
+            pre_setattr: None,
+            post_setattr: None,
+            delattr: None,
+            default: None,
+            type_validator: None,
+            value_validators: None,
+            coercer: None,
             metadata: None,
+            inherit: false,
         }
     }
 }

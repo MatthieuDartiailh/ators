@@ -149,7 +149,6 @@ impl TypeValidator {
                             }
                         };
                     }
-                    let py = value.py();
                     let mut validated_items = Vec::with_capacity(items.len());
                     for (item, validator) in tuple.iter().zip(items) {
                         let v = validator.validate_type(member, object, item)?;
