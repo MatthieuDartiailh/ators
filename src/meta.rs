@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::{
-    Bound, PyAny, PyResult, intern, pyfunction,
+    Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFunction, PySet,
         PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
@@ -94,6 +94,21 @@ impl FreeSlotIndexFactory {
         }
         Ok(self.next_index)
     }
+}
+
+fn make_unknown_method_error<'py>(
+    member_name: &String,
+    behavior_name: &str,
+    meth_name: &Py<PyString>,
+    methods: &Bound<'py, PySet>,
+) -> PyErr {
+    pyo3::exceptions::PyTypeError::new_err(format!(
+        "Member {member_name} {behavior_name} behavior reference method {} \
+        which does not exist. Known methods are {}",
+        // SAFETY string and set of string is safe to get a repr from
+        meth_name.bind(methods.py()).repr().unwrap(),
+        methods.repr().unwrap()
+    ))
 }
 
 #[pyfunction]
@@ -242,33 +257,72 @@ pub fn create_ators_subclass<'py>(
             }
         }
 
-        // XXX nice error messages
+        // FIXME low prio (use a macro to reduce repetition)
         // Ensure all the method the members are using do exist.
         if let Some(PreGetattrBehavior::ObjectMethod { meth_name }) = &mb.pre_getattr
             && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(
+                k,
+                "pre_getattr",
+                meth_name,
+                &methods,
+            ));
+        }
         if let Some(PostGetattrBehavior::ObjectMethod { meth_name }) = &mb.post_getattr
             && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(
+                k,
+                "post_getattr",
+                meth_name,
+                &methods,
+            ));
+        }
         if let Some(PreSetattrBehavior::ObjectMethod { meth_name }) = &mb.pre_setattr
             && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(
+                k,
+                "pre_setattr",
+                meth_name,
+                &methods,
+            ));
+        }
         if let Some(PostSetattrBehavior::ObjectMethod { meth_name }) = &mb.post_setattr
             && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(
+                k,
+                "post_setattr",
+                meth_name,
+                &methods,
+            ));
+        }
         if let Some(DefaultBehavior::ObjectMethod { meth_name }) = &mb.default
             && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(k, "default", meth_name, &methods));
+        }
         if let Some(meth_name) = match &mb.coercer {
             Some(CoercionMode::Coerce(Coercer::ObjectMethod { meth_name })) => Some(meth_name),
             Some(CoercionMode::Init(Coercer::ObjectMethod { meth_name })) => Some(meth_name),
             _ => None,
         } && !methods.contains(meth_name.bind(py))?
-        {}
+        {
+            return Err(make_unknown_method_error(k, "coerce", meth_name, &methods));
+        }
         for vv in mb.value_validators.as_ref().unwrap_or(&Vec::new()) {
             if let ValueValidator::ObjectMethod { meth_name } = vv
                 && !methods.contains(meth_name.bind(py))?
-            {}
+            {
+                return Err(make_unknown_method_error(
+                    k,
+                    "value_validator",
+                    meth_name,
+                    &methods,
+                ));
+            }
         }
     }
 
