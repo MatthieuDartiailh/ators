@@ -60,32 +60,6 @@ pub struct Member {
 }
 
 impl Member {
-    fn new(
-        name: String,
-        slot_index: u8,
-        pre_getattr: PreGetattrBehavior,
-        post_getattr: PostGetattrBehavior,
-        pre_setattr: PreSetattrBehavior,
-        post_setattr: PostSetattrBehavior,
-        delattr: DelattrBehavior,
-        default: DefaultBehavior,
-        validator: Validator,
-        metadata: Option<HashMap<String, Py<PyAny>>>,
-    ) -> Self {
-        Self {
-            name,
-            slot_index,
-            pre_getattr,
-            post_getattr,
-            pre_setattr,
-            post_setattr,
-            delattr,
-            default,
-            validator,
-            metadata,
-        }
-    }
-
     pub fn clone_with_index(&self, new_index: u8) -> Self {
         Member {
             name: self.name.clone(),
@@ -209,7 +183,7 @@ impl Member {
 }
 
 #[pyclass]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MemberBuilder {
     pub name: Option<String>,
     pub slot_index: Option<u8>,
@@ -226,8 +200,6 @@ pub struct MemberBuilder {
     inherit: bool,
 }
 
-// XXX fix all method that should be able to act as decorator to return the function
-// when used as decorator
 #[pymethods]
 impl MemberBuilder {
     // FIXME need to pass in args for customization (init)
@@ -236,21 +208,26 @@ impl MemberBuilder {
         MemberBuilder::default()
     }
 
-    pub fn inherit(&mut self) {
-        self.inherit = true;
+    pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
+        self_.inherit = true;
+        Ok(self_)
     }
 
     #[pyo3(signature = (**tags))]
-    pub fn tag<'py>(&mut self, tags: Option<&Bound<'py, PyDict>>) {
-        if self.metadata.is_none() {
-            self.metadata = Some(HashMap::with_capacity(tags.map(|d| d.len()).unwrap_or(0)));
+    pub fn tag<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        tags: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        if self_.metadata.is_none() {
+            self_.metadata = Some(HashMap::with_capacity(tags.map(|d| d.len()).unwrap_or(0)));
         }
         if let Some(tags) = tags
-            && let Some(d) = &mut self.metadata
+            && let Some(d) = &mut self_.metadata
         {
             // tags are keyword args so keys are guaranteed to be strings making unwrap safe
             d.extend(tags.iter().map(|(k, v)| (k.extract().unwrap(), v.unbind())));
         };
+        Ok(self_)
     }
 
     ///
@@ -258,171 +235,140 @@ impl MemberBuilder {
     pub fn py_default<'py>(
         mut self_: PyRefMut<'py, Self>,
         default_behavior: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = match default_behavior.cast::<DefaultBehavior>() {
-            Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        match default_behavior.cast::<DefaultBehavior>() {
+            Ok(b) => mself.default = Some(b.as_any().extract()?),
             Err(_) => match default_behavior.cast_exact::<PyFunction>() {
-                Ok(func) => DefaultBehavior::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                },
-                Err(_) => DefaultBehavior::Static {
-                    value: default_behavior.unbind(),
-                },
+                Ok(func) => {
+                    mself.default = Some(DefaultBehavior::ObjectMethod {
+                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
+                    });
+                    return Ok(default_behavior);
+                }
+                Err(_) => {
+                    mself.default = Some(DefaultBehavior::Static {
+                        value: default_behavior.unbind(),
+                    })
+                }
             },
         };
-        {
-            let mself = &mut *self_;
-            mself.default = Some(behavior);
-        }
-        Ok(self_)
+        self_.into_bound_py_any(py)
     }
 
     ///
     pub fn coerce<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = if let Some(c) = coercer {
-            CoercionMode::Coerce(match c.cast::<Coercer>() {
-                Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        if let Some(c) = coercer {
+            match c.cast::<Coercer>() {
+                Ok(b) => mself.coercer = Some(CoercionMode::Coerce(b.as_any().extract()?)),
                 Err(_) => {
                     let func = c.cast_exact::<PyFunction>()?;
-                    Coercer::ObjectMethod {
+                    mself.coercer = Some(CoercionMode::Coerce(Coercer::ObjectMethod {
                         meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                    }
+                    }));
+                    return Ok(c);
                 }
-            })
+            }
         } else {
-            CoercionMode::No()
+            mself.coercer = Some(CoercionMode::No());
         };
-        {
-            let mself = &mut *self_;
-            mself.coercer = Some(behavior);
-        }
-        Ok(self_)
+        self_.into_bound_py_any(py)
     }
 
     ///
     pub fn coerce_init<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = if let Some(c) = coercer {
-            CoercionMode::Init(match c.cast::<Coercer>() {
-                Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        if let Some(c) = coercer {
+            match c.cast::<Coercer>() {
+                Ok(b) => mself.coercer = Some(CoercionMode::Init(b.as_any().extract()?)),
                 Err(_) => {
                     let func = c.cast_exact::<PyFunction>()?;
-                    Coercer::ObjectMethod {
+                    mself.coercer = Some(CoercionMode::Init(Coercer::ObjectMethod {
                         meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                    }
+                    }));
+                    return Ok(c);
                 }
-            })
+            }
         } else {
-            CoercionMode::No()
+            mself.coercer = Some(CoercionMode::No());
         };
-        {
-            let mself = &mut *self_;
-            mself.coercer = Some(behavior);
-        }
-        Ok(self_)
+        self_.into_bound_py_any(py)
     }
 
-    ///
-    pub fn append_value_validator<'py>(
-        mut self_: PyRefMut<'py, Self>,
-        value_validator: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        let py = self_.py();
-        let behavior = match value_validator.cast::<ValueValidator>() {
-            Ok(b) => b.as_any().extract()?,
-            Err(_) => {
-                let func = value_validator.cast_exact::<PyFunction>()?;
-                ValueValidator::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                }
-            }
-        };
-        {
-            let mself = &mut *self_;
-            if let Some(vv) = &mut mself.value_validators {
-                vv.push(behavior);
-            } else {
-                mself.value_validators.replace(vec![behavior]);
-            }
-        }
-        Ok(self_)
-    }
-
-    // This come with a foot gun if not used on a function assigned to a method
-    // of the same name
-    // XXX implement sanity check on metaclass
     ///
     pub fn preget<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_getattr: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = match pre_getattr.cast::<PreGetattrBehavior>() {
-            Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        match pre_getattr.cast::<PreGetattrBehavior>() {
+            Ok(b) => {
+                mself.pre_getattr = Some(b.as_any().extract()?);
+                self_.into_bound_py_any(py)
+            }
             Err(_) => {
                 let func = pre_getattr.cast_exact::<PyFunction>()?;
-                PreGetattrBehavior::ObjectMethod {
+                mself.pre_getattr = Some(PreGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                }
+                });
+                Ok(pre_getattr)
             }
-        };
-        {
-            let mself = &mut *self_;
-            mself.pre_getattr = Some(behavior);
         }
-        Ok(self_)
     }
 
     ///
     pub fn postget<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_getattr: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = match post_getattr.cast::<PostGetattrBehavior>() {
-            Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        match post_getattr.cast::<PostGetattrBehavior>() {
+            Ok(b) => {
+                mself.post_getattr = Some(b.as_any().extract()?);
+                self_.into_bound_py_any(py)
+            }
             Err(_) => {
                 let func = post_getattr.cast_exact::<PyFunction>()?;
-                PostGetattrBehavior::ObjectMethod {
+                mself.post_getattr = Some(PostGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                }
+                });
+                Ok(post_getattr)
             }
-        };
-        {
-            let mself = &mut *self_;
-            mself.post_getattr = Some(behavior);
         }
-        Ok(self_)
     }
 
     ///
     pub fn preset<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_setattr: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = match pre_setattr.cast::<PreSetattrBehavior>() {
-            Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        match pre_setattr.cast::<PreSetattrBehavior>() {
+            Ok(b) => {
+                mself.pre_setattr = Some(b.as_any().extract()?);
+                self_.into_bound_py_any(py)
+            }
             Err(_) => {
                 let func = pre_setattr.cast_exact::<PyFunction>()?;
-                PreSetattrBehavior::ObjectMethod {
+                mself.pre_setattr = Some(PreSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                }
+                });
+                Ok(pre_setattr)
             }
-        };
-        {
-            let mself = &mut *self_;
-            mself.pre_setattr = Some(behavior);
         }
-        Ok(self_)
     }
 
     ///
@@ -439,22 +385,22 @@ impl MemberBuilder {
     pub fn postset<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_setattr: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
-        let behavior = match post_setattr.cast::<PostSetattrBehavior>() {
-            Ok(b) => b.as_any().extract()?,
+        let mself = &mut *self_;
+        match post_setattr.cast::<PostSetattrBehavior>() {
+            Ok(b) => {
+                mself.post_setattr = Some(b.as_any().extract()?);
+                self_.into_bound_py_any(py)
+            }
             Err(_) => {
                 let func = post_setattr.cast_exact::<PyFunction>()?;
-                PostSetattrBehavior::ObjectMethod {
+                mself.post_setattr = Some(PostSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                }
+                });
+                Ok(post_setattr)
             }
-        };
-        {
-            let mself = &mut *self_;
-            mself.post_setattr = Some(behavior);
         }
-        Ok(self_)
     }
 
     ///
@@ -477,7 +423,7 @@ impl MemberBuilder {
     }
 
     ///
-    pub fn get_inherited_behavior_from_member(&mut self, member: &Member) -> () {
+    pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
         }
@@ -530,10 +476,7 @@ impl MemberBuilder {
             default: self.default.unwrap_or(DefaultBehavior::NoDefault {}),
             validator: Validator {
                 type_validator: tv,
-                value_validators: self
-                    .value_validators
-                    .unwrap_or(Vec::new())
-                    .into_boxed_slice(),
+                value_validators: self.value_validators.unwrap_or_default().into_boxed_slice(),
                 coercer: self.coercer.unwrap_or(CoercionMode::No()),
             },
             metadata: self.metadata,
@@ -557,26 +500,6 @@ impl Clone for MemberBuilder {
             coercer: self.coercer.clone(),
             metadata: clone_metadata(&self.metadata),
             inherit: self.inherit,
-        }
-    }
-}
-
-impl Default for MemberBuilder {
-    fn default() -> Self {
-        MemberBuilder {
-            name: None,
-            slot_index: None,
-            pre_getattr: None,
-            post_getattr: None,
-            pre_setattr: None,
-            post_setattr: None,
-            delattr: None,
-            default: None,
-            type_validator: None,
-            value_validators: None,
-            coercer: None,
-            metadata: None,
-            inherit: false,
         }
     }
 }
