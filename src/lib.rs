@@ -7,6 +7,7 @@
 |----------------------------------------------------------------------------*/
 use pyo3::pymodule;
 
+mod annotations;
 mod core;
 mod member;
 mod meta;
@@ -19,6 +20,8 @@ mod _ators {
 
     #[pymodule_export]
     use self::core::{BaseAtors, freeze, is_frozen};
+    #[pymodule_export]
+    use self::meta::create_ators_subclass;
 
     #[pymodule_export]
     use self::member::{

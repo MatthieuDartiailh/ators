@@ -7,10 +7,9 @@
 # --------------------------------------------------------------------------------------
 """"""
 
-from itertools import chain
 from typing import Any, Mapping, dataclass_transform
 
-from ._ators import Member
+from ._ators import Member, create_ators_subclass
 
 
 @dataclass_transform(frozen=False)
@@ -48,36 +47,9 @@ class AtorsMeta(type):
         # re-implementation of C3
         assert meta.mro is type.mro, "Custom MRO calculation are not supported"
 
-        # Ators subclasses do not support slots (beyond support for weakrefs
-        # through the enable_weakrefs metaclass argument)
-        if "__slots__" in dct:
-            raise TypeError("__slots__ not supported in Ators subclasses")
-
-        dct["__slots__"] = ()
-        # Add support for weakrefs if requested and no base class already
-        # supports them
-        if enable_weakrefs and not any(
-            "__weakref__" in b.__slots__
-            for b in chain.from_iterable(b.mro() for b in bases)
-        ):
-            dct["__slots__"] += ("__weakref__",)
-
-        generate_members_from_cls_namespace(name, dct, type_containers)
-
-        # Create the helper used to analyze the namespace and customize members
-        helper = _AtomMetaHelper(name, bases, dct)
-
-        # Analyze and clean the namespace
-        helper.scan_and_clear_namespace()
-
-        # Assign each member a unique ID
-        helper.assign_members_indexes()
-
-        # Customize the members based on the specified static modifiers
-        helper.apply_members_static_behaviors()
-
-        cls = helper.create_class(meta)
-        cls.__ators_freeze__ = frozen
+        return create_ators_subclass(
+            meta, name, bases, dct, frozen, enable_weakrefs, type_containers
+        )
 
     def __call__(self, *args, **kwds):
         return super().__call__(*args, **kwds)
