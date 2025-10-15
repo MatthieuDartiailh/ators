@@ -9,8 +9,10 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
     sync::with_critical_section,
-    types::{PyAnyMethods, PyString, PyType, PyTypeMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
+
+use crate::member::{Member, member_coerce_init};
 
 // FIXME reduce memory footprint
 // See for initializing allocated memory https://docs.rs/init_array/latest/src/init_array/stable.rs.html#71-95
@@ -28,8 +30,9 @@ pub struct BaseAtors {
 #[pymethods]
 impl BaseAtors {
     #[new]
+    #[pyo3(signature = (**_kwargs))]
     #[classmethod]
-    fn py_new(cls: &Bound<'_, PyType>) -> PyResult<Self> {
+    fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
         let slots_count = cls
             .getattr(intern!(py, ATORS_MEMBERS))?
@@ -88,6 +91,29 @@ impl BaseAtors {
     pub(crate) fn is_frozen(&self) -> bool {
         self.frozen
     }
+}
+
+#[pyfunction]
+pub fn init_ators<'py>(self_: Bound<'py, BaseAtors>, kwargs: Bound<'py, PyDict>) -> PyResult<()> {
+    let members = self_.getattr(ATORS_MEMBERS)?;
+    for (k, v) in kwargs.cast::<PyDict>()?.iter() {
+        let key = k.cast::<PyString>()?;
+        {
+            match self_.setattr(key, v.clone()) {
+                Ok(_) => Ok(()),
+                Err(err) => {
+                    let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
+                    if let Some(r) = member_coerce_init(&m, &self_, v) {
+                        let coerced_v = r?;
+                        self_.setattr(key, coerced_v).map(|_| ())
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        }?
+    }
+    Ok(())
 }
 
 #[pyfunction]

@@ -7,7 +7,7 @@
 # --------------------------------------------------------------------------------------
 """"""
 
-from ._ators import AtorsBase as _Base
+from ._ators import AtorsBase as _Base, init_ators as _init_ators
 from ._meta import AtorsMeta as _Meta
 
 
@@ -22,6 +22,11 @@ def __newobj__(cls, *args):
 
 class Ators(_Base, metaclass=_Meta):
     """"""
+
+    # NOTE implement init using a rust accelerator, once pyo3 support init it
+    # will be moved
+    def __init__(self, **kwargs):
+        _init_ators(self, kwargs)
 
     def __reduce_ex__(self, proto):
         """An implementation of the reduce protocol.

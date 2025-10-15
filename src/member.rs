@@ -6,7 +6,10 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
-use crate::validators::{Coercer, TypeValidator, Validator, ValueValidator};
+use crate::{
+    core::BaseAtors,
+    validators::{Coercer, TypeValidator, Validator, ValueValidator},
+};
 use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
@@ -77,6 +80,25 @@ impl Member {
 
     pub fn index(&self) -> u8 {
         self.slot_index
+    }
+}
+
+///
+pub fn member_coerce_init<'py>(
+    member: &Bound<'py, Member>,
+    object: &Bound<'py, BaseAtors>,
+    value: Bound<'py, PyAny>,
+) -> Option<PyResult<Bound<'py, PyAny>>> {
+    let mb = member.borrow();
+    if let CoercionMode::Init(c) = &mb.validator.coercer {
+        Some(c.coerce_value(
+            &mb.validator.type_validator,
+            Some(member),
+            Some(object),
+            value,
+        ))
+    } else {
+        None
     }
 }
 
@@ -348,7 +370,7 @@ impl MemberBuilder {
                 mself.pre_getattr = Some(PreGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                return check_is_decorated(py, "preget", pre_getattr);
+                check_is_decorated(py, "preget", pre_getattr)
             }
         }
     }
@@ -370,7 +392,7 @@ impl MemberBuilder {
                 mself.post_getattr = Some(PostGetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                return check_is_decorated(py, "postget", post_getattr);
+                check_is_decorated(py, "postget", post_getattr)
             }
         }
     }
@@ -392,7 +414,7 @@ impl MemberBuilder {
                 mself.pre_setattr = Some(PreSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                return check_is_decorated(py, "preset", pre_setattr);
+                check_is_decorated(py, "preset", pre_setattr)
             }
         }
     }
@@ -424,7 +446,7 @@ impl MemberBuilder {
                 mself.post_setattr = Some(PostSetattrBehavior::ObjectMethod {
                     meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
                 });
-                return check_is_decorated(py, "postset", post_setattr);
+                check_is_decorated(py, "postset", post_setattr)
             }
         }
     }
