@@ -33,7 +33,7 @@ impl Coercer {
         &self,
         type_validator: &TypeValidator,
         member: Option<&Bound<'py, crate::member::Member>>,
-        object: Option<&Bound<'py, crate::core::BaseAtors>>,
+        object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();

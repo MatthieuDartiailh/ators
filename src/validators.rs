@@ -88,7 +88,7 @@ impl Validator {
     pub fn validate<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
-        object: Option<&Bound<'py, crate::core::BaseAtors>>,
+        object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self.strict_validate(member, object, value.clone()) {
@@ -116,7 +116,7 @@ impl Validator {
     pub fn coerce_value<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
-        object: Option<&Bound<'py, crate::core::BaseAtors>>,
+        object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if let CoercionMode::Coerce(c) = &self.coercer {
@@ -133,7 +133,7 @@ impl Validator {
     fn strict_validate<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
-        object: Option<&Bound<'py, crate::core::BaseAtors>>,
+        object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let v = self.type_validator.validate_type(member, object, value)?;

@@ -23,7 +23,7 @@ impl DelattrBehavior {
     pub(crate) fn del<'py>(
         &self,
         member: &pyo3::Bound<'py, super::Member>,
-        object: &pyo3::Bound<'py, crate::core::BaseAtors>,
+        object: &pyo3::Bound<'py, crate::core::AtorsBase>,
     ) -> pyo3::PyResult<()> {
         match self {
             Self::Slot {} => todo!("Implement slot deletion"),

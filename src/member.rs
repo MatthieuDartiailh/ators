@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 ///
 use crate::{
-    core::BaseAtors,
+    core::AtorsBase,
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
@@ -86,7 +86,7 @@ impl Member {
 ///
 pub fn member_coerce_init<'py>(
     member: &Bound<'py, Member>,
-    object: &Bound<'py, BaseAtors>,
+    object: &Bound<'py, AtorsBase>,
     value: Bound<'py, PyAny>,
 ) -> Option<PyResult<Bound<'py, PyAny>>> {
     let mb = member.borrow();
@@ -117,7 +117,7 @@ impl Member {
         } else {
             let member = self_.into_pyobject(py)?;
             with_critical_section2(member.as_any(), object.as_any(), || {
-                let object = object.cast::<crate::core::BaseAtors>()?;
+                let object = object.cast::<crate::core::AtorsBase>()?;
                 let m_ref = member.borrow();
                 m_ref.pre_getattr.pre_get(&member, object)?;
                 let value = match object
@@ -155,7 +155,7 @@ impl Member {
         let member = self_.into_pyobject(py)?;
         with_critical_section2(member.as_any(), object.as_any(), || {
             let m_ref = member.borrow();
-            let object = object.cast::<crate::core::BaseAtors>()?;
+            let object = object.cast::<crate::core::AtorsBase>()?;
             let current = match object.borrow().get_slot(m_ref.slot_index as usize, py) {
                 Some(v) => v,
                 None => py.None(), // Use UNSET singleton
@@ -196,7 +196,7 @@ impl Member {
         let py = self_.py();
         let member = self_.into_pyobject(py)?;
         with_critical_section2(member.as_any(), object.as_any(), || {
-            let object = object.cast::<crate::core::BaseAtors>()?;
+            let object = object.cast::<crate::core::AtorsBase>()?;
 
             // Validate it is legitimate to attempt to set the member
             member.borrow().delattr.del(&member, object)

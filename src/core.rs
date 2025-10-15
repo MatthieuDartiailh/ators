@@ -21,33 +21,31 @@ use crate::member::{Member, member_coerce_init};
 pub static ATORS_MEMBERS: &str = "__atom_members__";
 
 #[pyclass(subclass)]
-pub struct BaseAtors {
+pub struct AtorsBase {
     frozen: bool,
     notification_enabled: bool,
     slots: Box<[Option<Py<PyAny>>]>,
 }
 
 #[pymethods]
-impl BaseAtors {
+impl AtorsBase {
     #[new]
     #[pyo3(signature = (**_kwargs))]
     #[classmethod]
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
-        let slots_count = cls
-            .getattr(intern!(py, ATORS_MEMBERS))?
-            .extract::<u8>()
-            .map_err(|_| {
-                pyo3::exceptions::PyTypeError::new_err(format!(
-                    "The class {} has more than 255 members which is not supported.",
-                    cls.name().unwrap_or(PyString::new(py, "<unknown>"))
-                ))
-            })?;
+        let slots_count = cls.getattr(intern!(py, ATORS_MEMBERS))?.len()?;
+        if slots_count > (u8::MAX as usize) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "The class {} has more than 255 members which is not supported.",
+                cls.name().unwrap_or(PyString::new(py, "<unknown>"))
+            )));
+        }
         // NOTE using a boxed slice is suboptimal size wise since we do not need a usize
         // when limiting ourselves to 255 members but it is the easiest way to have
         // a fixed size array without using unsafe code.
         // We can revisit this later if needed.
-        let slots = (0..slots_count).map(|_| None).collect();
+        let slots = (0..=slots_count).map(|_| None).collect();
         Ok(Self {
             frozen: false,
             notification_enabled: false,
@@ -69,7 +67,7 @@ impl BaseAtors {
     }
 }
 
-impl BaseAtors {
+impl AtorsBase {
     /// Get a clone (ref) of the value stored in the slot at index if any
     pub(crate) fn get_slot<'py>(&self, index: usize, py: Python<'py>) -> Option<Py<PyAny>> {
         self.slots[index].as_ref().map(|v| v.clone_ref(py))
@@ -94,7 +92,7 @@ impl BaseAtors {
 }
 
 #[pyfunction]
-pub fn init_ators<'py>(self_: Bound<'py, BaseAtors>, kwargs: Bound<'py, PyDict>) -> PyResult<()> {
+pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>) -> PyResult<()> {
     let members = self_.getattr(ATORS_MEMBERS)?;
     for (k, v) in kwargs.cast::<PyDict>()?.iter() {
         let key = k.cast::<PyString>()?;
@@ -117,14 +115,14 @@ pub fn init_ators<'py>(self_: Bound<'py, BaseAtors>, kwargs: Bound<'py, PyDict>)
 }
 
 #[pyfunction]
-pub fn freeze<'py>(obj: Bound<'py, BaseAtors>) {
+pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) {
     with_critical_section(&obj, || {
         obj.borrow_mut().frozen = true;
     });
 }
 
 #[pyfunction]
-pub fn is_frozen<'py>(obj: Bound<'py, BaseAtors>) -> bool {
+pub fn is_frozen<'py>(obj: Bound<'py, AtorsBase>) -> bool {
     with_critical_section(&obj, || {
         return obj.borrow().frozen;
     })
@@ -132,21 +130,21 @@ pub fn is_frozen<'py>(obj: Bound<'py, BaseAtors>) -> bool {
 
 // FIXME re-enable once notification are implemented
 // #[pyfunction]
-// pub fn enable_notification<'py>(obj: Bound<'py, BaseAtors>) {
+// pub fn enable_notification<'py>(obj: Bound<'py, AtorsBase>) {
 //     with_critical_section(&obj, || {
 //         obj.borrow_mut().notification_enabled = true;
 //     });
 // }
 
 // #[pyfunction]
-// pub fn disable_notification<'py>(obj: Bound<'py, BaseAtors>) {
+// pub fn disable_notification<'py>(obj: Bound<'py, AtorsBase>) {
 //     with_critical_section(&obj, || {
 //         obj.borrow_mut().notification_enabled = false;
 //     });
 // }
 
 // #[pyfunction]
-// pub fn is_notification_enabled<'py>(obj: Bound<'py, BaseAtors>) -> bool {
+// pub fn is_notification_enabled<'py>(obj: Bound<'py, AtorsBase>) -> bool {
 //     with_critical_section(&obj, || {
 //         return obj.borrow().notification_enabled;
 //     })

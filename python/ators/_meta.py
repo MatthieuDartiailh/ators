@@ -17,7 +17,7 @@ class AtorsMeta(type):
     """The metaclass for classes derived from Ators.
 
     This metaclass computes the memory layout of the members in a given
-    class so that the BaseAtors class can allocate exactly enough space for
+    class so that the AtorsBase class can allocate exactly enough space for
     the object data slots when it instantiates an object.
 
     All classes deriving from Ators are automatically slotted, which prevents
@@ -53,6 +53,6 @@ class AtorsMeta(type):
 
     def __call__(self, *args, **kwds):
         new = super().__call__(*args, **kwds)
-        if self.__ators_freeze__:
+        if self.__ators_frozen__:
             freeze(new)
         return new

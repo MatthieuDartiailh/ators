@@ -85,41 +85,41 @@ impl TypeValidator {
     pub fn validate_type<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
-        object: Option<&Bound<'py, crate::core::BaseAtors>>,
+        object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Self::Any {} => Ok(value),
             Self::Bool {} => {
-                if unsafe { PyBool_Check(value.as_ptr()) } == 0 {
+                if unsafe { PyBool_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
                     validation_error!("bool", member, object, value)
                 }
             }
             Self::Int {} => {
-                if unsafe { PyLong_Check(value.as_ptr()) } == 0 {
+                if unsafe { PyLong_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
                     validation_error!("int", member, object, value)
                 }
             }
             Self::Float {} => {
-                if unsafe { PyFloat_Check(value.as_ptr()) } == 0 {
+                if unsafe { PyFloat_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
                     validation_error!("float", member, object, value)
                 }
             }
             Self::Str {} => {
-                if unsafe { PyUnicode_Check(value.as_ptr()) } == 0 {
+                if unsafe { PyUnicode_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
                     validation_error!("str", member, object, value)
                 }
             }
             Self::Bytes {} => {
-                if unsafe { PyBytes_Check(value.as_ptr()) } == 0 {
+                if unsafe { PyBytes_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
                     validation_error!("bytes", member, object, value)

@@ -22,7 +22,7 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{ATORS_MEMBERS, BaseAtors},
+    core::{ATORS_MEMBERS, AtorsBase},
     member::PreGetattrBehavior,
 };
 use crate::{
@@ -38,10 +38,16 @@ static ATORS_FROZEN: &str = "__ators_frozen__";
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
-    let mut inputs: Vec<Bound<'py, PyTuple>> = bases
+    let mut inputs: Vec<Vec<Bound<'py, PyType>>> = bases
         .iter()
-        .map(|b| -> PyResult<Bound<'py, PyTuple>> { Ok(b.cast()?.mro()) })
-        .collect::<PyResult<Vec<Bound<'py, PyTuple>>>>()?;
+        .map(|b| -> PyResult<Vec<Bound<'py, PyType>>> {
+            b.cast()?
+                .mro()
+                .iter()
+                .map(|e| -> PyResult<Bound<'py, PyType>> { Ok(e.cast_into()?) })
+                .collect()
+        })
+        .collect::<PyResult<Vec<Vec<Bound<'py, PyType>>>>>()?;
 
     // Container to store teh computed MRO
     let mut mro = Vec::new();
@@ -49,26 +55,26 @@ fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, P
     while !inputs.is_empty() {
         let mut candidate: Option<Bound<'py, PyType>> = None;
         for imro in inputs.iter() {
-            let temp = imro.get_item(0)?;
+            let temp = &imro[0];
             if inputs
                 .iter()
-                .any(|imro| imro.get_slice(1, imro.len()).contains(&temp).unwrap())
+                .any(|imro| imro[1..].iter().any(|t| t.is(temp)))
             {
                 candidate = None;
             } else {
-                candidate = Some(temp.cast_into()?);
+                candidate = Some(temp.clone().cast_into()?);
                 break;
             }
         }
 
         if let Some(type_) = candidate.take() {
             for imro in inputs.iter_mut() {
-                if imro.get_item(0)?.is(&type_) {
-                    imro.del_item(0).unwrap();
+                if imro[0].is(&type_) {
+                    imro.remove(0);
                 }
             }
             mro.push(type_);
-            inputs.retain(|item| item.len() != 0);
+            inputs.retain(|item| !item.is_empty());
         } else {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
                 "Inconsistent class hierarchy with base classes {bases}"
@@ -133,6 +139,7 @@ pub fn create_ators_subclass<'py>(
         ));
     }
 
+    let ators_base_ty = py.get_type::<AtorsBase>();
     let mro = mro_from_bases(&bases)?;
 
     // Store whether or not the instance should be frozen after creation.
@@ -150,11 +157,27 @@ pub fn create_ators_subclass<'py>(
         generate_member_builders_from_cls_namespace(&name, &dct, type_containers)?;
 
     // Gather the name of the methods defined on the base classes.
+    // For subclasses of AtorsBase we grab the names from the special class
+    // attribute __ators__methods__, for other types we scan the type dictionary
     let methods = PySet::empty(py)?;
     for base in bases.iter() {
-        // Methods are stored as a frozenset so we can safely iterate over it.
-        for method_name in base.getattr(ATORS_METHODS)?.as_any().try_iter()? {
-            methods.add(method_name?)?;
+        if base.cast::<PyType>()?.is_subclass(&ators_base_ty)? {
+            if !base.is(&ators_base_ty) {
+                // Methods are stored as a frozenset so we can safely iterate over it.
+                for method_name in base.getattr(ATORS_METHODS)?.as_any().try_iter()? {
+                    methods.add(method_name?)?;
+                }
+            }
+        } else {
+            for (k, v) in base
+                .getattr(intern!(py, "__dict__"))?
+                .cast::<PyDict>()?
+                .iter()
+            {
+                if v.is_exact_instance_of::<PyFunction>() {
+                    methods.add(k)?;
+                }
+            }
         }
     }
 
@@ -162,10 +185,9 @@ pub fn create_ators_subclass<'py>(
     // all of the members into a single dict. The reverse update preserves the
     // mro of overridden members. We use only known specific members to also
     // preserve the mro in presence of multiple inheritance.
-    let bat = py.get_type::<BaseAtors>();
     let mut members = HashMap::new();
     for base in mro.iter().skip(1).rev() {
-        if base.is_subclass(&bat)? && !base.is(&bat) {
+        if base.is_subclass(&ators_base_ty)? && !base.is(&ators_base_ty) {
             let spm = base.getattr(ATORS_SPECIFIC_MEMBERS)?;
             members.extend(
                 base.getattr(ATORS_MEMBERS)?
@@ -343,10 +365,12 @@ pub fn create_ators_subclass<'py>(
     )?;
     dct.set_item(ATORS_METHODS, PyFrozenSet::new(py, methods)?)?;
     dct.set_item(crate::core::ATORS_MEMBERS, members)?;
+    // XXX add freezing hint for metaclass
 
     // Since the only slot we use is __weakref__ we do not need copyreg
 
     // Finally create the class
-    meta.py_super()?
+    py.import(intern!(py, "builtins"))?
+        .getattr(intern!(py, "type"))?
         .call_method1(intern!(py, "__new__"), (meta, name, bases, dct))
 }

@@ -22,13 +22,13 @@ use crate::{
 
 ///
 struct PyTypes<'py> {
-    any: Bound<'py, PyType>,
-    final_: Bound<'py, PyType>,
-    generic_alias: Bound<'py, PyType>,
-    union_: Bound<'py, PyType>,
-    type_var: Bound<'py, PyType>,
-    new_type: Bound<'py, PyType>,
-    forward_ref: Bound<'py, PyType>,
+    any: Bound<'py, PyAny>,
+    final_: Bound<'py, PyAny>,
+    generic_alias: Bound<'py, PyAny>,
+    union_: Bound<'py, PyAny>,
+    type_var: Bound<'py, PyAny>,
+    new_type: Bound<'py, PyAny>,
+    forward_ref: Bound<'py, PyAny>,
 }
 
 ///
@@ -38,7 +38,7 @@ struct TypeTools<'py> {
     types: PyTypes<'py>,
 }
 
-// XXX bad idea for ators since I need to look into generic when building validators
+// NOTE bad idea for ators since I need to look into generic when building validators
 // NOTE in ators I will never get a tuple of types only Unions !!! so much simpler
 // This should map to _extract_types
 // pub fn extract_types<'py>(
@@ -251,6 +251,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         }
     }?;
 
+    let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
     let class_var = typing_mod.getattr(intern!(py, "ClassVar"))?;
 
@@ -266,27 +267,13 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         get_args: typing_mod.getattr(intern!(py, "get_args"))?,
         get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
         types: PyTypes {
-            any: typing_mod
-                .getattr(intern!(py, "Any"))?
-                .cast_into::<PyType>()?,
-            final_: typing_mod
-                .getattr(intern!(py, "Final"))?
-                .cast_into::<PyType>()?,
-            generic_alias: typing_mod
-                .getattr(intern!(py, "GenericAlias"))?
-                .cast_into::<PyType>()?,
-            union_: typing_mod
-                .getattr(intern!(py, "UnionType"))?
-                .cast_into::<PyType>()?,
-            type_var: typing_mod
-                .getattr(intern!(py, "TypeVar"))?
-                .cast_into::<PyType>()?,
-            new_type: typing_mod
-                .getattr(intern!(py, "NewType"))?
-                .cast_into::<PyType>()?,
-            forward_ref: annotationlib
-                .getattr(intern!(py, "ForwardRef"))?
-                .cast_into::<PyType>()?,
+            any: typing_mod.getattr(intern!(py, "Any"))?,
+            final_: typing_mod.getattr(intern!(py, "Final"))?,
+            generic_alias: typing_mod.getattr(intern!(py, "GenericAlias"))?,
+            union_: types_mod.getattr(intern!(py, "UnionType"))?,
+            type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
+            new_type: typing_mod.getattr(intern!(py, "NewType"))?,
+            forward_ref: annotationlib.getattr(intern!(py, "ForwardRef"))?,
         },
     };
 

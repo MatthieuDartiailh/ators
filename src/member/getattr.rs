@@ -30,7 +30,7 @@ impl PreGetattrBehavior {
     pub(crate) fn pre_get<'py>(
         &self,
         member: &Bound<'py, super::Member>,
-        object: &Bound<'py, crate::core::BaseAtors>,
+        object: &Bound<'py, crate::core::AtorsBase>,
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
@@ -76,7 +76,7 @@ impl PostGetattrBehavior {
     pub(crate) fn post_get<'py>(
         &self,
         member: &Bound<'py, super::Member>,
-        object: &Bound<'py, crate::core::BaseAtors>,
+        object: &Bound<'py, crate::core::AtorsBase>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {
