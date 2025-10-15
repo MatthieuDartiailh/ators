@@ -9,7 +9,7 @@
 
 from typing import Any, Mapping, dataclass_transform
 
-from ._ators import Member, create_ators_subclass
+from ._ators import Member, create_ators_subclass as _create_ators_subclass, freeze
 
 
 @dataclass_transform(frozen=False)
@@ -47,9 +47,12 @@ class AtorsMeta(type):
         # re-implementation of C3
         assert meta.mro is type.mro, "Custom MRO calculation are not supported"
 
-        return create_ators_subclass(
+        return _create_ators_subclass(
             meta, name, bases, dct, frozen, enable_weakrefs, type_containers
         )
 
     def __call__(self, *args, **kwds):
-        return super().__call__(*args, **kwds)
+        new = super().__call__(*args, **kwds)
+        if self.__ators_freeze__:
+            freeze(new)
+        return new
