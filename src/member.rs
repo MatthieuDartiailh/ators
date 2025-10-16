@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------------
-| Copyright (c) 2025, Matthieu C. Dartiailh
+| Copyright (c) 2025, Ators contributors, see git history for details
 |
 | Distributed under the terms of the Modified BSD License.
 |
@@ -120,10 +120,12 @@ impl Member {
                 let object = object.cast::<crate::core::AtorsBase>()?;
                 let m_ref = member.borrow();
                 m_ref.pre_getattr.pre_get(&member, object)?;
-                let value = match object
-                    .borrow()
-                    .get_slot(m_ref.slot_index as usize, object.py())
-                {
+                let slot_value = {
+                    object
+                        .borrow()
+                        .get_slot(m_ref.slot_index as usize, object.py())
+                };
+                let value = match slot_value {
                     Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
                     None => {
                         // Attempt to create a default value
@@ -137,10 +139,7 @@ impl Member {
                         new
                     }
                 };
-                member
-                    .borrow()
-                    .post_getattr
-                    .post_get(&member, object, &value)?;
+                m_ref.post_getattr.post_get(&member, object, &value)?;
                 Ok(value)
             })
         }
@@ -204,33 +203,7 @@ impl Member {
     }
 }
 
-///
-fn check_is_decorated<'py>(
-    py: Python<'py>,
-    builder_meth_name: &str,
-    func: Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let inspect = py.import(intern!(py, "inspect"))?;
-    let lines = inspect
-        .getattr(intern!(py, "stack"))?
-        .call1((2,))?
-        .get_item(1)?
-        .getattr(intern!(py, "code_context"))?;
-    if lines
-        .cast::<PyList>()?
-        .iter()
-        .map(|line| -> PyResult<bool> { line.cast::<PyString>()?.contains(intern!(py, "@")) })
-        .any(|res| res.is_ok_and(|decorated| decorated))
-    {
-        Ok(func)
-    } else {
-        Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Cannot pass a function to {builder_meth_name} without using it as a decorator."
-        )))
-    }
-}
-
-#[pyclass]
+#[pyclass(name = "member")]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
     pub name: Option<String>,
@@ -286,22 +259,17 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+
         match default_behavior.cast::<DefaultBehavior>() {
+            // XXX add extra validation for Call and CallMemberObject method mode
             Ok(b) => mself.default = Some(b.as_any().extract()?),
-            Err(_) => match default_behavior.cast_exact::<PyFunction>() {
-                Ok(func) => {
-                    mself.default = Some(DefaultBehavior::ObjectMethod {
-                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                    });
-                    return check_is_decorated(py, "default", default_behavior);
-                }
-                Err(_) => {
-                    mself.default = Some(DefaultBehavior::Static {
-                        value: default_behavior.unbind(),
-                    })
-                }
-            },
-        };
+            Err(_) => {
+                mself.default = Some(DefaultBehavior::Static {
+                    value: default_behavior.unbind(),
+                })
+            }
+        }
+
         self_.into_bound_py_any(py)
     }
 
@@ -360,19 +328,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        match pre_getattr.cast::<PreGetattrBehavior>() {
-            Ok(b) => {
-                mself.pre_getattr = Some(b.as_any().extract()?);
-                self_.into_bound_py_any(py)
-            }
-            Err(_) => {
-                let func = pre_getattr.cast_exact::<PyFunction>()?;
-                mself.pre_getattr = Some(PreGetattrBehavior::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                });
-                check_is_decorated(py, "preget", pre_getattr)
-            }
-        }
+        mself.pre_getattr = Some(
+            pre_getattr
+                .cast::<PreGetattrBehavior>()?
+                .as_any()
+                .extract()?,
+        );
+        self_.into_bound_py_any(py)
     }
 
     ///
@@ -382,19 +344,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        match post_getattr.cast::<PostGetattrBehavior>() {
-            Ok(b) => {
-                mself.post_getattr = Some(b.as_any().extract()?);
-                self_.into_bound_py_any(py)
-            }
-            Err(_) => {
-                let func = post_getattr.cast_exact::<PyFunction>()?;
-                mself.post_getattr = Some(PostGetattrBehavior::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                });
-                check_is_decorated(py, "postget", post_getattr)
-            }
-        }
+        mself.post_getattr = Some(
+            post_getattr
+                .cast::<PostGetattrBehavior>()?
+                .as_any()
+                .extract()?,
+        );
+        self_.into_bound_py_any(py)
     }
 
     ///
@@ -404,19 +360,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        match pre_setattr.cast::<PreSetattrBehavior>() {
-            Ok(b) => {
-                mself.pre_setattr = Some(b.as_any().extract()?);
-                self_.into_bound_py_any(py)
-            }
-            Err(_) => {
-                let func = pre_setattr.cast_exact::<PyFunction>()?;
-                mself.pre_setattr = Some(PreSetattrBehavior::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                });
-                check_is_decorated(py, "preset", pre_setattr)
-            }
-        }
+        mself.pre_setattr = Some(
+            pre_setattr
+                .cast::<PreSetattrBehavior>()?
+                .as_any()
+                .extract()?,
+        );
+        self_.into_bound_py_any(py)
     }
 
     ///
@@ -436,19 +386,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        match post_setattr.cast::<PostSetattrBehavior>() {
-            Ok(b) => {
-                mself.post_setattr = Some(b.as_any().extract()?);
-                self_.into_bound_py_any(py)
-            }
-            Err(_) => {
-                let func = post_setattr.cast_exact::<PyFunction>()?;
-                mself.post_setattr = Some(PostSetattrBehavior::ObjectMethod {
-                    meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                });
-                check_is_decorated(py, "postset", post_setattr)
-            }
-        }
+        mself.post_setattr = Some(
+            post_setattr
+                .cast::<PostSetattrBehavior>()?
+                .as_any()
+                .extract()?,
+        );
+        self_.into_bound_py_any(py)
     }
 
     ///

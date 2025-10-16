@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------------
-| Copyright (c) 2025, Matthieu C. Dartiailh
+| Copyright (c) 2025, Ators contributors, see git history for details
 |
 | Distributed under the terms of the Modified BSD License.
 |
@@ -25,8 +25,8 @@ mod _ators {
 
     #[pymodule_export]
     use self::member::{
-        DefaultBehavior, DelattrBehavior, Member, PostGetattrBehavior, PostSetattrBehavior,
-        PreGetattrBehavior, PreSetattrBehavior,
+        DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PostGetattrBehavior,
+        PostSetattrBehavior, PreGetattrBehavior, PreSetattrBehavior,
     };
 
     #[pymodule_export]

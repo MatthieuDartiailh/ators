@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------------
-| Copyright (c) 2025, Matthieu C. Dartiailh
+| Copyright (c) 2025, Ators contributors, see git history for details
 |
 | Distributed under the terms of the Modified BSD License.
 |
@@ -22,6 +22,7 @@ use crate::{
 
 ///
 struct PyTypes<'py> {
+    object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
     generic_alias: Bound<'py, PyAny>,
@@ -82,7 +83,7 @@ fn build_validator_from_annotation<'py>(
 
     let py = name.py();
 
-    // in 3.14, Union[int, float] and int | float share the same type
+    // In 3.14, Union[int, float] and int | float share the same type
     if ann.is_instance(&tools.types.generic_alias)? {
         let origin = tools.get_origin.call1((ann,))?;
         let args = tools.get_args.call1((ann,))?;
@@ -103,7 +104,7 @@ fn build_validator_from_annotation<'py>(
             type_containers,
             tools,
         )
-    } else if ann.is(&tools.types.any) {
+    } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok(Validator::default())
     } else if ann.is(py.get_type::<PyBool>()) {
         Ok(Validator::new(
@@ -180,7 +181,7 @@ fn configure_member_builder_from_annotation<'py>(
                     ann.repr()?
                 )));
             }
-            _ => builder.pre_setattr = Some(PreSetattrBehavior::ReadOnly {}),
+            _ => builder.pre_setattr = None,
         };
     }
 
@@ -251,6 +252,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         }
     }?;
 
+    let builtins_mod = py.import(intern!(py, "builtins"))?;
     let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
     let class_var = typing_mod.getattr(intern!(py, "ClassVar"))?;
@@ -267,6 +269,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         get_args: typing_mod.getattr(intern!(py, "get_args"))?,
         get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
         types: PyTypes {
+            object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
             generic_alias: typing_mod.getattr(intern!(py, "GenericAlias"))?,
@@ -314,7 +317,14 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             &ann,
             type_containers,
             &tools,
-        )?;
+        )
+        .map_err(|err| {
+            let new_err = pyo3::exceptions::PyTypeError::new_err(format!(
+                "Failed to configure Member {name} from annotation {ann:?}"
+            ));
+            new_err.set_cause(py, Some(err));
+            new_err
+        })?;
 
         // Set the member name
         builder.name = Some(name.extract()?);

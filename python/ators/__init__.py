@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------------------
-# Copyright (c) 2025, Matthieu C. Dartiailh
+# Copyright (c) 2025, Ators contributors, see git history for details
 #
 # Distributed under the terms of the Modified BSD License.
 #
@@ -7,7 +7,13 @@
 # --------------------------------------------------------------------------------------
 """"""
 
-from ._ators import AtorsBase as _Base, init_ators as _init_ators
+from ._ators import (
+    AtorsBase as _Base,
+    init_ators as _init_ators,
+    freeze,
+    is_frozen,
+    member,
+)
 from ._meta import AtorsMeta as _Meta
 
 
@@ -46,3 +52,6 @@ class Ators(_Base, metaclass=_Meta):
 
         """
         return ()
+
+
+__all__ = ["Ators", "freeze", "is_frozen", "member"]

@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------------
-| Copyright (c) 2025, Matthieu C. Dartiailh
+| Copyright (c) 2025, Ators contributors, see git history for details
 |
 | Distributed under the terms of the Modified BSD License.
 |
@@ -54,6 +54,9 @@ impl DefaultBehavior {
             Self::CallMemberObject { callable } => {
                 callable.bind(member.py()).call1((member, object))
             }
+            // XXX improve error message since people writing the method may not
+            // realize the required signature and we cannot check it at
+            // behavior definition time
             Self::ObjectMethod { meth_name } => object.call_method1(meth_name, (member,)),
         }
     }
