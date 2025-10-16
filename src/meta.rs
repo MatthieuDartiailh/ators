@@ -16,6 +16,9 @@ use pyo3::{
     },
 };
 
+use crate::member::{
+    DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
+};
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
     member::MemberBuilder,
@@ -24,12 +27,6 @@ use crate::{
 use crate::{
     core::{ATORS_MEMBERS, AtorsBase},
     member::PreGetattrBehavior,
-};
-use crate::{
-    member::{
-        DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
-    },
-    validators::CoercionMode,
 };
 
 static ATORS_SPECIFIC_MEMBERS: &str = "__ators_specific_members__";
@@ -326,14 +323,22 @@ pub fn create_ators_subclass<'py>(
         {
             return Err(make_unknown_method_error(k, "default", meth_name, &methods));
         }
-        if let Some(meth_name) = match &mb.coercer {
-            Some(CoercionMode::Coerce(Coercer::ObjectMethod { meth_name })) => Some(meth_name),
-            Some(CoercionMode::Init(Coercer::ObjectMethod { meth_name })) => Some(meth_name),
-            _ => None,
-        } && !methods.contains(meth_name.bind(py))?
+        if let Some(Coercer::ObjectMethod { meth_name }) = &mb.coerce
+            && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(k, "coerce", meth_name, &methods));
         }
+        if let Some(Coercer::ObjectMethod { meth_name }) = &mb.coerce
+            && !methods.contains(meth_name.bind(py))?
+        {
+            return Err(make_unknown_method_error(
+                k,
+                "coerce_init",
+                meth_name,
+                &methods,
+            ));
+        }
+
         for vv in mb.value_validators.as_ref().unwrap_or(&Vec::new()) {
             if let ValueValidator::ObjectMethod { meth_name } = vv
                 && !methods.contains(meth_name.bind(py))?

@@ -23,7 +23,6 @@ mod delattr;
 mod getattr;
 mod pickle;
 mod setattr;
-use crate::validators::CoercionMode;
 pub use default::DefaultBehavior;
 pub use delattr::DelattrBehavior;
 pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
@@ -90,16 +89,15 @@ pub fn member_coerce_init<'py>(
     value: Bound<'py, PyAny>,
 ) -> Option<PyResult<Bound<'py, PyAny>>> {
     let mb = member.borrow();
-    if let CoercionMode::Init(c) = &mb.validator.coercer {
-        Some(c.coerce_value(
+    mb.validator.init_coercer.as_ref().map(|c| {
+        c.coerce_value(
+            true,
             &mb.validator.type_validator,
             Some(member),
             Some(object),
             value,
-        ))
-    } else {
-        None
-    }
+        )
+    })
 }
 
 #[pymethods]
@@ -130,9 +128,12 @@ impl Member {
                     None => {
                         // Attempt to create a default value
                         let default = m_ref.default.default(&member, object)?;
-                        let new = m_ref
-                            .validator
-                            .validate(Some(&member), Some(object), default)?;
+                        let new = m_ref.validator.validate(
+                            false,
+                            Some(&member),
+                            Some(object),
+                            default,
+                        )?;
                         object
                             .borrow_mut()
                             .set_slot(m_ref.slot_index as usize, new.clone());
@@ -175,7 +176,7 @@ impl Member {
             // Validate the new value
             let new = m_ref
                 .validator
-                .validate(Some(&member), Some(object), value)?;
+                .validate(false, Some(&member), Some(object), value)?;
             object
                 .borrow_mut()
                 .set_slot(m_ref.slot_index as usize, new.clone());
@@ -216,7 +217,8 @@ pub struct MemberBuilder {
     pub default: Option<DefaultBehavior>,
     pub type_validator: Option<TypeValidator>,
     pub value_validators: Option<Vec<ValueValidator>>,
-    pub coercer: Option<CoercionMode>,
+    pub coerce: Option<Coercer>,
+    pub coerce_init: Option<Coercer>,
     pub metadata: Option<HashMap<String, Py<PyAny>>>,
     inherit: bool,
 }
@@ -281,18 +283,10 @@ impl MemberBuilder {
         let py = self_.py();
         let mself = &mut *self_;
         if let Some(c) = coercer {
-            match c.cast::<Coercer>() {
-                Ok(b) => mself.coercer = Some(CoercionMode::Coerce(b.as_any().extract()?)),
-                Err(_) => {
-                    let func = c.cast_exact::<PyFunction>()?;
-                    mself.coercer = Some(CoercionMode::Coerce(Coercer::ObjectMethod {
-                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                    }));
-                    return check_is_decorated(py, "coerce", c);
-                }
-            }
+            let bc = c.cast::<Coercer>()?;
+            mself.coerce = Some(bc.as_any().extract()?);
         } else {
-            mself.coercer = Some(CoercionMode::No());
+            mself.coerce = None;
         };
         self_.into_bound_py_any(py)
     }
@@ -305,18 +299,10 @@ impl MemberBuilder {
         let py = self_.py();
         let mself = &mut *self_;
         if let Some(c) = coercer {
-            match c.cast::<Coercer>() {
-                Ok(b) => mself.coercer = Some(CoercionMode::Init(b.as_any().extract()?)),
-                Err(_) => {
-                    let func = c.cast_exact::<PyFunction>()?;
-                    mself.coercer = Some(CoercionMode::Init(Coercer::ObjectMethod {
-                        meth_name: func.getattr(intern!(py, "__name__"))?.cast_into()?.unbind(),
-                    }));
-                    return check_is_decorated(py, "coerce_init", c);
-                }
-            }
+            let bc = c.cast::<Coercer>()?;
+            mself.coerce_init = Some(bc.as_any().extract()?);
         } else {
-            mself.coercer = Some(CoercionMode::No());
+            mself.coerce_init = None;
         };
         self_.into_bound_py_any(py)
     }
@@ -440,8 +426,8 @@ impl MemberBuilder {
         if self.value_validators.is_none() {
             self.value_validators = Some(member.validator.value_validators.to_vec());
         }
-        if self.coercer.is_none() {
-            self.coercer = Some(member.validator.coercer.clone());
+        if self.coerce.is_none() {
+            self.coerce = member.validator.coercer.clone();
         }
         if self.metadata.is_none() {
             self.metadata = clone_metadata(&member.metadata);
@@ -469,7 +455,8 @@ impl MemberBuilder {
             validator: Validator {
                 type_validator: tv,
                 value_validators: self.value_validators.unwrap_or_default().into_boxed_slice(),
-                coercer: self.coercer.unwrap_or(CoercionMode::No()),
+                coercer: self.coerce,
+                init_coercer: self.coerce_init,
             },
             metadata: self.metadata,
         })
@@ -489,7 +476,8 @@ impl Clone for MemberBuilder {
             default: self.default.clone(),
             type_validator: self.type_validator.clone(),
             value_validators: self.value_validators.clone(),
-            coercer: self.coercer.clone(),
+            coerce: self.coerce.clone(),
+            coerce_init: self.coerce_init.clone(),
             metadata: clone_metadata(&self.metadata),
             inherit: self.inherit,
         }

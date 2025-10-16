@@ -19,14 +19,6 @@ pub use types::TypeValidator;
 mod values;
 pub use values::ValueValidator;
 
-#[pyclass(frozen)]
-#[derive(Debug, Clone)]
-pub enum CoercionMode {
-    No(),
-    Init(Coercer),
-    Coerce(Coercer),
-}
-
 // NOTE There is no sanity check that value validators make sense in combination
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
@@ -35,7 +27,8 @@ pub enum CoercionMode {
 pub struct Validator {
     pub type_validator: TypeValidator,
     pub value_validators: Box<[ValueValidator]>,
-    pub coercer: CoercionMode,
+    pub coercer: Option<Coercer>,
+    pub init_coercer: Option<Coercer>,
 }
 
 #[pymethods]
@@ -44,7 +37,8 @@ impl Validator {
     pub fn new(
         type_validator: TypeValidator,
         value_validators: Option<Vec<ValueValidator>>,
-        coercer: CoercionMode,
+        coercer: Option<Coercer>,
+        init_coercer: Option<Coercer>,
     ) -> Self {
         // XXX implement coherency checks (need a helper function for nested cases)
         // May do that in class creation
@@ -54,6 +48,7 @@ impl Validator {
                 .map(|v| v.into_boxed_slice())
                 .unwrap_or_else(|| Box::new([])),
             coercer,
+            init_coercer,
         }
     }
 
@@ -64,6 +59,7 @@ impl Validator {
                 .concat()
                 .into_boxed_slice(),
             coercer: self.coercer.clone(),
+            init_coercer: self.init_coercer.clone(),
         })
     }
 
@@ -78,7 +74,12 @@ impl Validator {
     }
 
     #[getter]
-    fn get_coercer(&self) -> CoercionMode {
+    fn get_coercer(&self) -> Option<Coercer> {
+        self.coercer.clone()
+    }
+
+    #[getter]
+    fn get_init_coercer(&self) -> Option<Coercer> {
         self.coercer.clone()
     }
 }
@@ -87,6 +88,7 @@ impl Validator {
     ///
     pub fn validate<'py>(
         &self,
+        is_init: bool,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
@@ -94,8 +96,10 @@ impl Validator {
         match self.strict_validate(member, object, value.clone()) {
             Ok(v) => Ok(v),
             Err(err) => {
-                if let CoercionMode::Coerce(c) = &self.coercer {
-                    c.coerce_value(&self.type_validator, member, object, value)
+                if is_init && let Some(c) = &self.init_coercer {
+                    c.coerce_value(is_init, &self.type_validator, member, object, value)
+                } else if !is_init && let Some(c) = &self.coercer {
+                    c.coerce_value(is_init, &self.type_validator, member, object, value)
                 } else {
                     Err(err)
                 }
@@ -115,13 +119,15 @@ impl Validator {
     ///
     pub fn coerce_value<'py>(
         &self,
+        is_init: bool,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if let CoercionMode::Coerce(c) = &self.coercer {
-            let current = c.coerce_value(&self.type_validator, member, object, value)?;
-            Ok(current)
+        if is_init && let Some(c) = &self.init_coercer {
+            c.coerce_value(is_init, &self.type_validator, member, object, value)
+        } else if !is_init && let Some(c) = &self.coercer {
+            c.coerce_value(is_init, &self.type_validator, member, object, value)
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err(
                 "No coercer defined for {:?}",
@@ -150,6 +156,7 @@ impl Clone for Validator {
             type_validator: self.type_validator.clone(),
             value_validators: self.value_validators.iter().cloned().collect(),
             coercer: self.coercer.clone(),
+            init_coercer: self.init_coercer.clone(),
         }
     }
 }
@@ -159,7 +166,8 @@ impl Default for Validator {
         Validator {
             type_validator: TypeValidator::Any {},
             value_validators: Box::new([]),
-            coercer: CoercionMode::No(),
+            coercer: None,
+            init_coercer: None,
         }
     }
 }

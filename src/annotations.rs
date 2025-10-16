@@ -8,13 +8,11 @@
 ///
 use pyo3::{
     Bound, PyAny, PyResult, intern,
-    types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString, PyType,
-    },
+    types::{PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString},
 };
 use std::collections::HashMap;
 
-use crate::validators::{CoercionMode, Validator, ValueValidator};
+use crate::validators::{Validator, ValueValidator};
 use crate::{
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
     validators::TypeValidator,
@@ -107,35 +105,15 @@ fn build_validator_from_annotation<'py>(
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok(Validator::default())
     } else if ann.is(py.get_type::<PyBool>()) {
-        Ok(Validator::new(
-            TypeValidator::Bool {},
-            None,
-            CoercionMode::No(),
-        ))
+        Ok(Validator::new(TypeValidator::Bool {}, None, None, None))
     } else if ann.is(py.get_type::<PyInt>()) {
-        Ok(Validator::new(
-            TypeValidator::Int {},
-            None,
-            CoercionMode::No(),
-        ))
+        Ok(Validator::new(TypeValidator::Int {}, None, None, None))
     } else if ann.is(py.get_type::<PyFloat>()) {
-        Ok(Validator::new(
-            TypeValidator::Float {},
-            None,
-            CoercionMode::No(),
-        ))
+        Ok(Validator::new(TypeValidator::Float {}, None, None, None))
     } else if ann.is(py.get_type::<PyBytes>()) {
-        Ok(Validator::new(
-            TypeValidator::Bytes {},
-            None,
-            CoercionMode::No(),
-        ))
+        Ok(Validator::new(TypeValidator::Bytes {}, None, None, None))
     } else if ann.is(py.get_type::<PyString>()) {
-        Ok(Validator::new(
-            TypeValidator::Str {},
-            None,
-            CoercionMode::No(),
-        ))
+        Ok(Validator::new(TypeValidator::Str {}, None, None, None))
     } else {
         //f"Failed to extract types from {kind}. "
         // f"The extraction yielded {t} which is not a type. "
@@ -147,7 +125,8 @@ fn build_validator_from_annotation<'py>(
                 type_: ann.clone().cast_into()?.unbind(),
             },
             None,
-            CoercionMode::No(),
+            None,
+            None,
         ))
     }
 }

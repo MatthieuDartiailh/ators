@@ -20,9 +20,9 @@ pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
     #[pyo3(constructor = (callable))]
-    CallObject { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
+    CallObjectInit { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
     #[pyo3(constructor = (callable))]
-    CallMemberObjectValue { callable: Py<PyAny> },
+    CallMemberObjectValueInit { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -31,6 +31,7 @@ impl Coercer {
     ///
     pub(crate) fn coerce_value<'py>(
         &self,
+        is_init_coercion: bool,
         type_validator: &TypeValidator,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
@@ -45,11 +46,13 @@ impl Coercer {
                 TypeValidator::Float {} => PyFloat::type_object(py).call1((value,)),
                 TypeValidator::Str {} => PyString::type_object(py).call1((value,)),
                 TypeValidator::Bytes {} => PyBytes::type_object(py).call1((value,)),
+                // XXX we should attempt to coercer tuple element
+                // forward is init coercion value to further validators
                 TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
-            Self::CallObject { callable } => callable.bind(value.py()).call1((value,)),
-            Self::CallMemberObjectValue { callable } => callable
+            Self::CallObjectInit { callable } => callable.bind(value.py()).call1((value,)),
+            Self::CallMemberObjectValueInit { callable } => callable
                 .bind(value.py())
                 .call1(
                 (
@@ -86,10 +89,10 @@ impl Clone for Coercer {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::TypeInferred {} => Self::TypeInferred {},
-            Self::CallObject { callable } => Self::CallObject {
+            Self::CallObjectInit { callable } => Self::CallObjectInit {
                 callable: callable.clone_ref(py),
             },
-            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+            Self::CallMemberObjectValueInit { callable } => Self::CallMemberObjectValueInit {
                 callable: callable.clone_ref(py),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
