@@ -20,7 +20,7 @@ pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
     #[pyo3(constructor = (callable))]
-    CallObjectInit { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
+    CallValueInit { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
     #[pyo3(constructor = (callable))]
     CallMemberObjectValueInit { callable: Py<PyAny> },
     #[pyo3(constructor = (meth_name))]
@@ -51,7 +51,7 @@ impl Coercer {
                 TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
-            Self::CallObjectInit { callable } => callable.bind(value.py()).call1((value,)),
+            Self::CallValueInit { callable } => callable.bind(value.py()).call1((value, is_init_coercion)),
             Self::CallMemberObjectValueInit { callable } => callable
                 .bind(value.py())
                 .call1(
@@ -65,6 +65,7 @@ impl Coercer {
                             )
                         )?,
                         value,
+                        is_init_coercion,
                     ),
                 ),
             Self::ObjectMethod { meth_name } => object
@@ -79,6 +80,7 @@ impl Coercer {
                                 "Cannot use ObjectMethod coercion when validator is not linked to a member."
                             )
                         )?,
+                        is_init_coercion
                     ),
                 ),
         }
@@ -89,7 +91,7 @@ impl Clone for Coercer {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::TypeInferred {} => Self::TypeInferred {},
-            Self::CallObjectInit { callable } => Self::CallObjectInit {
+            Self::CallValueInit { callable } => Self::CallValueInit {
                 callable: callable.clone_ref(py),
             },
             Self::CallMemberObjectValueInit { callable } => Self::CallMemberObjectValueInit {
