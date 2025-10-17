@@ -14,7 +14,7 @@ use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
     sync::with_critical_section2,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyFunction, PyList, PyListMethods, PyString},
+    types::{PyAnyMethods, PyDict, PyDictMethods},
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -204,6 +204,22 @@ impl Member {
     }
 }
 
+macro_rules! validate_call_behavior {
+    ($behavior:ident, $py:expr, $callable:expr, $n:expr) => {{
+        let sig = $py
+            .import(intern!($py, "inspect"))?
+            .getattr(intern!($py, "signature"))?;
+        if !$callable.bind($py).is_callable() || sig.call1(($callable,))?.len()? != $n {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{}.Call expect a callable taking {} got {}.",
+                stringify!($behavior),
+                $callable,
+                $n
+            )));
+        }
+    }};
+}
+
 #[pyclass(name = "member")]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
@@ -261,10 +277,19 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-
         match default_behavior.cast::<DefaultBehavior>() {
-            // XXX add extra validation for Call and CallMemberObject method mode
-            Ok(b) => mself.default = Some(b.as_any().extract()?),
+            Ok(b) => {
+                match b.get() {
+                    DefaultBehavior::Call { callable } => {
+                        validate_call_behavior!(DefaultBehavior, py, callable, 0)
+                    }
+                    DefaultBehavior::CallMemberObject { callable } => {
+                        validate_call_behavior!(DefaultBehavior, py, callable, 2)
+                    }
+                    _ => (),
+                }
+                mself.default = Some(b.as_any().extract()?)
+            }
             Err(_) => {
                 mself.default = Some(DefaultBehavior::Static {
                     value: default_behavior.unbind(),
@@ -284,6 +309,15 @@ impl MemberBuilder {
         let mself = &mut *self_;
         if let Some(c) = coercer {
             let bc = c.cast::<Coercer>()?;
+            match bc.get() {
+                Coercer::CallValueInit { callable } => {
+                    validate_call_behavior!(Coercer, py, callable, 2)
+                }
+                Coercer::CallMemberObjectValueInit { callable } => {
+                    validate_call_behavior!(Coercer, py, callable, 4)
+                }
+                _ => (),
+            }
             mself.coerce = Some(bc.as_any().extract()?);
         } else {
             mself.coerce = None;
@@ -300,6 +334,15 @@ impl MemberBuilder {
         let mself = &mut *self_;
         if let Some(c) = coercer {
             let bc = c.cast::<Coercer>()?;
+            match bc.get() {
+                Coercer::CallValueInit { callable } => {
+                    validate_call_behavior!(Coercer, py, callable, 2)
+                }
+                Coercer::CallMemberObjectValueInit { callable } => {
+                    validate_call_behavior!(Coercer, py, callable, 4)
+                }
+                _ => (),
+            }
             mself.coerce_init = Some(bc.as_any().extract()?);
         } else {
             mself.coerce_init = None;
@@ -314,12 +357,15 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        mself.pre_getattr = Some(
-            pre_getattr
-                .cast::<PreGetattrBehavior>()?
-                .as_any()
-                .extract()?,
-        );
+        match pre_getattr.cast::<PreGetattrBehavior>() {
+            Ok(b) => {
+                if let PreGetattrBehavior::CallMemberObject { callable } = b.get() {
+                    validate_call_behavior!(PreGetattrBehavior, py, callable, 2)
+                };
+                mself.pre_getattr = Some(b.as_any().extract()?)
+            }
+            Err(err) => return Err(err.into()),
+        }
         self_.into_bound_py_any(py)
     }
 
@@ -330,12 +376,15 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        mself.post_getattr = Some(
-            post_getattr
-                .cast::<PostGetattrBehavior>()?
-                .as_any()
-                .extract()?,
-        );
+        match post_getattr.cast::<PostGetattrBehavior>() {
+            Ok(b) => {
+                if let PostGetattrBehavior::CallMemberObjectValue { callable } = b.get() {
+                    validate_call_behavior!(PostGetattrBehavior, py, callable, 3)
+                };
+                mself.post_getattr = Some(b.as_any().extract()?)
+            }
+            Err(err) => return Err(err.into()),
+        }
         self_.into_bound_py_any(py)
     }
 
@@ -346,12 +395,15 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        mself.pre_setattr = Some(
-            pre_setattr
-                .cast::<PreSetattrBehavior>()?
-                .as_any()
-                .extract()?,
-        );
+        match pre_setattr.cast::<PreSetattrBehavior>() {
+            Ok(b) => {
+                if let PreSetattrBehavior::CallMemberObject { callable } = b.get() {
+                    validate_call_behavior!(PreSetattrBehavior, py, callable, 2)
+                };
+                mself.pre_setattr = Some(b.as_any().extract()?)
+            }
+            Err(err) => return Err(err.into()),
+        }
         self_.into_bound_py_any(py)
     }
 
@@ -372,12 +424,15 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        mself.post_setattr = Some(
-            post_setattr
-                .cast::<PostSetattrBehavior>()?
-                .as_any()
-                .extract()?,
-        );
+        match post_setattr.cast::<PostSetattrBehavior>() {
+            Ok(b) => {
+                if let PostSetattrBehavior::CallMemberObjectOldNew { callable } = b.get() {
+                    validate_call_behavior!(PostSetattrBehavior, py, callable, 4)
+                };
+                mself.post_setattr = Some(b.as_any().extract()?)
+            }
+            Err(err) => return Err(err.into()),
+        }
         self_.into_bound_py_any(py)
     }
 
