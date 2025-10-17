@@ -14,7 +14,7 @@ use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
     sync::with_critical_section2,
-    types::{PyAnyMethods, PyDict, PyDictMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -237,6 +237,7 @@ pub struct MemberBuilder {
     pub coerce_init: Option<Coercer>,
     pub metadata: Option<HashMap<String, Py<PyAny>>>,
     inherit: bool,
+    multiple_settings: HashMap<String, u8>,
 }
 
 #[pymethods]
@@ -277,6 +278,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("default".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         match default_behavior.cast::<DefaultBehavior>() {
             Ok(b) => {
                 match b.get() {
@@ -307,6 +315,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("coerce".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         if let Some(c) = coercer {
             let bc = c.cast::<Coercer>()?;
             match bc.get() {
@@ -332,6 +347,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("coerce_init".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         if let Some(c) = coercer {
             let bc = c.cast::<Coercer>()?;
             match bc.get() {
@@ -357,6 +379,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("preget".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         match pre_getattr.cast::<PreGetattrBehavior>() {
             Ok(b) => {
                 if let PreGetattrBehavior::CallMemberObject { callable } = b.get() {
@@ -376,6 +405,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("postget".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         match post_getattr.cast::<PostGetattrBehavior>() {
             Ok(b) => {
                 if let PostGetattrBehavior::CallMemberObjectValue { callable } = b.get() {
@@ -395,6 +431,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("preset".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         match pre_setattr.cast::<PreSetattrBehavior>() {
             Ok(b) => {
                 if let PreSetattrBehavior::CallMemberObject { callable } = b.get() {
@@ -424,6 +467,13 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if mself.default.is_some() {
+            mself
+                .multiple_settings
+                .entry("postset".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
         match post_setattr.cast::<PostSetattrBehavior>() {
             Ok(b) => {
                 if let PostSetattrBehavior::CallMemberObjectOldNew { callable } = b.get() {
@@ -443,6 +493,13 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
+            if mself.default.is_some() {
+                mself
+                    .multiple_settings
+                    .entry("del".into())
+                    .and_modify(|e| *e += 1)
+                    .or_insert(2);
+            }
             mself.delattr = Some(delattr_behavior.as_any().extract()?);
         }
         Ok(self_)
@@ -490,14 +547,30 @@ impl MemberBuilder {
     }
 
     ///
-    pub fn build(self) -> PyResult<Member> {
-        let Some(name) = self.name else { todo!() };
+    pub fn build<'py>(self, type_name: &Bound<'py, PyString>) -> PyResult<Member> {
+        let Some(name) = self.name else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member belonging to {type_name} without an assigned name."
+            )));
+        };
         let Some(index) = self.slot_index else {
-            todo!()
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without an assigned slot."
+            )));
         };
-        let Some(tv) = self.type_validator else {
-            todo!()
-        };
+        let tv = self.type_validator.unwrap_or(TypeValidator::Any {});
+        if !self.multiple_settings.is_empty() {
+            let py = type_name.py();
+            let warnings_mod = py.import(intern!(py, "warnings"))?;
+            warnings_mod.getattr(intern!(py, "warn"))?.call1((
+                pyo3::exceptions::PyUserWarning::new_err(format!(
+                    "The followng behaviors of member {} of {type_name} were \
+                        set multiple times: {:#?}",
+                    &name, &self.multiple_settings
+                )),
+            ))?;
+        }
+
         Ok(Member {
             name,
             slot_index: index,
@@ -535,6 +608,7 @@ impl Clone for MemberBuilder {
             coerce_init: self.coerce_init.clone(),
             metadata: clone_metadata(&self.metadata),
             inherit: self.inherit,
+            multiple_settings: self.multiple_settings.clone(),
         }
     }
 }

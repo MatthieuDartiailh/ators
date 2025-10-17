@@ -356,9 +356,11 @@ pub fn create_ators_subclass<'py>(
     dct.update(
         member_builders
             .into_iter()
-            // SAFETY The above logic guarantee the name and slot_index are set so
-            // unwrapping on build is safe
-            .map(|(k, v)| (k, v.clone().build().unwrap()))
+            // SAFETY The above logic guarantee the name and slot_index are set
+            // but accessing the warning module and calling it might fail (even
+            // though it should not).
+            .map(|(k, v)| v.clone().build(&name).map(|v| (k, v)))
+            .collect::<PyResult<Vec<(String, Member)>>>()?
             .into_py_dict(py)?
             .as_mapping(),
     )?;

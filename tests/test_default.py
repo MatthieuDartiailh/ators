@@ -102,3 +102,4 @@ def test_method_default():
 
 # XXX test bad usage of default decorator
 # XXX test bad signature of function used in call and callmemberobject
+# XXX test multiple setting of default
