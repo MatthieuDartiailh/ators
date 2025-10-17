@@ -17,7 +17,7 @@ from ators._ators import (
     PreSetAttrBehavior as PreSetAttr,
     PostSetAttr as PostSetAttr,
 )
-from .validators import ValueValidator
+from .validators import ValueValidator, Coercer
 
 
 def default(member_builder: member):
@@ -85,30 +85,30 @@ def postset(member_builder: member):
     return decorator
 
 
-# def coerce(member_builder: member):
-#     """"""
+def coerce(member_builder: member):
+    """"""
 
-#     def decorator(func):
-#         context = inspect.stack(2)[1].code_context
-#         if not any("@" in line for line in context):
-#             raise RuntimeError("'coerce' can only be used as a decorator.")
-#         member_builder.default(PostSetAttr.ObjectMethod(func.__name__))
-#         return func
+    def decorator(func):
+        context = inspect.stack(2)[1].code_context
+        if not any("@" in line for line in context):
+            raise RuntimeError("'coerce' can only be used as a decorator.")
+        member_builder.default(Coercer.ObjectMethod(func.__name__))
+        return func
 
-#     return decorator
+    return decorator
 
 
-# def coerce_init(member_builder: member):
-#     """"""
+def coerce_init(member_builder: member):
+    """"""
 
-#     def decorator(func):
-#         context = inspect.stack(2)[1].code_context
-#         if not any("@" in line for line in context):
-#             raise RuntimeError("'postset' can only be used as a decorator.")
-#         member_builder.default(PostSetAttr.ObjectMethod(func.__name__))
-#         return func
+    def decorator(func):
+        context = inspect.stack(2)[1].code_context
+        if not any("@" in line for line in context):
+            raise RuntimeError("'coerce_init' can only be used as a decorator.")
+        member_builder.default(Coercer.ObjectMethod(func.__name__))
+        return func
 
-#     return decorator
+    return decorator
 
 
 def append_value_validator(member_builder: member):
