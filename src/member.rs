@@ -372,6 +372,28 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
+    pub fn append_value_validator<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        value_validator: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let py = self_.py();
+        let mself = &mut *self_;
+        match value_validator.cast::<ValueValidator>() {
+            Ok(b) => {
+                if let ValueValidator::CallMemberObjectValue { callable } = b.get() {
+                    validate_call_behavior!(ValueValidator, py, callable, 3)
+                };
+                if let Some(vv) = &mut mself.value_validators {
+                    vv.push(b.as_any().extract()?);
+                } else {
+                    mself.value_validators.replace(vec![b.as_any().extract()?]);
+                }
+            }
+            Err(err) => return Err(err.into()),
+        };
+        Ok(self_)
+    }
+
     ///
     pub fn preget<'py>(
         mut self_: PyRefMut<'py, Self>,
