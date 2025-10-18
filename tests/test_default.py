@@ -32,6 +32,12 @@ def test_static_default():
     a = A()
     assert a.a == 2
 
+    class B(Ators):
+        a: int = member().default(2)
+
+    a = B()
+    assert a.a == 2
+
 
 def test_call_default():
     i = 0
