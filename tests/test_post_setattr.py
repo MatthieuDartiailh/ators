@@ -10,25 +10,27 @@
 import pytest
 
 from ators import Ators, member, Member
-from ators.behaviors import PostGetAttr, postget
+from ators.behaviors import PostSetAttr, postset
 
 
-def test_call_member_object_value_postget():
+def test_call_member_object_old_new_postset():
     i = 0
     m = None
     obj = None
-    value = None
+    old = None
+    new = None
 
-    def post_get(member, object, v):
-        nonlocal i, m, obj, value
+    def post_set(member, object, o, n):
+        nonlocal i, m, obj, old, new
         i += 1
         m = member
         obj = object
-        value = v
+        old = o
+        new = n
         return 5
 
     class A(Ators):
-        a: int = member().postget(PostGetAttr.CallMemberObjectValue(post_get))
+        a: int = member().postset(PostSetAttr.CallMemberObjectOldNew(post_set))
 
     a = A()
     a.a = 2
@@ -36,24 +38,33 @@ def test_call_member_object_value_postget():
     assert i == 1
     assert isinstance(m, Member)
     assert isinstance(obj, A)
-    assert value == 2
-    assert a.a == 2
+    assert old is None
+    assert new == 2
+
+    a.a = 5
+    assert a.a == 5
     assert i == 2
+    assert isinstance(m, Member)
+    assert isinstance(obj, A)
+    assert old == 2
+    assert new == 5
 
 
-def test_method_postget():
+def test_method_postset():
     i = 0
     me = None
-    value = None
+    old = None
+    new = None
 
     class A(Ators):
         a: int = member()
 
-        @postget(a)
-        def _postget_a(self, m, v):
-            nonlocal i, me, value
+        @postset(a)
+        def _postset_a(self, m, o, n):
+            nonlocal i, me, old, new
             me = m
-            value = v
+            old = o
+            new = n
             i += 1
             return 8
 
@@ -61,79 +72,83 @@ def test_method_postget():
     a.a = 2
     assert a.a == 2
     assert isinstance(me, Member)
-    assert value == 2
+    assert old is None
+    assert new == 2
     assert i == 1
-    assert a.a == 2
+
+    a.a = 4
+    assert a.a == 4
+    assert isinstance(me, Member)
+    assert old == 2
+    assert new == 4
     assert i == 2
 
     class B(A):
-        def _postget_a(self, m, v):
+        def _postset_a(self, m, o, n):
             nonlocal i
             i += 2
             return 9
 
     b = B()
     b.a = 5
-    assert b.a == 5
     assert i == 4
 
 
-def test_inherited_postget_behavior():
+def test_inherited_postset_behavior():
     i = 0
 
-    def post_get(member, object, v):
+    def post_set(member, object, o, n):
         nonlocal i
         i += 1
 
     class A(Ators):
-        a: int = member().postget(PostGetAttr.CallMemberObjectValue(post_get))
+        a: int = member().postset(PostSetAttr.CallMemberObjectOldNew(post_set))
 
     class B(A):
         a = member().inherit()
 
     b = B()
     b.a = 5
-    assert b.a == 5
     assert i == 1
 
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PostGetAttr.CallMemberObjectValue, lambda: 1, 3, 0)],
+    [(PostSetAttr.CallMemberObjectOldNew, lambda: 1, 4, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
 
         class A(Ators):
-            a: int = member().postget(behavior(callable))
+            a: int = member().postset(behavior(callable))
 
     assert f"callable taking {expected}" in e.exconly()
     assert f"which takes {got}" in e.exconly()
 
 
-def test_postget_not_as_decorator():
+def test_postset_not_as_decorator():
     with pytest.raises(RuntimeError) as e:
 
         class A(Ators):
             m = member()
 
-            def f(self, m, v):
+            def f(self, m, o, n):
                 pass
 
-            postget(m)(f)
+            postset(m)(f)
 
-    assert "'postget' can only be used as a decorator" in e.exconly()
+    assert "'postset' can only be used as a decorator" in e.exconly()
 
 
-def test_postget_outside_class_body():
+def test_postset_outside_class_body():
     with pytest.raises(RuntimeError) as e:
         m = member()
 
-        @postget(m)
-        def f(self, m, v):
+        @postset(m)
+        def f(self, m, o, s):
             pass
 
-    assert "'postget' can only be used inside a class body" in e.exconly()
+    assert "'postset' can only be used inside a class body" in e.exconly()
 
 
 def test_bad_signature_of_method():
@@ -142,11 +157,11 @@ def test_bad_signature_of_method():
         class A(Ators):
             m = member()
 
-            @postget(m)
+            @postset(m)
             def f(self):
                 pass
 
-    assert "Method signature for 'postget'" in e.exconly()
+    assert "Method signature for 'postset'" in e.exconly()
 
 
 def test_warn_on_multiple_setting_of_postget():
@@ -155,6 +170,6 @@ def test_warn_on_multiple_setting_of_postget():
         class A(Ators):
             a: int = (
                 member()
-                .postget(PostGetAttr.CallMemberObjectValue(lambda m, o, v: 1))
-                .postget(PostGetAttr.NoOp())
+                .postset(PostSetAttr.CallMemberObjectOldNew(lambda m, o, ol, n: 1))
+                .postset(PostSetAttr.NoOp())
             )
