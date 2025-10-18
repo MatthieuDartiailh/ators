@@ -8,6 +8,7 @@
 """"""
 
 import inspect
+from types import FunctionType
 
 from ators._ators import (
     member,
@@ -24,13 +25,34 @@ from .validators import ValueValidator, Coercer
 # to exact problematic behavior.
 
 
+def validate_use_and_sig(
+    stack: list[inspect.FrameInfo],
+    behavior: str,
+    func: FunctionType,
+    expected_sig: tuple[str],
+) -> None:
+    decoration_context = stack[1].code_context
+    if not any("@" in line for line in decoration_context):
+        raise RuntimeError(f"'{behavior}' can only be used as a decorator.")
+
+    class_context = stack[2].code_context
+    if not any("class" in line for line in class_context):
+        raise RuntimeError(f"'{behavior}' can only be used inside a class body.")
+
+    sig = inspect.signature(func)
+    if len(sig.parameters) != len(expected_sig):
+        raise TypeError(
+            f"Method signature for '{behavior}' should be ({','.join(expected_sig)}),"
+            f" got {sig}"
+        )
+
+
 def default(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'default' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "default", func, ("self", "member"))
         member_builder.default(Default.ObjectMethod(func.__name__))
         return func
 
@@ -41,9 +63,8 @@ def preget(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'preget' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "preget", func, ("self", "member"))
         member_builder.preget(PreGetAttr.ObjectMethod(func.__name__))
         return func
 
@@ -54,9 +75,8 @@ def postget(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'postget' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "postget", func, ("self", "member", "value"))
         member_builder.postget(PostGetAttr.ObjectMethod(func.__name__))
         return func
 
@@ -67,9 +87,8 @@ def preset(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'preset' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "preset", func, ("self", "member"))
         member_builder.preset(PreSetAttr.ObjectMethod(func.__name__))
         return func
 
@@ -80,9 +99,8 @@ def postset(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'postset' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "postset", func, ("self", "member", "old", "new"))
         member_builder.postset(PostSetAttr.ObjectMethod(func.__name__))
         return func
 
@@ -93,9 +111,8 @@ def coerce(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'coerce' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "coerce", func, ("self", "member", "value"))
         member_builder.default(Coercer.ObjectMethod(func.__name__))
         return func
 
@@ -106,9 +123,8 @@ def coerce_init(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError("'coerce_init' can only be used as a decorator.")
+        st = inspect.stack(1)
+        validate_use_and_sig(st, "coerce_init", func, ("self", "member", "value"))
         member_builder.default(Coercer.ObjectMethod(func.__name__))
         return func
 
@@ -119,11 +135,10 @@ def append_value_validator(member_builder: member):
     """"""
 
     def decorator(func):
-        context = inspect.stack(1)[1].code_context
-        if not any("@" in line for line in context):
-            raise RuntimeError(
-                "'append_value_validator' can only be used as a decorator."
-            )
+        st = inspect.stack(1)
+        validate_use_and_sig(
+            st, "append_value_validator", func, ("self", "member", "value")
+        )
         member_builder.append_value_validator(
             ValueValidator.ObjectMethod(func.__name__)
         )
