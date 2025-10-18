@@ -100,6 +100,60 @@ def test_method_default():
     assert B().a == 9
 
 
-# XXX test bad usage of default decorator
-# XXX test bad signature of function used in call and callmemberobject
-# XXX test multiple setting of default
+@pytest.mark.parametrize(
+    "behavior, callable, expected, got",
+    [(Default.Call, lambda x: 1, 0, 1), (Default.CallMemberObject, lambda: 1, 2, 0)],
+)
+def test_bad_signature(behavior, callable, expected, got):
+    with pytest.raises(ValueError) as e:
+
+        class A(Ators):
+            a: int = member().default(behavior(callable))
+
+    assert f"callable taking {expected}" in e.exconly()
+    assert f"which takes {got}" in e.exconly()
+
+
+def test_default_not_as_decorator():
+    with pytest.raises(RuntimeError) as e:
+
+        class A(Ators):
+            m = member()
+
+            def f(self, m):
+                pass
+
+            default(m)(f)
+
+    assert "'default' can only be used as a decorator" in e.exconly()
+
+
+def test_default_outside_class_body():
+    with pytest.raises(RuntimeError) as e:
+        m = member()
+
+        @default(m)
+        def f(self, m):
+            pass
+
+    assert "'default' can only be used inside a class body" in e.exconly()
+
+
+def test_bad_signature_of_method():
+    with pytest.raises(TypeError) as e:
+
+        class A(Ators):
+            m = member()
+
+            @default(m)
+            def f(self):
+                pass
+
+    assert "Method signature for 'default'" in e.exconly()
+
+
+def test_warn_on_multiple_setting_of_default():
+    with pytest.warns(UserWarning):
+
+        class A(Ators):
+            a: int = member().default(Default.Call(lambda: 1)).default(1)

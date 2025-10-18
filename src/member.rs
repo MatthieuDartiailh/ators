@@ -331,7 +331,6 @@ impl MemberBuilder {
         mut self_: PyRefMut<'py, Self>,
         value_validator: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        let py = self_.py();
         let mself = &mut *self_;
         match value_validator.cast::<ValueValidator>() {
             Ok(b) => {

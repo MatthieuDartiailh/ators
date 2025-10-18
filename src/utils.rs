@@ -26,14 +26,17 @@ macro_rules! create_behavior_callable_checker {
                     let sig = py
                         .import(intern!(py, "inspect"))?
                         .getattr(intern!(py, "signature"))?;
-                    let ob_sig_len = sig.call1((ob,))?.len()?;
-                    if ob.is_callable() || ob_sig_len != $n {
+                    let ob_sig_len = sig
+                        .call1((ob,))?
+                        .getattr(intern!(py, "parameters"))?
+                        .len()?;
+                    if !ob.is_callable() || ob_sig_len != $n {
                         Err(pyo3::exceptions::PyValueError::new_err(format!(
                             "{}.{} expect a callable taking {} got {} which takes {}.",
                             stringify!($behavior),
                             stringify!($variant),
-                            ob,
                             $n,
+                            ob,
                             ob_sig_len
                         )))
                     } else {
