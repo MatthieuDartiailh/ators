@@ -95,6 +95,7 @@ impl FreeSlotIndexFactory {
             }
             self.next_index += 1;
         }
+        self.occupied.insert(self.next_index);
         Ok(self.next_index)
     }
 }
@@ -139,9 +140,6 @@ pub fn create_ators_subclass<'py>(
     let ators_base_ty = py.get_type::<AtorsBase>();
     let mro = mro_from_bases(&bases)?;
 
-    // Store whether or not the instance should be frozen after creation.
-    dct.set_item(intern!(py, ATORS_FROZEN), frozen)?;
-
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
     if enable_weakrefs && !mro.iter().any(|b| b.hasattr(slot_name).unwrap()) {
@@ -178,13 +176,21 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
-    // Walk the mro of the class, excluding itself, in reverse order collecting
-    // all of the members into a single dict. The reverse update preserves the
-    // mro of overridden members. We use only known specific members to also
+    // Walk the mro of the class, in reverse order collecting all of the
+    // members into a single dict. The reverse update preserves the mro of
+    // overridden members. We use only known specific members to also
     // preserve the mro in presence of multiple inheritance.
+    // Note that the custom computed mro does not contain ourself.
     let mut members = HashMap::new();
-    for base in mro.iter().skip(1).rev() {
+    for base in mro.iter().rev() {
+        // Ensure there is no frozen class among our ancestors if we are not frozen
         if base.is_subclass(&ators_base_ty)? && !base.is(&ators_base_ty) {
+            if !frozen && base.getattr(ATORS_FROZEN)?.extract()? {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "{name} is not frozen but inherit from {} which is.",
+                    base.name()?
+                )));
+            }
             let spm = base.getattr(ATORS_SPECIFIC_MEMBERS)?;
             members.extend(
                 base.getattr(ATORS_MEMBERS)?
@@ -238,11 +244,23 @@ pub fn create_ators_subclass<'py>(
     members.extend(conflict_free_members);
 
     // Collect member builder without type annotation
+    let mut unannotated_member_builder_ids = HashSet::new();
     for (k, v) in dct.iter() {
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(k)?;
         } else if let Ok(mb) = v.cast_into::<MemberBuilder>() {
-            members.insert(k.extract()?, mb.extract()?);
+            let mb_id: usize = mb.as_ptr().addr();
+            let mut member_to_add = {
+                if unannotated_member_builder_ids.contains(&mb_id) {
+                    mb.borrow().clone()
+                } else {
+                    unannotated_member_builder_ids.insert(mb_id);
+                    mb.extract()?
+                }
+            };
+            let name: String = k.extract()?;
+            member_to_add.name = Some(name.clone());
+            member_builders.insert(name, member_to_add);
         }
     }
 
@@ -353,17 +371,17 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
-    dct.update(
-        member_builders
-            .into_iter()
-            // SAFETY The above logic guarantee the name and slot_index are set
-            // but accessing the warning module and calling it might fail (even
-            // though it should not).
-            .map(|(k, v)| v.clone().build(&name).map(|v| (k, v)))
-            .collect::<PyResult<Vec<(String, Member)>>>()?
-            .into_py_dict(py)?
-            .as_mapping(),
-    )?;
+    let new_members = member_builders
+        .into_iter()
+        // SAFETY The above logic guarantee the name and slot_index are set
+        // but accessing the warning module and calling it might fail (even
+        // though it should not).
+        .map(|(k, v)| v.clone().build(&name).map(|v| (k, v)))
+        .collect::<PyResult<Vec<(String, Member)>>>()?
+        .into_py_dict(py)?;
+    let all_members = members.into_py_dict(py)?;
+    all_members.update(new_members.as_mapping())?;
+    dct.update(new_members.as_mapping())?;
 
     // Set the class level information as aggregated during the analysis
     dct.set_item(
@@ -371,8 +389,10 @@ pub fn create_ators_subclass<'py>(
         PyFrozenSet::new(py, specific_members)?,
     )?;
     dct.set_item(ATORS_METHODS, PyFrozenSet::new(py, methods)?)?;
-    dct.set_item(crate::core::ATORS_MEMBERS, members)?;
-    // XXX add freezing hint for metaclass
+    dct.set_item(crate::core::ATORS_MEMBERS, all_members)?;
+
+    // Store whether or not the instance should be frozen after creation.
+    dct.set_item(intern!(py, ATORS_FROZEN), frozen)?;
 
     // Since the only slot we use is __weakref__ we do not need copyreg
 

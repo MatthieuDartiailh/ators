@@ -48,7 +48,7 @@ def test_call_default():
         return 5
 
     class A(Ators):
-        a: int = member().default(Default.Call(make_default))
+        a = member().default(Default.Call(make_default))
 
     a = A()
     assert a.a == 5
@@ -83,19 +83,22 @@ def test_call_member_object_default():
 
 def test_method_default():
     i = 0
+    me = None
 
     class A(Ators):
         a: int = member()
 
         @default(a)
         def _default_a(self, m):
-            nonlocal i
+            nonlocal i, me
+            me = m
             i += 1
             return 8
 
     a = A()
     assert a.a == 8
     assert i == 1
+    assert isinstance(me, Member)
     assert a.a == 8
     assert i == 1
 
@@ -104,6 +107,17 @@ def test_method_default():
             return 9
 
     assert B().a == 9
+
+
+def test_inherited_default_behavior():
+    class A(Ators):
+        a: int = 2
+
+    class B(A):
+        a = member().inherit()
+
+    b = B()
+    assert b.a == 2
 
 
 @pytest.mark.parametrize(

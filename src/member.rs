@@ -288,7 +288,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.coerce.is_some() {
             mself
                 .multiple_settings
                 .entry("coerce".into())
@@ -311,7 +311,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.coerce_init.is_some() {
             mself
                 .multiple_settings
                 .entry("coerce_init".into())
@@ -352,7 +352,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.pre_getattr.is_some() {
             mself
                 .multiple_settings
                 .entry("preget".into())
@@ -373,7 +373,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.post_getattr.is_some() {
             mself
                 .multiple_settings
                 .entry("postget".into())
@@ -394,7 +394,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.pre_setattr.is_some() {
             mself
                 .multiple_settings
                 .entry("preset".into())
@@ -425,7 +425,7 @@ impl MemberBuilder {
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
-        if mself.default.is_some() {
+        if mself.post_setattr.is_some() {
             mself
                 .multiple_settings
                 .entry("postset".into())
@@ -446,10 +446,10 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
-            if mself.default.is_some() {
+            if mself.delattr.is_some() {
                 mself
                     .multiple_settings
-                    .entry("del".into())
+                    .entry("del_".into())
                     .and_modify(|e| *e += 1)
                     .or_insert(2);
             }

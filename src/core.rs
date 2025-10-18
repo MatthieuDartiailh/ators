@@ -18,7 +18,7 @@ use crate::member::{Member, member_coerce_init};
 // See for initializing allocated memory https://docs.rs/init_array/latest/src/init_array/stable.rs.html#71-95
 // But we need to understand how to make it Send and Sync first
 
-pub static ATORS_MEMBERS: &str = "__atom_members__";
+pub static ATORS_MEMBERS: &str = "__ators_members__";
 
 #[pyclass(subclass)]
 pub struct AtorsBase {
