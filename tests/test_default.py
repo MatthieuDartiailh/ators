@@ -11,7 +11,7 @@ import pytest
 
 from ators import Ators, member
 from ators.member import Member
-from ators.member.behaviors import Default, default
+from ators.behaviors import Default, default
 
 
 def test_no_default():

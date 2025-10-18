@@ -13,6 +13,7 @@ from ._ators import (
     freeze,
     is_frozen,
     member,
+    Member,
 )
 from ._meta import AtorsMeta as _Meta
 
@@ -54,4 +55,4 @@ class Ators(_Base, metaclass=_Meta):
         return ()
 
 
-__all__ = ["Ators", "freeze", "is_frozen", "member"]
+__all__ = ["Ators", "freeze", "is_frozen", "member", "Member"]
