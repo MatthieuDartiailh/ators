@@ -11,6 +11,7 @@ mod annotations;
 mod core;
 mod member;
 mod meta;
+mod utils;
 mod validators;
 
 /// A Python module implemented in Rust.

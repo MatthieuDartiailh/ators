@@ -12,6 +12,10 @@ use pyo3::{
 };
 
 use super::TypeValidator;
+use crate::utils::create_behavior_callable_checker;
+
+create_behavior_callable_checker!(co_callvi, Coercer, CallValueInit, 2);
+create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueInit, 4);
 
 ///
 #[pyclass(frozen)]
@@ -20,9 +24,9 @@ pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
     #[pyo3(constructor = (callable))]
-    CallValueInit { callable: Py<PyAny> }, // Use a custom object to encapsulate a callable
+    CallValueInit { callable: co_callvi::Callable }, // Use a custom object to encapsulate a callable
     #[pyo3(constructor = (callable))]
-    CallMemberObjectValueInit { callable: Py<PyAny> },
+    CallMemberObjectValueInit { callable: co_callmovi::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -51,9 +55,9 @@ impl Coercer {
                 TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
-            Self::CallValueInit { callable } => callable.bind(value.py()).call1((value, is_init_coercion)),
+            Self::CallValueInit { callable } => callable.0.bind(value.py()).call1((value, is_init_coercion)),
             Self::CallMemberObjectValueInit { callable } => callable
-                .bind(value.py())
+                .0.bind(value.py())
                 .call1(
                 (
                         member.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
@@ -92,10 +96,10 @@ impl Clone for Coercer {
         Python::attach(|py| match self {
             Self::TypeInferred {} => Self::TypeInferred {},
             Self::CallValueInit { callable } => Self::CallValueInit {
-                callable: callable.clone_ref(py),
+                callable: co_callvi::Callable(callable.0.clone_ref(py)),
             },
             Self::CallMemberObjectValueInit { callable } => Self::CallMemberObjectValueInit {
-                callable: callable.clone_ref(py),
+                callable: co_callmovi::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),

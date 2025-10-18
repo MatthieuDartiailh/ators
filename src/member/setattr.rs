@@ -6,10 +6,13 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
+use crate::utils::create_behavior_callable_checker;
 use pyo3::{
     Bound, Py, PyResult, Python, pyclass,
     types::{PyAny, PyAnyMethods, PyString},
 };
+
+create_behavior_callable_checker!(pres_callmo, PreSetattrBehavior, CallMemberObject, 2);
 
 ///
 #[pyclass(frozen)]
@@ -22,7 +25,7 @@ pub enum PreSetattrBehavior {
     #[pyo3(constructor = ())]
     ReadOnly {},
     #[pyo3(constructor = (callable))]
-    CallMemberObject { callable: Py<PyAny> },
+    CallMemberObject { callable: pres_callmo::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -53,6 +56,7 @@ impl PreSetattrBehavior {
                 }
             }
             Self::CallMemberObject { callable } => callable
+                .0
                 .bind(member.py())
                 .call1((member, object, current))
                 .map(|_| ()),
@@ -70,7 +74,7 @@ impl Clone for PreSetattrBehavior {
             Self::Constant {} => Self::Constant {},
             Self::ReadOnly {} => Self::ReadOnly {},
             Self::CallMemberObject { callable } => Self::CallMemberObject {
-                callable: callable.clone_ref(py),
+                callable: pres_callmo::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),
@@ -79,13 +83,20 @@ impl Clone for PreSetattrBehavior {
     }
 }
 
+create_behavior_callable_checker!(
+    posts_callmoon,
+    PostSetattrBehavior,
+    CallMemberObjectOldNew,
+    4
+);
+
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub enum PostSetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
     #[pyo3(constructor = (callable))]
-    CallMemberObjectOldNew { callable: Py<PyAny> },
+    CallMemberObjectOldNew { callable: posts_callmoon::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -102,6 +113,7 @@ impl PostSetattrBehavior {
         match self {
             Self::NoOp {} => Ok(()),
             Self::CallMemberObjectOldNew { callable } => callable
+                .0
                 .bind(member.py())
                 .call1((member, object, old, new))
                 .map(|_| ()),
@@ -117,7 +129,7 @@ impl Clone for PostSetattrBehavior {
         Python::attach(|py| match self {
             Self::NoOp {} => Self::NoOp {},
             Self::CallMemberObjectOldNew { callable } => Self::CallMemberObjectOldNew {
-                callable: callable.clone_ref(py),
+                callable: posts_callmoon::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),
