@@ -36,12 +36,12 @@ pub enum TypeValidator {
     // },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
-    // XXX need also a custom constructor
+    // XXX need a custom type to perform init validation
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
     //     resolver: Py<PyAny>,
     // },
-    // XXX need a custom constructor for validation
+    // XXX need a custom type to perform init validation
     // Instance {
     //     types: Py<PyTuple>,
     // },
@@ -64,7 +64,7 @@ macro_rules! validation_error {
         {
             Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The member {} from {} expects a {}, got {} ({})",
-                m.borrow().name,
+                m.borrow().name(),
                 o.repr()?,
                 $type,
                 $value.repr()?,
@@ -135,7 +135,7 @@ impl TypeValidator {
                             {
                                 Err(pyo3::exceptions::PyTypeError::new_err(format!(
                                     "The member {} from {} expects a tuple of length {}, got a tuple of length {}",
-                                    m.borrow().name,
+                                    m.borrow().name(),
                                     o.repr()?,
                                     items.len(),
                                     t_length,

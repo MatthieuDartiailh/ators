@@ -45,7 +45,7 @@ fn clone_metadata(
 #[pyclass(frozen, get_all)]
 #[derive(Debug)]
 pub struct Member {
-    pub name: String,
+    name: String,
     slot_index: u8,
     // All attributes below are frozen enums so they cannot be modified at runtime
     // and we can safely return clones of them.
@@ -75,6 +75,10 @@ impl Member {
             validator: self.validator.clone(),
             metadata: clone_metadata(&self.metadata),
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn index(&self) -> u8 {

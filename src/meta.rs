@@ -228,7 +228,7 @@ pub fn create_ators_subclass<'py>(
         next_index: 0,
     };
     for cm in conflict.iter() {
-        let name = { cm.borrow().name.clone() };
+        let name = { cm.borrow().name().to_owned() };
         let new = Bound::new(
             py,
             cm.borrow()
@@ -244,23 +244,25 @@ pub fn create_ators_subclass<'py>(
     members.extend(conflict_free_members);
 
     // Collect member builder without type annotation
-    let mut unannotated_member_builder_ids = HashSet::new();
+    let mut unannotated_member_builder_ids = HashMap::new();
     for (k, v) in dct.iter() {
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(k)?;
         } else if let Ok(mb) = v.cast_into::<MemberBuilder>() {
             let mb_id: usize = mb.as_ptr().addr();
-            let mut member_to_add = {
-                if unannotated_member_builder_ids.contains(&mb_id) {
-                    mb.borrow().clone()
-                } else {
-                    unannotated_member_builder_ids.insert(mb_id);
-                    mb.extract()?
-                }
-            };
+            if unannotated_member_builder_ids.contains_key(&mb_id) {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "'{k}' and '{}' are assigned the same member which is not supported",
+                    // SAFETY we checked the key is in the HashMap so unwrapping is safe.
+                    unannotated_member_builder_ids.get(&mb_id).unwrap()
+                )));
+            }
             let name: String = k.extract()?;
-            member_to_add.name = Some(name.clone());
-            member_builders.insert(name, member_to_add);
+            unannotated_member_builder_ids.insert(mb_id, name.clone());
+            {
+                mb.borrow_mut().name = Some(name.clone());
+            }
+            member_builders.insert(name, mb.extract()?);
         }
     }
 
