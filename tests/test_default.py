@@ -9,8 +9,7 @@
 
 import pytest
 
-from ators import Ators, member
-from ators.member import Member
+from ators import Ators, member, Member
 from ators.behaviors import Default, default
 
 
