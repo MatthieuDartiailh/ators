@@ -40,3 +40,19 @@ def test_member_constant():
 
     assert isinstance(A.a.pre_setattr, PreSetAttr.Constant)
     assert isinstance(A.a.delattr, DelAttr.Undeletable)
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"a": 2}, {"b": 2}, {"a": 3, "b": 4}])
+def test_ators_init(kwargs):
+    class A(Ators):
+        a: int
+        b: int = 1
+
+    a = A(**kwargs)
+    if "a" in kwargs:
+        assert a.a == kwargs["a"]
+    else:
+        with pytest.raises(TypeError):
+            a.a
+
+    assert a.b == kwargs.get("b", 1)
