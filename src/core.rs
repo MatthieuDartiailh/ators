@@ -69,15 +69,20 @@ impl AtorsBase {
 
 impl AtorsBase {
     /// Get a clone (ref) of the value stored in the slot at index if any
-    pub(crate) fn get_slot<'py>(&self, index: usize, py: Python<'py>) -> Option<Py<PyAny>> {
-        self.slots[index].as_ref().map(|v| v.clone_ref(py))
+    pub(crate) fn get_slot<'py>(&self, index: u8, py: Python<'py>) -> Option<Py<PyAny>> {
+        self.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
     }
 
     /// Set the slot at index to the specified value
-    pub(crate) fn set_slot<'py>(&mut self, index: usize, value: Bound<'py, PyAny>) {
+    pub(crate) fn set_slot<'py>(&mut self, index: u8, value: Bound<'py, PyAny>) {
         let py = value.py();
         // This conversion cannot fail, so unwrap is safe
-        self.slots[index].replace(value.into_py_any(py).unwrap());
+        self.slots[index as usize].replace(value.into_py_any(py).unwrap());
+    }
+
+    /// Del the slot value at index
+    pub(crate) fn det_slot(&mut self, index: u8) {
+        self.slots[index as usize] = None;
     }
 
     /// Check if a Ators instance is frozen

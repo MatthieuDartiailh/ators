@@ -26,7 +26,10 @@ impl DelattrBehavior {
         object: &pyo3::Bound<'py, crate::core::AtorsBase>,
     ) -> pyo3::PyResult<()> {
         match self {
-            Self::Slot {} => todo!("Implement slot deletion"),
+            Self::Slot {} => {
+                object.borrow_mut().det_slot(member.borrow().index());
+                Ok(())
+            }
             Self::Undeletable {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The member {} from {} cannot be deleted",
                 member.borrow().name,

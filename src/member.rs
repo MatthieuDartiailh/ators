@@ -122,11 +122,7 @@ impl Member {
                 let object = object.cast::<crate::core::AtorsBase>()?;
                 let m_ref = member.borrow();
                 m_ref.pre_getattr.pre_get(&member, object)?;
-                let slot_value = {
-                    object
-                        .borrow()
-                        .get_slot(m_ref.slot_index as usize, object.py())
-                };
+                let slot_value = { object.borrow().get_slot(m_ref.slot_index, object.py()) };
                 let value = match slot_value {
                     Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
                     None => {
@@ -138,9 +134,7 @@ impl Member {
                             Some(object),
                             default,
                         )?;
-                        object
-                            .borrow_mut()
-                            .set_slot(m_ref.slot_index as usize, new.clone());
+                        object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
                         new
                     }
                 };
@@ -160,7 +154,7 @@ impl Member {
         with_critical_section2(member.as_any(), object.as_any(), || {
             let m_ref = member.borrow();
             let object = object.cast::<crate::core::AtorsBase>()?;
-            let current = object.borrow().get_slot(m_ref.slot_index as usize, py);
+            let current = object.borrow().get_slot(m_ref.slot_index, py);
 
             // Validate it is legitimate to attempt to set the member
             m_ref.pre_setattr.pre_set(&member, object, &current)?;
@@ -177,9 +171,7 @@ impl Member {
             let new = m_ref
                 .validator
                 .validate(false, Some(&member), Some(object), value)?;
-            object
-                .borrow_mut()
-                .set_slot(m_ref.slot_index as usize, new.clone());
+            object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
 
             m_ref
                 .post_setattr
