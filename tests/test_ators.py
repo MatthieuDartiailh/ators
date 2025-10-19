@@ -10,6 +10,7 @@
 import pytest
 
 from ators import Ators, member
+from ators.behaviors import PreSetAttr, DelAttr
 
 
 def test_member_slot_do_not_overlap():
@@ -31,3 +32,11 @@ def test_dual_use_is_forbidden():
             a = b = member()
 
     assert "assigned the same member" in e.exconly()
+
+
+def test_member_constant():
+    class A(Ators):
+        a = member().constant()
+
+    assert isinstance(A.a.pre_setattr, PreSetAttr.Constant)
+    assert isinstance(A.a.delattr, DelAttr.Undeletable)

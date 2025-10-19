@@ -160,14 +160,10 @@ impl Member {
         with_critical_section2(member.as_any(), object.as_any(), || {
             let m_ref = member.borrow();
             let object = object.cast::<crate::core::AtorsBase>()?;
-            let current = match object.borrow().get_slot(m_ref.slot_index as usize, py) {
-                Some(v) => v,
-                None => py.None(), // Use UNSET singleton
-            };
-            let current_bound = current.bind(py);
+            let current = object.borrow().get_slot(m_ref.slot_index as usize, py);
 
             // Validate it is legitimate to attempt to set the member
-            m_ref.pre_setattr.pre_set(&member, object, current_bound)?;
+            m_ref.pre_setattr.pre_set(&member, object, &current)?;
 
             // Check the frozen bit of the object
             if object.borrow().is_frozen() {
@@ -187,7 +183,7 @@ impl Member {
 
             m_ref
                 .post_setattr
-                .post_set(&member, object, current_bound, &new)?;
+                .post_set(&member, object, &current, &new)?;
 
             Ok(())
         })

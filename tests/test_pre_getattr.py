@@ -5,7 +5,7 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Test post-getattr behavior for ators object"""
+"""Test pre-getattr behavior for ators object"""
 
 import pytest
 

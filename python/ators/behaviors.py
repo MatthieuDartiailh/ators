@@ -51,7 +51,7 @@ def _validate_use_and_sig(
     sig = inspect.signature(func)
     if len(sig.parameters) != len(expected_sig):
         raise TypeError(
-            f"Method signature for '{behavior}' should be ({','.join(expected_sig)}),"
+            f"Method signature for '{behavior}' should be ({', '.join(expected_sig)}),"
             f" got {sig}"
         )
 
@@ -97,7 +97,7 @@ def preset(member_builder: member):
 
     def decorator(func):
         st = inspect.stack(1)
-        _validate_use_and_sig(st, "preset", func, ("self", "member"))
+        _validate_use_and_sig(st, "preset", func, ("self", "member", "current"))
         member_builder.preset(PreSetAttr.ObjectMethod(func.__name__))
         return func
 
@@ -156,4 +156,16 @@ def append_value_validator(member_builder: member):
     return decorator
 
 
-__all__ = ["Default", "default"]
+__all__ = [
+    "Default",
+    "default",
+    "PreGetAttr",
+    "preget",
+    "PreSetAttr",
+    "preset",
+    "PostGetAttr",
+    "postget",
+    "PostSetAttr",
+    "postset",
+    "DelAttr",
+]

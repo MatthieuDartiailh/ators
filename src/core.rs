@@ -80,11 +80,7 @@ impl AtorsBase {
         self.slots[index].replace(value.into_py_any(py).unwrap());
     }
 
-    /// Check if the slot at index stores a non-None value
-    pub(crate) fn is_slot_set(&self, index: usize) -> bool {
-        self.slots[index].is_some()
-    }
-
+    /// Check if a Ators instance is frozen
     #[inline]
     pub(crate) fn is_frozen(&self) -> bool {
         self.frozen

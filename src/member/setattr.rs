@@ -12,7 +12,7 @@ use pyo3::{
     types::{PyAny, PyAnyMethods, PyString},
 };
 
-create_behavior_callable_checker!(pres_callmo, PreSetattrBehavior, CallMemberObject, 2);
+create_behavior_callable_checker!(pres_callmov, PreSetattrBehavior, CallMemberObject, 3);
 
 ///
 #[pyclass(frozen)]
@@ -25,7 +25,7 @@ pub enum PreSetattrBehavior {
     #[pyo3(constructor = ())]
     ReadOnly {},
     #[pyo3(constructor = (callable))]
-    CallMemberObject { callable: pres_callmo::Callable },
+    CallMemberObjectValue { callable: pres_callmov::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -36,7 +36,7 @@ impl PreSetattrBehavior {
         &self,
         member: &Bound<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        current: &Bound<'py, PyAny>,
+        current: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
@@ -44,23 +44,30 @@ impl PreSetattrBehavior {
                 "Cannot set the value of a constant member",
             )),
             Self::ReadOnly {} => {
-                if object
-                    .borrow()
-                    .is_slot_set(member.borrow().slot_index as usize)
-                {
+                if current.is_some() {
                     Err(pyo3::exceptions::PyTypeError::new_err(
-                        "Cannot change the value of a read only member",
+                        "Cannot change the value of an already set read only member",
                     ))
                 } else {
                     Ok(())
                 }
             }
-            Self::CallMemberObject { callable } => callable
-                .0
-                .bind(member.py())
-                .call1((member, object, current))
-                .map(|_| ()),
+            Self::CallMemberObjectValue { callable } => {
+                let py = member.py();
+                println!("Calling");
+                callable
+                    .0
+                    .bind(py)
+                    // XXX should use sentinel value
+                    .call1((
+                        member,
+                        object,
+                        current.as_ref().unwrap_or(&py.None()).bind(py),
+                    ))
+                    .map(|_| ())
+            }
             Self::ObjectMethod { meth_name } => object
+                // XXX should use sentinel value
                 .call_method1(meth_name, (member, current))
                 .map(|_| ()),
         }
@@ -73,8 +80,8 @@ impl Clone for PreSetattrBehavior {
             Self::NoOp {} => Self::NoOp {},
             Self::Constant {} => Self::Constant {},
             Self::ReadOnly {} => Self::ReadOnly {},
-            Self::CallMemberObject { callable } => Self::CallMemberObject {
-                callable: pres_callmo::Callable(callable.0.clone_ref(py)),
+            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+                callable: pres_callmov::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
                 meth_name: meth_name.clone_ref(py),
@@ -107,7 +114,7 @@ impl PostSetattrBehavior {
         &self,
         member: &Bound<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        old: &Bound<'py, PyAny>,
+        old: &Option<Py<PyAny>>,
         new: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {
@@ -115,9 +122,11 @@ impl PostSetattrBehavior {
             Self::CallMemberObjectOldNew { callable } => callable
                 .0
                 .bind(member.py())
+                // XXX should use sentinel value
                 .call1((member, object, old, new))
                 .map(|_| ()),
             Self::ObjectMethod { meth_name } => object
+                // XXX should use sentinel value
                 .call_method1(meth_name, (member, old, new))
                 .map(|_| ()),
         }

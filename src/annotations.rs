@@ -8,7 +8,9 @@
 ///
 use pyo3::{
     Bound, PyAny, PyResult, intern,
-    types::{PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString},
+    types::{
+        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString, PyTuple,
+    },
 };
 use std::collections::HashMap;
 
@@ -137,6 +139,7 @@ fn configure_member_builder_from_annotation<'py>(
     ann: &Bound<'py, PyAny>,
     type_containers: i64,
     tools: &TypeTools<'py>,
+    final_annotated: bool,
 ) -> PyResult<()> {
     let origin = tools.get_origin.call1((ann,))?;
 
@@ -145,13 +148,31 @@ fn configure_member_builder_from_annotation<'py>(
     // Finally ensure a member that has a ReadOnly or Constant pre set behavior
     // is marked final.
     if origin.is(&tools.types.final_) {
-        configure_member_builder_from_annotation(builder, name, ann, type_containers, &tools)?;
+        let args = &tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+        if args.len()? != 1 {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Final should only contain 1 item got {args}"
+            )));
+        }
+        configure_member_builder_from_annotation(
+            builder,
+            name,
+            // SAFETY we just checked the tuple did contains one element
+            &args.get_item(0).unwrap(),
+            type_containers,
+            tools,
+            true,
+        )?;
         match builder.pre_setattr {
             Some(PreSetattrBehavior::Constant {}) => {}
             _ => builder.pre_setattr = Some(PreSetattrBehavior::ReadOnly {}),
         };
         builder.delattr = Some(DelattrBehavior::Undeletable {});
-    } else {
+        return Ok(());
+    }
+
+    // Ensure we do not have a pre set behavior that mandates the use of Final
+    if !final_annotated {
         match builder.pre_setattr {
             Some(PreSetattrBehavior::Constant {}) | Some(PreSetattrBehavior::ReadOnly {}) => {
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -160,7 +181,7 @@ fn configure_member_builder_from_annotation<'py>(
                     ann.repr()?
                 )));
             }
-            _ => builder.pre_setattr = None,
+            _ => (),
         };
     }
 
@@ -296,6 +317,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             &ann,
             type_containers,
             &tools,
+            false,
         )
         .map_err(|err| {
             let new_err = pyo3::exceptions::PyTypeError::new_err(format!(
