@@ -88,7 +88,6 @@ impl Validator {
     ///
     pub fn validate<'py>(
         &self,
-        is_init: bool,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
@@ -96,10 +95,8 @@ impl Validator {
         match self.strict_validate(member, object, value.clone()) {
             Ok(v) => Ok(v),
             Err(err) => {
-                if is_init && let Some(c) = &self.init_coercer {
-                    c.coerce_value(is_init, &self.type_validator, member, object, value)
-                } else if !is_init && let Some(c) = &self.coercer {
-                    c.coerce_value(is_init, &self.type_validator, member, object, value)
+                if let Some(c) = &self.coercer {
+                    c.coerce_value(false, &self.type_validator, member, object, value)
                 } else {
                     Err(err)
                 }

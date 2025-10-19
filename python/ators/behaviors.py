@@ -121,8 +121,10 @@ def coerce(member_builder: member):
 
     def decorator(func):
         st = inspect.stack(1)
-        _validate_use_and_sig(st, "coerce", func, ("self", "member", "value"))
-        member_builder.default(Coercer.ObjectMethod(func.__name__))
+        _validate_use_and_sig(
+            st, "coerce", func, ("self", "member", "value", "is_init_coercion")
+        )
+        member_builder.coerce(Coercer.ObjectMethod(func.__name__))
         return func
 
     return decorator
@@ -133,8 +135,10 @@ def coerce_init(member_builder: member):
 
     def decorator(func):
         st = inspect.stack(1)
-        _validate_use_and_sig(st, "coerce_init", func, ("self", "member", "value"))
-        member_builder.default(Coercer.ObjectMethod(func.__name__))
+        _validate_use_and_sig(
+            st, "coerce_init", func, ("self", "member", "value", "is_init_coercion")
+        )
+        member_builder.coerce_init(Coercer.ObjectMethod(func.__name__))
         return func
 
     return decorator
@@ -168,4 +172,5 @@ __all__ = [
     "PostSetAttr",
     "postset",
     "DelAttr",
+    "append_value_validator",
 ]

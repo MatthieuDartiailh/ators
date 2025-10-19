@@ -128,12 +128,9 @@ impl Member {
                     None => {
                         // Attempt to create a default value
                         let default = m_ref.default.default(&member, object)?;
-                        let new = m_ref.validator.validate(
-                            false,
-                            Some(&member),
-                            Some(object),
-                            default,
-                        )?;
+                        let new = m_ref
+                            .validator
+                            .validate(Some(&member), Some(object), default)?;
                         object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
                         new
                     }
@@ -170,7 +167,7 @@ impl Member {
             // Validate the new value
             let new = m_ref
                 .validator
-                .validate(false, Some(&member), Some(object), value)?;
+                .validate(Some(&member), Some(object), value)?; // XXX Need to map the error
             object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
 
             m_ref
@@ -274,6 +271,7 @@ impl MemberBuilder {
     }
 
     ///
+    #[pyo3( signature= ( coercer = None))]
     pub fn coerce<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
@@ -288,15 +286,19 @@ impl MemberBuilder {
                 .or_insert(2);
         }
         if let Some(c) = coercer {
+            // XXX accept a callable directly
             let bc = c.cast::<Coercer>()?;
             mself.coerce = Some(bc.as_any().extract()?);
         } else {
-            mself.coerce = None;
+            // Use the Type Inferred coercer by default
+            // (people should not call coerce if they do not want to coerce).
+            mself.coerce = Some(Coercer::TypeInferred {});
         };
         self_.into_bound_py_any(py)
     }
 
     ///
+    #[pyo3( signature= ( coercer = None))]
     pub fn coerce_init<'py>(
         mut self_: PyRefMut<'py, Self>,
         coercer: Option<Bound<'py, PyAny>>,
@@ -311,10 +313,13 @@ impl MemberBuilder {
                 .or_insert(2);
         }
         if let Some(c) = coercer {
+            // XXX accept a callable directly
             let bc = c.cast::<Coercer>()?;
             mself.coerce_init = Some(bc.as_any().extract()?);
         } else {
-            mself.coerce_init = None;
+            // Use the Type Inferred coercer by default
+            // (people should not call coerce if they do not want to coerce).
+            mself.coerce_init = Some(Coercer::TypeInferred {});
         };
         self_.into_bound_py_any(py)
     }
@@ -486,6 +491,9 @@ impl MemberBuilder {
         if self.coerce.is_none() {
             self.coerce = member.validator.coercer.clone();
         }
+        if self.coerce_init.is_none() {
+            self.coerce_init = member.validator.init_coercer.clone();
+        }
         if self.metadata.is_none() {
             self.metadata = clone_metadata(&member.metadata);
         }
@@ -515,6 +523,8 @@ impl MemberBuilder {
                 )),
             ))?;
         }
+
+        // XXX warn if type validator is any and coercer is set
 
         Ok(Member {
             name,

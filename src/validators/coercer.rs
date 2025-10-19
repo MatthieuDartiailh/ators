@@ -14,7 +14,7 @@ use pyo3::{
 use super::TypeValidator;
 use crate::utils::create_behavior_callable_checker;
 
-create_behavior_callable_checker!(co_callvi, Coercer, CallValueInit, 2);
+create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueInit, 4);
 
 ///
@@ -24,7 +24,7 @@ pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
     #[pyo3(constructor = (callable))]
-    CallValueInit { callable: co_callvi::Callable }, // Use a custom object to encapsulate a callable
+    CallValue { callable: co_callv::Callable }, // Use a custom object to encapsulate a callable
     #[pyo3(constructor = (callable))]
     CallMemberObjectValueInit { callable: co_callmovi::Callable },
     #[pyo3(constructor = (meth_name))]
@@ -55,7 +55,7 @@ impl Coercer {
                 TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
-            Self::CallValueInit { callable } => callable.0.bind(value.py()).call1((value, is_init_coercion)),
+            Self::CallValue { callable } => callable.0.bind(value.py()).call1((value,)),
             Self::CallMemberObjectValueInit { callable } => callable
                 .0.bind(value.py())
                 .call1(
@@ -84,6 +84,7 @@ impl Coercer {
                                 "Cannot use ObjectMethod coercion when validator is not linked to a member."
                             )
                         )?,
+                        value,
                         is_init_coercion
                     ),
                 ),
@@ -95,8 +96,8 @@ impl Clone for Coercer {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::TypeInferred {} => Self::TypeInferred {},
-            Self::CallValueInit { callable } => Self::CallValueInit {
-                callable: co_callvi::Callable(callable.0.clone_ref(py)),
+            Self::CallValue { callable } => Self::CallValue {
+                callable: co_callv::Callable(callable.0.clone_ref(py)),
             },
             Self::CallMemberObjectValueInit { callable } => Self::CallMemberObjectValueInit {
                 callable: co_callmovi::Callable(callable.0.clone_ref(py)),
