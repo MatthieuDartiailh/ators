@@ -37,3 +37,18 @@ def test_frozen_class():
     with pytest.raises(TypeError) as e:
         a.a = 1
     assert "Cannot modify" in e.exconly()
+
+
+def test_frozen_inheritance():
+    class A(Ators, frozen=True):
+        a: int
+
+    class B(A, frozen=True):
+        b: int
+
+    with pytest.raises(TypeError) as e:
+
+        class C(A):
+            c: int
+
+    assert "not frozen but inherit" in e.exconly()
