@@ -84,6 +84,10 @@ impl Member {
     pub fn index(&self) -> u8 {
         self.slot_index
     }
+
+    pub fn metadata(&self) -> &Option<HashMap<String, Py<PyAny>>> {
+        &self.metadata
+    }
 }
 
 ///

@@ -9,7 +9,14 @@
 
 import pytest
 
-from ators import Ators, member
+from ators import (
+    Ators,
+    member,
+    get_member,
+    get_members,
+    get_members_by_tag,
+    get_members_by_tag_and_value,
+)
 from ators.behaviors import PreSetAttr, DelAttr
 
 
@@ -56,3 +63,19 @@ def test_ators_init(kwargs):
             a.a
 
     assert a.b == kwargs.get("b", 1)
+
+
+def test_member_access_fucntions():
+    class A(Ators):
+        a = member().tag(t=1)
+        b = member().tag(t=2)
+        c = member().tag(u=1)
+        d = member().tag()
+
+    for obj in (A, A()):
+        assert get_member(obj, "d").name == "d"
+        assert list(sorted(get_members(obj))) == ["a", "b", "c", "d"]
+        for k, (m, v) in get_members_by_tag(obj, "t").items():
+            assert m.name == k
+            assert v == {"a": 1, "b": 2}[k]
+        assert list(get_members_by_tag_and_value(obj, "t", 1)) == ["a"]

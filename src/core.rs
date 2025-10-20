@@ -129,6 +129,62 @@ pub fn is_frozen<'py>(obj: Bound<'py, AtorsBase>) -> bool {
     })
 }
 
+/// Retrieve a single Member from an Ators object by name.
+#[pyfunction]
+pub fn get_member<'py>(
+    obj: Bound<'py, PyAny>,
+    member_name: Bound<'py, PyString>,
+) -> PyResult<Bound<'py, Member>> {
+    Ok(obj
+        .getattr(ATORS_MEMBERS)?
+        .get_item(member_name)?
+        .cast_into()?)
+}
+
+/// Retrieve all members from an Ators objetc.
+#[pyfunction]
+pub fn get_members<'py>(obj: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.copy()
+}
+
+/// Retrieve all members with a specific metadata key and the value associated with it.
+#[pyfunction]
+pub fn get_members_by_tag<'py>(
+    obj: Bound<'py, PyAny>,
+    tag: String,
+) -> PyResult<Bound<'py, PyDict>> {
+    let py = obj.py();
+    let members = PyDict::new(obj.py());
+    for (k, v) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
+        if let Some(m) = v.cast::<Member>().unwrap().get().metadata()
+            && m.contains_key(&tag)
+        {
+            members.set_item(&k, (v.clone(), m[&tag].clone_ref(py)))?;
+        }
+    }
+    Ok(members)
+}
+
+/// Retrieve all members with a specific metadata key and value.
+#[pyfunction]
+pub fn get_members_by_tag_and_value<'py>(
+    obj: Bound<'py, PyAny>,
+    tag: String,
+    value: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let members = PyDict::new(obj.py());
+    for (k, member) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
+        if let Some(m) = member.cast::<Member>().unwrap().get().metadata()
+            && m.contains_key(&tag)
+            // If comparison fails the member should not be included
+            && value.as_any().eq(&m[&tag]).unwrap_or(false)
+        {
+            members.set_item(&k, member.clone())?;
+        }
+    }
+    Ok(members)
+}
+
 // FIXME re-enable once notification are implemented
 // #[pyfunction]
 // pub fn enable_notification<'py>(obj: Bound<'py, AtorsBase>) {

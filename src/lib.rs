@@ -20,7 +20,10 @@ mod _ators {
     use super::*;
 
     #[pymodule_export]
-    use self::core::{AtorsBase, freeze, init_ators, is_frozen};
+    use self::core::{
+        AtorsBase, freeze, get_member, get_members, get_members_by_tag,
+        get_members_by_tag_and_value, init_ators, is_frozen,
+    };
     #[pymodule_export]
     use self::meta::create_ators_subclass;
 
