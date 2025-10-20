@@ -256,3 +256,13 @@ def test_warn_on_multiple_setting_of_coerce(init):
                 ),
                 "coerce_init" if init else "coerce",
             )()
+
+
+@pytest.mark.parametrize("init", [False, True])
+def test_warn_on_useless_coercion(init):
+    with pytest.warns(UserWarning):
+
+        class A(Ators):
+            a = getattr(member(), "coerce_init" if init else "coerce")(
+                Coercer.CallValue(lambda v: 1)
+            )

@@ -528,7 +528,23 @@ impl MemberBuilder {
             ))?;
         }
 
-        // XXX warn if type validator is any and coercer is set
+        if (self.coerce.is_some() || self.coerce_init.is_some())
+            && let TypeValidator::Any {} = &tv
+            && self
+                .value_validators
+                .as_ref()
+                .is_none_or(|vv| vv.is_empty())
+        {
+            let py = type_name.py();
+            let warnings_warn = py
+                .import(intern!(py, "warnings"))?
+                .getattr(intern!(py, "warn"))?;
+            warnings_warn.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
+                "Member {} of {} specify a coercion behavior but no type nor value validation.\
+             As a consequence, the coercer will never be invoked.",
+                &name, &type_name
+            )),))?;
+        }
 
         Ok(Member {
             name,
