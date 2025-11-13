@@ -103,7 +103,7 @@ pub fn member_coerce_init<'py>(
             &mb.validator.type_validator,
             Some(member),
             Some(object),
-            value,
+            &value,
         )
     })
 }

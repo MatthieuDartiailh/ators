@@ -20,7 +20,7 @@ create_behavior_callable_checker!(vv_callv, ValueValidator, CallValue, 1);
 create_behavior_callable_checker!(vv_callmov, ValueValidator, CallMemberObjectValue, 3);
 
 #[derive(Debug)]
-pub struct ValidValues(pub Py<PyFrozenSet>);
+pub(crate) struct ValidValues(pub Py<PyFrozenSet>);
 
 impl FromPyObject<'_> for ValidValues {
     fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {

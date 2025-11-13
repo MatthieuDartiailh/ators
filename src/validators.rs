@@ -17,6 +17,7 @@ pub use coercer::Coercer;
 mod types;
 pub use types::TypeValidator;
 mod values;
+pub(crate) use values::ValidValues;
 pub use values::ValueValidator;
 
 // NOTE There is no sanity check that value validators make sense in combination
@@ -92,11 +93,13 @@ impl Validator {
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        // NOTE not sure how to avoid cloning somewhere in the call chain if not here
+        // We are only cloning a reference so the cost should be minimal
         match self.strict_validate(member, object, value.clone()) {
             Ok(v) => Ok(v),
             Err(err) => {
                 if let Some(c) = &self.coercer {
-                    c.coerce_value(false, &self.type_validator, member, object, value)
+                    c.coerce_value(false, &self.type_validator, member, object, &value)
                 } else {
                     Err(err)
                 }
@@ -119,7 +122,7 @@ impl Validator {
         is_init: bool,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if is_init && let Some(c) = &self.init_coercer {
             c.coerce_value(is_init, &self.type_validator, member, object, value)

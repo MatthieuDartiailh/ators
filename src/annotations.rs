@@ -7,17 +7,17 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, PyAny, PyResult, intern,
+    Bound, Py, PyAny, PyResult, PyTypeInfo, intern,
     types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyInt, PyString, PyTuple,
+        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
+        PyString, PyTuple, PyTupleMethods,
     },
 };
 use std::collections::HashMap;
 
-use crate::validators::{Validator, ValueValidator};
 use crate::{
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
-    validators::TypeValidator,
+    validators::{TypeValidator, ValidValues, Validator, ValueValidator},
 };
 
 ///
@@ -30,6 +30,10 @@ struct PyTypes<'py> {
     type_var: Bound<'py, PyAny>,
     new_type: Bound<'py, PyAny>,
     forward_ref: Bound<'py, PyAny>,
+    literal: Bound<'py, PyAny>,
+    // sequence: Bound<'py, PyAny>,
+    // mapping: Bound<'py, PyAny>,
+    // XXX defaultdict
 }
 
 ///
@@ -71,7 +75,7 @@ struct TypeTools<'py> {
 fn build_validator_from_annotation<'py>(
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,
-    type_containers: i64,
+    type_containers: i64, // not sure this is worth keeping it
     tools: &TypeTools<'py>,
 ) -> PyResult<Validator> {
     if ann.is_instance_of::<PyString>() || ann.is_instance(&tools.types.forward_ref)? {
@@ -85,12 +89,69 @@ fn build_validator_from_annotation<'py>(
 
     // In 3.14, Union[int, float] and int | float share the same type
     if ann.is_instance(&tools.types.generic_alias)? {
+        // FIXME extract in a dedicated function since it will be expanded
+        // to cover list, dict, Numpy.NDArray etc
         let origin = tools.get_origin.call1((ann,))?;
+        // NOTE args is always a tuple
         let args = tools.get_args.call1((ann,))?;
         // FIXME treat Literal
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "Unsupported Generic",
-        )) // FIXME
+        if origin.is(&tools.types.literal) {
+            Ok(Validator::new(
+                TypeValidator::Any {},
+                Some(vec![ValueValidator::Enum {
+                    values: ValidValues(
+                        PyFrozenSet::type_object(py)
+                            .call1((args,))?
+                            .cast_into()?
+                            .unbind(),
+                    ),
+                }]),
+                None,
+                None,
+            ))
+        } else if origin.is(PyTuple::type_object(py)) {
+            let args = args.cast_into::<PyTuple>()?;
+            if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
+                // VarTuple
+                let item_validator = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &args.get_item(0).expect("Known 2-tuple"),
+                    type_containers,
+                    tools,
+                )?;
+                Ok(Validator::new(
+                    TypeValidator::VarTuple {
+                        item: Py::new(py, item_validator)?,
+                    },
+                    None,
+                    None,
+                    None,
+                ))
+            } else {
+                // Fixed length tuple
+                let mut items = Vec::new();
+                for item in args.iter() {
+                    let item_validator = build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-item")).cast()?,
+                        &item,
+                        type_containers,
+                        tools,
+                    )?;
+                    items.push(item_validator);
+                }
+                Ok(Validator::new(
+                    TypeValidator::Tuple { items },
+                    None,
+                    None,
+                    None,
+                ))
+            }
+        } else if origin.is(&tools.types.union_) {
+            todo!("Implement union case");
+        } else {
+            // Fallback to typed and ignore args
+            todo!("Implement type fallback");
+        }
     } else if ann.is_instance(&tools.types.union_)? {
         Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Union")) // FIXME
     } else if ann.is_instance(&tools.types.type_var)? {
@@ -149,7 +210,7 @@ fn configure_member_builder_from_annotation<'py>(
     // is marked final.
     if origin.is(&tools.types.final_) {
         let args = &tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
-        if args.len()? != 1 {
+        if args.len() != 1 {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Final should only contain 1 item got {args}"
             )));
@@ -187,7 +248,6 @@ fn configure_member_builder_from_annotation<'py>(
 
     // Next analyze the annotation to build the validators (Final is not
     // permitted within container or generic).
-    // FIXME should not override the existing validators
     let new = match build_validator_from_annotation(name, ann, type_containers, tools) {
         Ok(v) => Ok(v),
         Err(err) => {
@@ -277,6 +337,9 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
             new_type: typing_mod.getattr(intern!(py, "NewType"))?,
             forward_ref: annotationlib.getattr(intern!(py, "ForwardRef"))?,
+            literal: typing_mod.getattr(intern!(py, "Literal"))?,
+            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,  // XXX wrong module
+            // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
     };
 

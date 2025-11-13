@@ -8,7 +8,10 @@
 ///
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
-    types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyTuple},
+    types::{
+        PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PySequence, PySequenceMethods, PyString,
+        PyTuple,
+    },
 };
 
 use super::TypeValidator;
@@ -23,8 +26,9 @@ create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueIni
 pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
+    // XXX handle nested coercing for container by providing custom modes
     #[pyo3(constructor = (callable))]
-    CallValue { callable: co_callv::Callable }, // Use a custom object to encapsulate a callable
+    CallValue { callable: co_callv::Callable },
     #[pyo3(constructor = (callable))]
     CallMemberObjectValueInit { callable: co_callmovi::Callable },
     #[pyo3(constructor = (meth_name))]
@@ -39,20 +43,59 @@ impl Coercer {
         type_validator: &TypeValidator,
         member: Option<&Bound<'py, crate::member::Member>>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();
         match self {
             Self::TypeInferred {} => match type_validator {
-                TypeValidator::Any {} => Ok(value),
+                TypeValidator::Any {} => Ok(value.clone()),  // Dead code but for completeness
+                TypeValidator::None {} => Err(
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "Cannot coerce a value to NoneType",
+                    ),
+                ),
                 TypeValidator::Bool {} => PyBool::type_object(py).call1((value,)),
                 TypeValidator::Int {} => PyInt::type_object(py).call1((value,)),
                 TypeValidator::Float {} => PyFloat::type_object(py).call1((value,)),
                 TypeValidator::Str {} => PyString::type_object(py).call1((value,)),
                 TypeValidator::Bytes {} => PyBytes::type_object(py).call1((value,)),
-                // XXX we should attempt to coercer tuple element
-                // forward is init coercion value to further validators
-                TypeValidator::Tuple { items: _ } => PyTuple::type_object(py).call1((value,)),
+                TypeValidator::Tuple { items } => {
+                    let temp = value.cast::<PySequence>()?;
+                    if temp.len()? != items.len() {
+                        return Err(
+                            pyo3::exceptions::PyTypeError::new_err(
+                                format!(
+                                    "Cannot coerce a {}-tuple into a {}-tuple",
+                                    temp.len()?,
+                                    items.len())
+                            )
+                        );
+                    }
+                    PyTuple::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .zip(items)
+                        .map(|(v, t)| -> PyResult<Bound<'py, PyAny>> {
+                            self.coerce_value(is_init_coercion, &t.type_validator, member, object, &v?)
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::VarTuple { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    PyTuple::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                            self.coerce_value(is_init_coercion, &item.get().type_validator, member, object, &v?)
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
             },
             Self::CallValue { callable } => callable.0.bind(value.py()).call1((value,)),

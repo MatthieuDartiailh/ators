@@ -13,12 +13,16 @@ use pyo3::{
     types::{PyAnyMethods, PyDict, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
 };
 
+use super::Validator;
+
 ///
 #[pyclass(frozen)]
 #[derive(Debug)]
 pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Any {},
+    #[pyo3(constructor = ())]
+    None {},
     #[pyo3(constructor = ())]
     Bool {},
     #[pyo3(constructor = ())]
@@ -30,12 +34,13 @@ pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Bytes {},
     #[pyo3(constructor = (items))]
-    Tuple { items: Vec<TypeValidator> },
-    // VarTuple {
-    //     item: Py<TypeValidator>,
-    // },
+    Tuple { items: Vec<Validator> },
+    #[pyo3(constructor = (item))]
+    VarTuple { item: Py<Validator> },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
+    // #[pyo3(constructor = (members))]
+    // Union { members: Vec<Validator> },
     // XXX need a custom type to perform init validation
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
@@ -82,6 +87,7 @@ macro_rules! validation_error {
 }
 
 impl TypeValidator {
+    ///
     pub fn validate_type<'py>(
         &self,
         member: Option<&Bound<'py, crate::member::Member>>,
@@ -90,6 +96,13 @@ impl TypeValidator {
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Self::Any {} => Ok(value),
+            Self::None {} => {
+                if value.is_none() {
+                    Ok(value)
+                } else {
+                    validation_error!("None", member, object, value)
+                }
+            }
             Self::Bool {} => {
                 if unsafe { PyBool_Check(value.as_ptr()) } != 0 {
                     Ok(value)
@@ -149,10 +162,95 @@ impl TypeValidator {
                             }
                         };
                     }
-                    let mut validated_items = Vec::with_capacity(items.len());
-                    for (item, validator) in tuple.iter().zip(items) {
-                        let v = validator.validate_type(member, object, item)?;
-                        validated_items.push(v);
+                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                    for (index, (item, validator)) in tuple.iter().zip(items).enumerate() {
+                        // FIXME the loop body logic could be extracted into a helper function
+                        match validator.validate(member, object, item.clone()) {
+                            Ok(v) => {
+                                if !v.is(item) {
+                                    match &mut validated_items {
+                                        Some(vec) => vec.push(v),
+                                        None => {
+                                            let mut vec = Vec::with_capacity(t_length);
+                                            for i in 0..index {
+                                                vec.push(tuple.get_item(i).unwrap());
+                                            }
+                                            vec.push(v);
+                                            validated_items = Some(vec);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(cause) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {} for the member {} of {}.",
+                                        index,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {}.",
+                                        index,
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                }
+                            }
+                        }
+                    }
+                    Ok(pyo3::types::PyTuple::new(value.py(), validated_items)?.into_any())
+                } else {
+                    validation_error!("tuple", member, object, value)
+                }
+            }
+            Self::VarTuple { item } => {
+                if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
+                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                    for (index, titem) in tuple.iter().enumerate() {
+                        match item.get().validate(member, object, titem.clone()) {
+                            Ok(v) => {
+                                if !v.is(&item) {
+                                    match &mut validated_items {
+                                        Some(vec) => vec.push(v),
+                                        None => {
+                                            let mut vec = Vec::with_capacity(tuple.len());
+                                            for i in 0..index {
+                                                vec.push(tuple.get_item(i).unwrap());
+                                            }
+                                            vec.push(v);
+                                            validated_items = Some(vec);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(cause) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {} for the member {} of {}.",
+                                        index,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {}.",
+                                        index,
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                }
+                            }
+                        }
                     }
                     Ok(pyo3::types::PyTuple::new(value.py(), validated_items)?.into_any())
                 } else {
@@ -195,17 +293,18 @@ impl Clone for TypeValidator {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::Any {} => Self::Any {},
+            Self::None {} => Self::None {},
             Self::Bool {} => Self::Bool {},
             Self::Int {} => Self::Int {},
             Self::Float {} => Self::Float {},
             Self::Str {} => Self::Str {},
             Self::Bytes {} => Self::Bytes {},
             Self::Tuple { items } => Self::Tuple {
-                items: items.iter().cloned().collect(),
+                items: items.to_vec(),
             },
-            // Self::VarTuple { item } => Self::VarTuple {
-            //     item: item.clone_ref(py),
-            // },
+            Self::VarTuple { item } => Self::VarTuple {
+                item: item.clone_ref(py),
+            },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),
             },
