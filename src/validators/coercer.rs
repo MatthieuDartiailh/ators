@@ -90,7 +90,12 @@ impl Coercer {
                         temp
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
-                            self.coerce_value(is_init_coercion, &item.get().type_validator, member, object, &v?)
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
                             }
                         )
                         .collect::<PyResult<Vec<_>>>()?

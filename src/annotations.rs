@@ -109,7 +109,7 @@ fn build_validator_from_annotation<'py>(
                 None,
                 None,
             ))
-        } else if origin.is(PyTuple::type_object(py)) {
+        } else if origin.is(py.get_type::<PyTuple>()) {
             let args = args.cast_into::<PyTuple>()?;
             if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
                 // VarTuple
@@ -121,7 +121,7 @@ fn build_validator_from_annotation<'py>(
                 )?;
                 Ok(Validator::new(
                     TypeValidator::VarTuple {
-                        item: Py::new(py, item_validator)?,
+                        item: Some(Py::new(py, item_validator)?),
                     },
                     None,
                     None,
@@ -177,6 +177,13 @@ fn build_validator_from_annotation<'py>(
         Ok(Validator::new(TypeValidator::Bytes {}, None, None, None))
     } else if ann.is(py.get_type::<PyString>()) {
         Ok(Validator::new(TypeValidator::Str {}, None, None, None))
+    } else if ann.is(py.get_type::<PyTuple>()) {
+        Ok(Validator::new(
+            TypeValidator::VarTuple { item: None },
+            None,
+            None,
+            None,
+        ))
     } else {
         //f"Failed to extract types from {kind}. "
         // f"The extraction yielded {t} which is not a type. "
