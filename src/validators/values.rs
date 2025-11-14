@@ -51,6 +51,10 @@ impl<'py> IntoPyObject<'py> for &ValidValues {
 #[derive(Debug)]
 pub enum ValueValidator {
     #[pyo3(constructor = (values))]
+    // ValidValues is build from a Python object and we do not need to expose
+    // it directly since it is not needed to build an Enum variant from the
+    // Python side.
+    #[allow(private_interfaces)]
     Enum { values: ValidValues },
     #[pyo3(constructor = (items))]
     TupleItems { items: Vec<Vec<ValueValidator>> },
