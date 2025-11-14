@@ -316,10 +316,7 @@ impl Clone for TypeValidator {
                 items: items.to_vec(),
             },
             Self::VarTuple { item } => Self::VarTuple {
-                item: match item {
-                    Some(inner) => Some(inner.clone_ref(py)),
-                    None => None,
-                },
+                item: item.as_ref().map(|inner| inner.clone_ref(py)),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),
