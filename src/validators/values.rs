@@ -56,10 +56,6 @@ pub enum ValueValidator {
     // Python side.
     #[allow(private_interfaces)]
     Enum { values: ValidValues },
-    #[pyo3(constructor = (items))]
-    TupleItems { items: Vec<Vec<ValueValidator>> },
-    #[pyo3(constructor = (item))]
-    SequenceItems { item: Vec<ValueValidator> },
     #[pyo3(constructor = (callable))]
     CallValue { callable: vv_callv::Callable },
     #[pyo3(constructor = (callable))]
@@ -94,43 +90,6 @@ impl ValueValidator {
                         values.0.bind(value.py()).repr()?
                     )))
                 }
-            }
-            Self::TupleItems { items } => {
-                // The number of items is checked by the type validator and
-                // the validator ensure this value validator is only ever used
-                // with the appropriate type validator
-                let py = value.py();
-                for (index, (item_res, item_validators)) in value.try_iter()?.zip(items.iter()).enumerate() {
-                    let item = item_res?;
-                    for item_validator in item_validators.iter() {
-                        item_validator.validate_value(member, object, &item)
-                            .map_err(|err| {
-                            let new = pyo3::exceptions::PyValueError::new_err(
-                                format!("Failed to validate item {index} of {value}.")
-                            );
-                            new.set_cause(py, Some(err));
-                            new
-                        })?;
-                    };
-                }
-                Ok(())
-            }
-            Self::SequenceItems { item } => {
-                let py = value.py();
-                for (index,el_res) in value.try_iter()?.enumerate() {
-                    let el = el_res?;
-                    for  ival in item.iter() {
-                        ival.validate_value(member, object, &el)
-                            .map_err(|err| {
-                            let new = pyo3::exceptions::PyValueError::new_err(
-                                format!("Failed to validate item {index} of {value}.")
-                            );
-                            new.set_cause(py, Some(err));
-                            new
-                        })?;
-                    }
-                }
-                Ok(())
             }
             Self::CallValue { callable } => callable
                 .0.bind(value.py())
@@ -173,12 +132,6 @@ impl Clone for ValueValidator {
         Python::attach(|py| match self {
             Self::Enum { values } => Self::Enum {
                 values: ValidValues(values.0.clone_ref(py)),
-            },
-            Self::TupleItems { items } => Self::TupleItems {
-                items: items.to_vec(),
-            },
-            Self::SequenceItems { item } => Self::SequenceItems {
-                item: item.to_vec(),
             },
             Self::CallValue { callable } => Self::CallValue {
                 callable: vv_callv::Callable(callable.0.clone_ref(py)),

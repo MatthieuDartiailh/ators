@@ -35,52 +35,6 @@ def test_enumerated_value_validation():
     assert "not in" in e.exconly()
 
 
-def test_tuple_value_validation():
-    class A(Ators):
-        a = member().append_value_validator(
-            ValueValidator.TupleItems(
-                [
-                    [ValueValidator.Enum(frozenset({1, 2, 3}))],
-                    [ValueValidator.Enum(frozenset({4, 5, 6}))],
-                ]
-            )
-        )
-
-    a = A()
-    a.a = (1, 4)
-    assert a.a == (1, 4)
-    a.a = (2, 5)
-    assert a.a == (2, 5)
-
-    with pytest.raises(ValueError) as e:
-        a.a = (-1, 5)
-    assert "Failed to validate item 0" in e.exconly()
-    with pytest.raises(ValueError) as e:
-        a.a = (2, -5)
-    assert "Failed to validate item 1" in e.exconly()
-
-
-def test_sequence_value_validation():
-    class A(Ators):
-        a = member().append_value_validator(
-            ValueValidator.SequenceItems([ValueValidator.Enum(frozenset({1, 2, 3}))])
-        )
-
-    a = A()
-    a.a = [1]
-    assert a.a == [1]
-    a.a = (3,)
-    assert a.a == (3,)
-
-    with pytest.raises(ValueError) as e:
-        a.a = [-1]
-    assert "Failed to validate item 0" in e.exconly()
-
-    with pytest.raises(ValueError) as e:
-        a.a = [1, -1]
-    assert "Failed to validate item 1" in e.exconly()
-
-
 def test_multiple_value_validators():
     class A(Ators):
         a = (
