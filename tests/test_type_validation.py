@@ -18,6 +18,7 @@ class OB:
     pass
 
 
+# FIXME validate error messages
 @pytest.mark.parametrize(
     "ann, goods, bads",
     [
@@ -29,7 +30,9 @@ class OB:
         (str, ["a"], [1]),
         (bytes, [b"a"], [""]),
         (OB, [OB()], [""]),
-        # XXX add tuple once the Rust impl is complete
+        (tuple, [()], [1, ""]),
+        (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)]),
+        (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")]),
     ],
 )
 def test_type_validators(ann, goods, bads):
