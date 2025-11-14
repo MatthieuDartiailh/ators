@@ -7,7 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test type validation for ators object"""
 
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -33,6 +33,7 @@ class OB:
         (tuple, [()], [1, ""]),
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)]),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")]),
+        (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"]),
     ],
 )
 def test_type_validators(ann, goods, bads):
@@ -45,7 +46,7 @@ def test_type_validators(ann, goods, bads):
         assert a.a == good
 
     for bad in bads:
-        with pytest.raises(TypeError):
+        with pytest.raises((TypeError, ValueError)):
             a.a = bad
 
 

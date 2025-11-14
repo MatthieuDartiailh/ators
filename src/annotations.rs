@@ -25,7 +25,6 @@ struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
-    generic_alias: Bound<'py, PyAny>,
     union_: Bound<'py, PyAny>,
     type_var: Bound<'py, PyAny>,
     new_type: Bound<'py, PyAny>,
@@ -87,11 +86,15 @@ fn build_validator_from_annotation<'py>(
 
     let py = name.py();
 
+    // Applicable on any type and return None for non generic types
+    // Using this rather than is_instance is easier to get right since
+    // some generics such as Literal use specific private classes.
+    let origin = tools.get_origin.call1((ann,))?;
+
     // In 3.14, Union[int, float] and int | float share the same type
-    if ann.is_instance(&tools.types.generic_alias)? {
+    if !origin.is_none() {
         // FIXME extract in a dedicated function since it will be expanded
         // to cover list, dict, Numpy.NDArray etc
-        let origin = tools.get_origin.call1((ann,))?;
         // NOTE args is always a tuple
         let args = tools.get_args.call1((ann,))?;
         // FIXME treat Literal
@@ -339,7 +342,6 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
-            generic_alias: typing_mod.getattr(intern!(py, "GenericAlias"))?,
             union_: types_mod.getattr(intern!(py, "UnionType"))?,
             type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
             new_type: typing_mod.getattr(intern!(py, "NewType"))?,
