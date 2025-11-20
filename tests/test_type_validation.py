@@ -49,6 +49,7 @@ CustomBase.register(CustomObj)
         (CustomBase, [CustomObj()], ["", 1, object()]),
         (int | str, [1, "a"], [1.0, object()]),
         (int | str | None, [1, "a", None], [1.0, object()]),
+        (int | tuple[int, int], [1, (1, 2)], [1.0, (1, 2, 3), "c", object()]),
         (int | Literal["a", "b"], [1, "a", "b"], [1.0, "c", object()]),
     ],
 )
