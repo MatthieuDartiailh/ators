@@ -13,11 +13,18 @@ from ators import Ators, member, Member
 from ators.behaviors import Coercer, coerce, coerce_init
 
 
+# XXX refactor to support all types and follow following tests to simplify
+# testing both init true and false
 @pytest.mark.parametrize(
     "ty, init, inputs, expected",
     [
         (int, False, ["1", "2"], [1, 2]),
         (int, True, ["1", "2"], [1, TypeError("")]),
+        (float, False, ["1.5", "2.5"], [1.5, 2.5]),
+        (float, True, ["1.5", "2.5"], [1.5, TypeError("")]),
+        (int | None, False, ["1", None, "2"], [1, None, 2]),
+        (int | None, True, ["1", None, "2"], [1, None, TypeError("")]),
+        # coerce for instance and typed
     ],
 )
 def test_type_inferred_coercion(ty, init, inputs, expected):

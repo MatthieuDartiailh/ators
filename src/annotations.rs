@@ -7,21 +7,22 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, Py, PyAny, PyResult, PyTypeInfo, intern,
+    Bound, FromPyObject, Py, PyAny, PyResult, PyTypeInfo, intern,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
-        PyString, PyTuple, PyTupleMethods,
+        PyString, PyTuple, PyTupleMethods, PyType,
     },
 };
 use std::collections::HashMap;
 
 use crate::{
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
-    validators::{TypeValidator, ValidValues, Validator, ValueValidator},
+    validators::{TypeValidator, ValidValues, Validator, ValueValidator, types::TypesTuple},
 };
 
 ///
 struct PyTypes<'py> {
+    type_: Bound<'py, PyAny>,
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
@@ -95,9 +96,7 @@ fn build_validator_from_annotation<'py>(
     if !origin.is_none() {
         // FIXME extract in a dedicated function since it will be expanded
         // to cover list, dict, Numpy.NDArray etc
-        // NOTE args is always a tuple
-        let args = tools.get_args.call1((ann,))?;
-        // FIXME treat Literal
+        let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
         if origin.is(&tools.types.literal) {
             Ok(Validator::new(
                 TypeValidator::Any {},
@@ -113,7 +112,6 @@ fn build_validator_from_annotation<'py>(
                 None,
             ))
         } else if origin.is(py.get_type::<PyTuple>()) {
-            let args = args.cast_into::<PyTuple>()?;
             if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
                 // VarTuple
                 let item_validator = build_validator_from_annotation(
@@ -150,8 +148,23 @@ fn build_validator_from_annotation<'py>(
                 ))
             }
         } else if origin.is(&tools.types.union_) {
-            todo!("Implement union case");
+            // FIXME: low priority
+            // merge Typed/Instance together if relevant
+            Ok(Validator::new(
+                TypeValidator::Union {
+                    members: args
+                        .iter()
+                        .map(|member| {
+                            build_validator_from_annotation(name, &member, type_containers, tools)
+                        })
+                        .collect::<PyResult<Vec<Validator>>>()?,
+                },
+                None,
+                None,
+                None,
+            ))
         } else {
+            // XXX Look for custom behavior for generic type
             // Fallback to typed and ignore args
             todo!("Implement type fallback");
         }
@@ -188,19 +201,31 @@ fn build_validator_from_annotation<'py>(
             None,
         ))
     } else {
-        //f"Failed to extract types from {kind}. "
-        // f"The extraction yielded {t} which is not a type. "
-        // "One case in which this can occur is when using unions of "
-        // "Literal, and the issues can be worked around by using a "
-        // "single literal containing all the values."
-        Ok(Validator::new(
-            TypeValidator::Typed {
-                type_: ann.clone().cast_into()?.unbind(),
-            },
-            None,
-            None,
-            None,
-        ))
+        let ty = ann.clone().cast_into::<PyType>()?;
+        let type_instance_check = tools
+            .types
+            .type_
+            .getattr(intern!(py, "__instancecheck__"))?;
+        if ty
+            .getattr(intern!(py, "__instancecheck__"))?
+            .is(type_instance_check)
+        {
+            Ok(Validator::new(
+                TypeValidator::Typed { type_: ty.unbind() },
+                None,
+                None,
+                None,
+            ))
+        } else {
+            Ok(Validator::new(
+                TypeValidator::Instance {
+                    types: TypesTuple::extract_bound(&ty)?,
+                },
+                None,
+                None,
+                None,
+            ))
+        }
     }
 }
 
@@ -339,6 +364,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         get_args: typing_mod.getattr(intern!(py, "get_args"))?,
         get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
         types: PyTypes {
+            type_: builtins_mod.getattr(intern!(py, "type"))?,
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,

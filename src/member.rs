@@ -515,7 +515,7 @@ impl MemberBuilder {
                 "Cannot build member {name} of {type_name} without an assigned slot."
             )));
         };
-        let tv = self.type_validator.unwrap_or(TypeValidator::Any {});
+        let mut tv = self.type_validator.unwrap_or(TypeValidator::Any {});
         if !self.multiple_settings.is_empty() {
             let py = type_name.py();
             let warnings_mod = py.import(intern!(py, "warnings"))?;
@@ -544,6 +544,26 @@ impl MemberBuilder {
              As a consequence, the coercer will never be invoked.",
                 &name, &type_name
             )),))?;
+        }
+
+        // For union type validators, if type inferred coercion is requested at
+        // the member level we set coercion on all union validators if no specific
+        // was set.
+        if let TypeValidator::Union { ref mut members } = tv {
+            if let Some(Coercer::TypeInferred {}) = &self.coerce {
+                for m in members.iter_mut() {
+                    if m.coercer.is_none() {
+                        m.coercer = Some(Coercer::TypeInferred {});
+                    }
+                }
+            }
+            if let Some(Coercer::TypeInferred {}) = &self.coerce_init {
+                for m in members.iter_mut() {
+                    if m.init_coercer.is_none() {
+                        m.init_coercer = Some(Coercer::TypeInferred {});
+                    }
+                }
+            }
         }
 
         Ok(Member {

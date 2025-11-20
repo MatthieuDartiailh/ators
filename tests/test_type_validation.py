@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test type validation for ators object"""
 
+from abc import ABC
 from typing import Any, Literal
 
 import pytest
@@ -16,6 +17,17 @@ from ators import Ators, member
 
 class OB:
     pass
+
+
+class CustomBase(ABC):
+    pass
+
+
+class CustomObj:
+    pass
+
+
+CustomBase.register(CustomObj)
 
 
 # FIXME validate error messages
@@ -34,6 +46,10 @@ class OB:
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)]),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")]),
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"]),
+        (CustomBase, [CustomObj()], ["", 1, object()]),
+        (int | str, [1, "a"], [1.0, object()]),
+        (int | str | None, [1, "a", None], [1.0, object()]),
+        (int | Literal["a", "b"], [1, "a", "b"], [1.0, "c", object()]),
     ],
 )
 def test_type_validators(ann, goods, bads):

@@ -14,12 +14,14 @@ use pyo3::{
 
 mod coercer;
 pub use coercer::Coercer;
-mod types;
+pub(crate) mod types;
 pub use types::TypeValidator;
 mod values;
 pub(crate) use values::ValidValues;
 pub use values::ValueValidator;
 
+// FIXME pub visibility is required to alter coercion behaviors (for Union),
+// may want a specific API later
 // NOTE There is no sanity check that value validators make sense in combination
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
@@ -41,8 +43,6 @@ impl Validator {
         coercer: Option<Coercer>,
         init_coercer: Option<Coercer>,
     ) -> Self {
-        // XXX implement coherency checks (need a helper function for nested cases)
-        // May do that in class creation
         Self {
             type_validator,
             value_validators: value_validators
@@ -95,7 +95,7 @@ impl Validator {
     ) -> PyResult<Bound<'py, PyAny>> {
         // NOTE not sure how to avoid cloning somewhere in the call chain if not here
         // We are only cloning a reference so the cost should be minimal
-        match self.strict_validate(member, object, value.clone()) {
+        match self.strict_validate(member, object, Bound::clone(&value)) {
             Ok(v) => Ok(v),
             Err(err) => {
                 if let Some(c) = &self.coercer {

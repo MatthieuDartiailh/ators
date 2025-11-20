@@ -7,13 +7,54 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, Py, PyAny, PyResult, Python,
+    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
     ffi::{PyBool_Check, PyBytes_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check},
     pyclass,
     types::{PyAnyMethods, PyDict, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
 };
+use std::convert::Infallible;
 
 use super::Validator;
+
+#[derive(Debug)]
+pub(crate) struct TypesTuple(Py<PyTuple>);
+
+impl TypesTuple {
+    ///
+    pub fn coerce<'py>(&self, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = value.py();
+        let type_ = self.0.bind(py).get_item(0)?;
+        type_.call1((value,))
+    }
+}
+
+impl FromPyObject<'_> for TypesTuple {
+    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let py = ob.py();
+        if let Ok(ty) = ob.cast::<PyType>() {
+            Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
+        } else if let Ok(s) = ob.cast::<PyTuple>()
+            && s.len() > 0
+            && s.iter().all(|item| item.is_instance_of::<PyType>())
+        {
+            Ok(TypesTuple(s.clone().unbind()))
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Expected a 'type' or 'tuple[type, ...]' for a TypeValidator.Instance, got {}",
+                ob.get_type().name()?
+            )))
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for &TypesTuple {
+    type Target = PyTuple;
+    type Output = Bound<'py, PyTuple>;
+    type Error = Infallible;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok(self.0.clone_ref(py).into_bound(py))
+    }
+}
 
 ///
 #[pyclass(frozen)]
@@ -39,17 +80,20 @@ pub enum TypeValidator {
     VarTuple { item: Option<Py<Validator>> },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
-    // #[pyo3(constructor = (members))]
-    // Union { members: Vec<Validator> },
+    #[pyo3(constructor = (types))]
+    // TypesTuple is build from a Python object and we do not need to expose
+    // it directly since it is not needed to build an Instance variant from the
+    // Python side.
+    #[allow(private_interfaces)]
+    Instance { types: TypesTuple },
+    #[pyo3(constructor = (members))]
+    Union { members: Vec<Validator> },
     // XXX need a custom type to perform init validation
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
     //     resolver: Py<PyAny>,
     // },
     // XXX need a custom type to perform init validation
-    // Instance {
-    //     types: Py<PyTuple>,
-    // },
     // XXX need a mode for union to cleanly validate list[int] | dict[int, int]
     // Sequence,
     // List,
@@ -278,6 +322,33 @@ impl TypeValidator {
                     validation_error!(t.repr()?, member, object, value)
                 }
             }
+            Self::Instance { types } => {
+                let t = types.0.bind(value.py());
+                if value.is_instance(t)? {
+                    Ok(value)
+                } else {
+                    validation_error!(t.repr()?, member, object, value)
+                }
+            }
+            Self::Union { members } => {
+                let mut err = Vec::with_capacity(members.len());
+                for v in members {
+                    match v.validate(member, object, Bound::clone(&value)) {
+                        Ok(validated) => return Ok(validated),
+                        Err(e) => err.push(e),
+                    }
+                }
+                let eg = pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Value {} is not valid for any member of the union for {:?}",
+                    value.repr()?,
+                    members
+                ));
+                eg.set_cause(
+                    value.py(),
+                    Some(pyo3::exceptions::PyBaseExceptionGroup::new_err(err)),
+                );
+                Err(eg)
+            }
         }
     }
 
@@ -320,6 +391,12 @@ impl Clone for TypeValidator {
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),
+            },
+            Self::Instance { types } => Self::Instance {
+                types: TypesTuple(types.0.clone_ref(py)),
+            },
+            Self::Union { members } => Self::Union {
+                members: members.to_vec(),
             },
         })
     }

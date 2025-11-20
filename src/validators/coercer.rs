@@ -26,7 +26,7 @@ create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueIni
 pub enum Coercer {
     #[pyo3(constructor = ())]
     TypeInferred {},
-    // XXX handle nested coercing for container by providing custom modes
+    // FIXME handle nested coercing for container by providing custom modes
     #[pyo3(constructor = (callable))]
     CallValue { callable: co_callv::Callable },
     #[pyo3(constructor = (callable))]
@@ -102,6 +102,26 @@ impl Coercer {
                     ).map(|ob| ob.as_any().clone())
                 },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
+                TypeValidator::Instance { types } => types.coerce(value),
+                TypeValidator::Union { members } => {
+                    let mut err = Vec::with_capacity(members.len());
+                    for m in members {
+                        match m.coerce_value(is_init_coercion, member, object, value) {
+                            Ok(validated) => return Ok(validated),
+                            Err(e) => err.push(e),
+                        }
+                    }
+                    let eg = pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Could not coerce value {} to any member in union {:?}",
+                        value.repr()?,
+                        members
+                    ));
+                    eg.set_cause(
+                        value.py(),
+                        Some(pyo3::exceptions::PyBaseExceptionGroup::new_err(err)),
+                    );
+                    Err(eg)
+                },
             },
             Self::CallValue { callable } => callable.0.bind(value.py()).call1((value,)),
             Self::CallMemberObjectValueInit { callable } => callable
