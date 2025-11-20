@@ -122,6 +122,9 @@ impl Coercer {
                     );
                     Err(eg)
                 },
+                TypeValidator::GenericAttributes { type_, .. } => {
+                    type_.bind(py).call1((value,))
+                }
             },
             Self::CallValue { callable } => callable.0.bind(value.py()).call1((value,)),
             Self::CallMemberObjectValueInit { callable } => callable

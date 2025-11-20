@@ -13,16 +13,16 @@ from ators import Ators, member, Member
 from ators.behaviors import ValueValidator, append_value_validator
 
 
-def test_enum_value_arg():
-    assert ValueValidator.Enum(frozenset({1, 2, 3})).values == frozenset({1, 2, 3})
-    assert ValueValidator.Enum({1, 2, 3}).values == frozenset({1, 2, 3})
+def test_values_value_arg():
+    assert ValueValidator.Values(frozenset({1, 2, 3})).values == frozenset({1, 2, 3})
+    assert ValueValidator.Values({1, 2, 3}).values == frozenset({1, 2, 3})
     with pytest.raises(TypeError):
-        ValueValidator.Enum([1, 2, 3])
+        ValueValidator.Values([1, 2, 3])
 
 
 def test_enumerated_value_validation():
     class A(Ators):
-        a = member().append_value_validator(ValueValidator.Enum(frozenset({1, 2, 3})))
+        a = member().append_value_validator(ValueValidator.Values(frozenset({1, 2, 3})))
 
     a = A()
     a.a = 1
@@ -39,8 +39,8 @@ def test_multiple_value_validators():
     class A(Ators):
         a = (
             member()
-            .append_value_validator(ValueValidator.Enum(frozenset({1, 2, 3})))
-            .append_value_validator(ValueValidator.Enum(frozenset({1, 4, 5})))
+            .append_value_validator(ValueValidator.Values(frozenset({1, 2, 3})))
+            .append_value_validator(ValueValidator.Values(frozenset({1, 4, 5})))
         )
 
     a = A()

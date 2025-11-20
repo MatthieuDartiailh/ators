@@ -88,6 +88,11 @@ pub enum TypeValidator {
     Instance { types: TypesTuple },
     #[pyo3(constructor = (members))]
     Union { members: Vec<Validator> },
+    #[pyo3(constructor = (type_, attributes))]
+    GenericAttributes {
+        type_: Py<PyType>,
+        attributes: Vec<(String, Validator)>,
+    },
     // XXX need a custom type to perform init validation
     // ForwardTyped {
     //     type_: Option<Py<PyType>>,
@@ -349,6 +354,44 @@ impl TypeValidator {
                 );
                 Err(eg)
             }
+            Self::GenericAttributes { type_, attributes } => {
+                let t = type_.bind(value.py());
+                if !value.is_instance(t)? {
+                    return validation_error!(t.repr()?, member, object, value);
+                }
+                for (attr_name, validator) in attributes {
+                    let attr_value = value.getattr(attr_name.as_str())?;
+                    // Coercing the attribute of generic type to the expected form
+                    // does not make sense in general, so we use strict_validate here
+                    match validator.strict_validate(member, object, attr_value) {
+                        Ok(_) => {}
+                        Err(cause) => {
+                            if let Some(m) = member
+                                && let Some(o) = object
+                            {
+                                let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate attribute '{}' of {} for the member {} of {}.",
+                                    attr_name,
+                                    value.repr()?,
+                                    m.borrow().name(),
+                                    o.repr()?
+                                ));
+                                exc.set_cause(value.py(), Some(cause));
+                                return Err(exc);
+                            } else {
+                                let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate attribute '{}' of {}.",
+                                    attr_name,
+                                    value.repr()?
+                                ));
+                                exc.set_cause(value.py(), Some(cause));
+                                return Err(exc);
+                            }
+                        }
+                    }
+                }
+                Ok(value)
+            }
         }
     }
 
@@ -397,6 +440,10 @@ impl Clone for TypeValidator {
             },
             Self::Union { members } => Self::Union {
                 members: members.to_vec(),
+            },
+            Self::GenericAttributes { type_, attributes } => Self::GenericAttributes {
+                type_: type_.clone_ref(py),
+                attributes: attributes.clone(),
             },
         })
     }

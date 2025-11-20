@@ -55,7 +55,7 @@ pub enum ValueValidator {
     // it directly since it is not needed to build an Enum variant from the
     // Python side.
     #[allow(private_interfaces)]
-    Enum { values: ValidValues },
+    Values { values: ValidValues },
     #[pyo3(constructor = (callable))]
     CallValue { callable: vv_callv::Callable },
     #[pyo3(constructor = (callable))]
@@ -76,7 +76,7 @@ impl ValueValidator {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {
-            Self::Enum { values } => {
+            Self::Values { values } => {
                 if values
                     .0.bind(value.py())
                     .contains(value)
@@ -130,7 +130,7 @@ impl ValueValidator {
 impl Clone for ValueValidator {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
-            Self::Enum { values } => Self::Enum {
+            Self::Values { values } => Self::Values {
                 values: ValidValues(values.0.clone_ref(py)),
             },
             Self::CallValue { callable } => Self::CallValue {

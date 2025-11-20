@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import pytest
 
-from ators import Ators, member
+from ators import Ators, member, add_generic_type_attributes
 
 
 class OB:
@@ -28,6 +28,23 @@ class CustomObj:
 
 
 CustomBase.register(CustomObj)
+
+
+class MyGen[T]:
+    a: T
+
+    def __init__(self, a: T):
+        self.a = a
+
+
+add_generic_type_attributes(MyGen, ("a",))
+
+
+class UnknownGen[T]:
+    a: T
+
+    def __init__(self, a: T):
+        self.a = a
 
 
 # FIXME validate error messages
@@ -51,6 +68,13 @@ CustomBase.register(CustomObj)
         (int | str | None, [1, "a", None], [1.0, object()]),
         (int | tuple[int, int], [1, (1, 2)], [1.0, (1, 2, 3), "c", object()]),
         (int | Literal["a", "b"], [1, "a", "b"], [1.0, "c", object()]),
+        (MyGen[int], [MyGen(1)], [MyGen("a"), MyGen(object()), 1, object()]),
+        # Should warn about unknown generic type
+        (
+            UnknownGen[int],
+            [UnknownGen(1), UnknownGen("a"), UnknownGen(object())],
+            [1, object()],
+        ),
     ],
 )
 def test_type_validators(ann, goods, bads):

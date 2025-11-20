@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-/// dd
+///
 
 ///
 macro_rules! create_behavior_callable_checker {
@@ -58,5 +58,5 @@ macro_rules! create_behavior_callable_checker {
 }
 
 pub(crate) use create_behavior_callable_checker;
-// This approach should allow to implement the equivalent of custom constructor
-// for enums which is something I will need quite a lot
+// This approach allows to implement an equivalent of custom constructor
+// for enums

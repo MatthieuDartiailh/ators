@@ -9,6 +9,7 @@
 
 from ._ators import (
     AtorsBase as _Base,
+    add_generic_type_attributes,
     init_ators as _init_ators,
     freeze,
     is_frozen,
@@ -61,6 +62,7 @@ class Ators(_Base, metaclass=_Meta):
 
 __all__ = [
     "Ators",
+    "add_generic_type_attributes",
     "freeze",
     "is_frozen",
     "member",

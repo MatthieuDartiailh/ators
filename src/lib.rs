@@ -5,7 +5,11 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-use pyo3::pymodule;
+use pyo3::{
+    Bound, Py, PyResult, Python, pymodule,
+    sync::PyOnceLock,
+    types::{PyAnyMethods, PyDict, PyTuple, PyType},
+};
 
 mod annotations;
 mod core;
@@ -14,9 +18,23 @@ mod meta;
 mod utils;
 mod validators;
 
+// XXX would prefer to have module state to do this
+// static ANNOTATIONS_TOOLS : PyOnceLock
+
+static GENERIC_ATTRIBUTES: PyOnceLock<Py<PyDict>> = PyOnceLock::new();
+
+fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+    GENERIC_ATTRIBUTES
+        .get_or_init(py, || PyDict::new(py).into())
+        .clone_ref(py)
+        .into_bound(py)
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 mod _ators {
+    use pyo3::pyfunction;
+
     use super::*;
 
     #[pymodule_export]
@@ -35,4 +53,14 @@ mod _ators {
 
     #[pymodule_export]
     use self::validators::{Coercer, TypeValidator, Validator, ValueValidator};
+
+    #[pyfunction]
+    pub(crate) fn add_generic_type_attributes<'py>(
+        py: Python<'py>,
+        type_: &Bound<'py, PyType>,
+        attributes: Bound<'py, PyTuple>,
+    ) -> PyResult<()> {
+        let map = get_generic_attributes_map(py);
+        map.set_item(type_, attributes)
+    }
 }

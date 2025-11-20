@@ -7,15 +7,17 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, FromPyObject, Py, PyAny, PyResult, PyTypeInfo, intern,
+    Bound, FromPyObject, Py, PyAny, PyErr, PyResult, PyTypeInfo, intern,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
-        PyString, PyTuple, PyTupleMethods, PyType,
+        PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
+use std::ffi::CString;
 
 use crate::{
+    get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
     validators::{TypeValidator, ValidValues, Validator, ValueValidator, types::TypesTuple},
 };
@@ -72,6 +74,7 @@ struct TypeTools<'py> {
 // NOTE I should not need is_optional since I won't rely on it for instance
 // validation
 
+///
 fn build_validator_from_annotation<'py>(
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,
@@ -100,7 +103,7 @@ fn build_validator_from_annotation<'py>(
         if origin.is(&tools.types.literal) {
             Ok(Validator::new(
                 TypeValidator::Any {},
-                Some(vec![ValueValidator::Enum {
+                Some(vec![ValueValidator::Values {
                     values: ValidValues(
                         PyFrozenSet::type_object(py)
                             .call1((args,))?
@@ -164,12 +167,52 @@ fn build_validator_from_annotation<'py>(
                 None,
             ))
         } else {
-            // XXX Look for custom behavior for generic type
-            // Fallback to typed and ignore args
-            todo!("Implement type fallback");
+            let generic_attrs = get_generic_attributes_map(py);
+            if let Some(attr_list) = generic_attrs.get_item(&origin)? {
+                let mut attributes = Vec::new();
+                for (attr_name, attr_type) in
+                    attr_list.cast_into::<PyTuple>()?.iter().zip(args.iter())
+                {
+                    let attr_name_str = attr_name.extract::<String>()?;
+                    let attr_validator = build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-{attr_name_str}")).cast()?,
+                        &attr_type,
+                        type_containers,
+                        tools,
+                    )?;
+                    attributes.push((attr_name_str, attr_validator));
+                }
+                Ok(Validator::new(
+                    TypeValidator::GenericAttributes {
+                        type_: origin.cast_into::<PyType>()?.unbind(),
+                        attributes,
+                    },
+                    None,
+                    None,
+                    None,
+                ))
+            } else {
+                let origin_name = origin.get_type().name()?;
+                PyErr::warn(
+                    py,
+                    &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                    CString::new(format!(
+                        "No specific validation strategy recorded for generic type {origin_name}.\
+                         Falling back to Typed validator."
+                    ))?
+                    .as_c_str(),
+                    0,
+                )?;
+                Ok(Validator::new(
+                    TypeValidator::Typed {
+                        type_: origin.cast_into::<PyType>()?.unbind(),
+                    },
+                    None,
+                    None,
+                    None,
+                ))
+            }
         }
-    } else if ann.is_instance(&tools.types.union_)? {
-        Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Union")) // FIXME
     } else if ann.is_instance(&tools.types.type_var)? {
         Err(pyo3::exceptions::PyTypeError::new_err(
             "Unsupported TypeVar",
