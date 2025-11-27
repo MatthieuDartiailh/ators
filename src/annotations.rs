@@ -45,6 +45,8 @@ pub(crate) struct PyTypes<'py> {
 pub(crate) struct TypeTools<'py> {
     get_origin: Bound<'py, PyAny>,
     get_args: Bound<'py, PyAny>,
+    call_evaluate_function: Bound<'py, PyAny>,
+    forwardref_format: Bound<'py, PyAny>,
     types: PyTypes<'py>,
 }
 
@@ -66,6 +68,10 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     Ok(TypeTools {
         get_args: typing_mod.getattr(intern!(py, "get_args"))?,
         get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
+        call_evaluate_function: annotationlib.getattr(intern!(py, "call_evaluate_function"))?,
+        forwardref_format: annotationlib
+            .getattr(intern!(py, "Format"))?
+            .getattr(intern!(py, "FORWARDREF"))?,
         types: PyTypes {
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
@@ -139,6 +145,17 @@ pub fn build_validator_from_annotation<'py>(
             None,
             None,
         ));
+    } else if ann.is_instance(&tools.types.type_alias)? {
+        return build_validator_from_annotation(
+            name,
+            &tools
+                .call_evaluate_function
+                .call1((ann.getattr("evaluate_value")?, &tools.forwardref_format))?
+                .cast_into()?,
+            type_containers,
+            tools,
+            ctx_provider,
+        );
     }
 
     let py = name.py();
@@ -227,10 +244,6 @@ pub fn build_validator_from_annotation<'py>(
                 None,
                 None,
             ))
-        } else if origin.is(&tools.types.type_alias) {
-            Err(pyo3::exceptions::PyTypeError::new_err(
-                "Unsupported TypeAlias",
-            )) // FIXME
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {

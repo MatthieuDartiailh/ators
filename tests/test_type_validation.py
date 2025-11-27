@@ -50,6 +50,9 @@ class UnknownGen[T]:
         self.a = a
 
 
+type MyInt = int
+
+
 # FIXME validate error messages
 @pytest.mark.parametrize(
     "ann, goods, bads",
@@ -58,6 +61,7 @@ class UnknownGen[T]:
         (Any, [1, object()], []),
         (bool, [False, True], [""]),
         (int, [0, 1, -1], [1.0, ""]),
+        (MyInt, [0, 1, -1], [1.0, ""]),
         (float, [0.0, 0.1], [1, ""]),
         (str, ["a"], [1]),
         (bytes, [b"a"], [""]),
@@ -109,9 +113,11 @@ def test_forward_ref_support_self_reference():
 @pytest.mark.parametrize(
     "resolver", [lambda: __import__("logging").__dict__, "logging", ["logging"]]
 )
-def test_forward_ref_support_callable(resolver):
+def test_forward_ref_support_callable_and_type_alias(resolver):
+    type L = Logger
+
     class A(Ators):
-        a: Logger = member().forward_ref_environment(resolver)
+        a: L = member().forward_ref_environment(resolver)
         b: Logger | int = member().forward_ref_environment(resolver)
 
     a1 = A()
