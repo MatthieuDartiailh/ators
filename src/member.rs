@@ -14,7 +14,7 @@ use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
     sync::with_critical_section2,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyString},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyModuleMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -39,6 +39,29 @@ fn clone_metadata(
                 .collect()
         })
     })
+}
+
+/// Helper class to generate a callable from a list of module names.
+///
+/// Used for forward reference environment creation.
+#[pyclass(frozen)]
+struct ForwardRefEnvironmentCallable {
+    names: Vec<Py<PyString>>,
+}
+
+#[pymethods]
+impl ForwardRefEnvironmentCallable {
+    pub fn __call__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for name in &self.names {
+            let name_bound = name.bind(py);
+            let module = py.import(name_bound)?;
+            for (key, value) in module.dict().iter() {
+                dict.set_item(key, value).unwrap();
+            }
+        }
+        Ok(dict)
+    }
 }
 
 /// A Python descriptor that defines a member of an Ators class.
@@ -200,6 +223,7 @@ impl Member {
 #[pyclass(name = "member")]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
+    // all those could be private with read-only rust accessors
     pub name: Option<String>,
     pub slot_index: Option<u8>,
     pub pre_getattr: Option<PreGetattrBehavior>,
@@ -213,6 +237,8 @@ pub struct MemberBuilder {
     pub coerce: Option<Coercer>,
     pub coerce_init: Option<Coercer>,
     pub metadata: Option<HashMap<String, Py<PyAny>>>,
+    pub forward_ref_environment_factory: Option<Py<PyAny>>,
+    // XXX callable to create locals for forward refs
     inherit: bool,
     multiple_settings: HashMap<String, u8>,
 }
@@ -458,6 +484,60 @@ impl MemberBuilder {
         }
         Ok(self_)
     }
+
+    ///
+    pub fn forward_ref_environment<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        factory_or_modules: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let mself = &mut *self_;
+        let fc;
+        if factory_or_modules.is_callable() {
+            let py = factory_or_modules.py();
+            let sig = py
+                .import(intern!(py, "inspect"))?
+                .getattr(intern!(py, "signature"))?;
+            let ob_sig_len = sig
+                .call1((&factory_or_modules,))?
+                .getattr(intern!(py, "parameters"))?
+                .len()?;
+            if ob_sig_len != 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "forward_ref_environment expect a callable taking 0 got \
+                    {factory_or_modules} which takes {ob_sig_len}."
+                )));
+            }
+            fc = factory_or_modules.unbind();
+        } else if factory_or_modules.is_exact_instance_of::<PyString>() {
+            fc = ForwardRefEnvironmentCallable {
+                names: vec![factory_or_modules.clone().cast_into::<PyString>()?.unbind()],
+            }
+            .into_py_any(factory_or_modules.py())?;
+        } else if factory_or_modules.cast::<pyo3::types::PySequence>().is_ok() {
+            fc = ForwardRefEnvironmentCallable {
+                names: factory_or_modules
+                    .try_iter()?
+                    .map(|item| Ok(item?.cast_into::<PyString>()?.unbind()))
+                    .collect::<PyResult<Vec<Py<PyString>>>>()?,
+            }
+            .into_py_any(factory_or_modules.py())?;
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "forward_ref_environment expect a callable taking 0, \
+                a class fully qualified name or a sequence of fully qualified names.",
+            ));
+        }
+
+        if mself.forward_ref_environment_factory.is_some() {
+            mself
+                .multiple_settings
+                .entry("forward_ref_environment".into())
+                .and_modify(|e| *e += 1)
+                .or_insert(2);
+        }
+        mself.forward_ref_environment_factory = Some(fc);
+        Ok(self_)
+    }
 }
 
 impl MemberBuilder {
@@ -602,6 +682,13 @@ impl Clone for MemberBuilder {
             coerce: self.coerce.clone(),
             coerce_init: self.coerce_init.clone(),
             metadata: clone_metadata(&self.metadata),
+            forward_ref_environment_factory: {
+                if let Some(fr) = self.forward_ref_environment_factory.as_ref() {
+                    Python::attach(|py| Some(fr.clone_ref(py)))
+                } else {
+                    None
+                }
+            },
             inherit: self.inherit,
             multiple_settings: self.multiple_settings.clone(),
         }

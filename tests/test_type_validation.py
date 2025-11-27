@@ -8,11 +8,14 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 import pytest
 
 from ators import Ators, member, add_generic_type_attributes
+
+if TYPE_CHECKING:
+    from logging import Logger
 
 
 class OB:
@@ -89,6 +92,38 @@ def test_type_validators(ann, goods, bads):
     for bad in bads:
         with pytest.raises((TypeError, ValueError)):
             a.a = bad
+
+
+def test_forward_ref_support_self_reference():
+    class A(Ators):
+        a: A = member()
+
+    a1 = A()
+    a2 = A()
+    a1.a = a2
+    assert a1.a is a2
+    with pytest.raises(TypeError):
+        a1.a = 5
+
+
+@pytest.mark.parametrize(
+    "resolver", [lambda: __import__("logging").__dict__, "logging", ["logging"]]
+)
+def test_forward_ref_support_callable(resolver):
+    class A(Ators):
+        a: Logger = member().forward_ref_environment(resolver)
+        b: Logger | int = member().forward_ref_environment(resolver)
+
+    a1 = A()
+    import logging
+
+    a1.a = logging.getLogger("test")
+    with pytest.raises(TypeError):
+        a1.a = 5
+    a1.b = logging.getLogger("test")
+    a1.b = 5
+    with pytest.raises(TypeError):
+        a1.b = ""
 
 
 def test_inherited_type_validator():

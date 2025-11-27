@@ -9,12 +9,16 @@
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
     ffi::{PyBool_Check, PyBytes_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check},
-    pyclass,
-    types::{PyAnyMethods, PyDict, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
+    pyclass, pymethods,
+    sync::OnceLockExt,
+    types::{
+        IntoPyDict, PyAnyMethods, PyDict, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+    },
 };
-use std::convert::Infallible;
+use std::{convert::Infallible, sync::OnceLock};
 
 use super::Validator;
+use crate::annotations::{build_validator_from_annotation, get_type_tools};
 
 #[derive(Debug)]
 pub(crate) struct TypesTuple(Py<PyTuple>);
@@ -59,6 +63,81 @@ impl<'py> IntoPyObject<'py> for &TypesTuple {
 ///
 #[pyclass(frozen)]
 #[derive(Debug)]
+
+pub(crate) struct LateResolvedValidator {
+    validator_cell: OnceLock<PyResult<Py<TypeValidator>>>,
+    forward_ref: Py<PyAny>,
+    ctx_provider: Option<Py<PyAny>>,
+    type_containers: i64,
+    name: Py<PyString>,
+}
+
+#[pymethods]
+impl LateResolvedValidator {
+    #[new]
+    pub fn new<'py>(
+        forward_ref: &Bound<'py, PyAny>,
+        ctx_provider: Option<&Bound<'py, PyAny>>,
+        type_containers: i64,
+        name: &Bound<'py, PyString>,
+    ) -> Self {
+        Self {
+            validator_cell: OnceLock::new(),
+            forward_ref: forward_ref.clone().unbind(),
+            ctx_provider: ctx_provider.map(|cp| cp.clone().unbind()),
+            type_containers,
+            name: name.clone().unbind(),
+        }
+    }
+
+    ///
+    pub fn get_validator<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, TypeValidator>> {
+        let validator = self.validator_cell.get_or_init_py_attached(py, || {
+            let typing = py.import("typing")?;
+            let evaluate_forward_ref = typing.getattr("evaluate_forward_ref")?;
+            let forward_ref = self.forward_ref.bind(py);
+            let resolved;
+            if let Some(cp) = &self.ctx_provider {
+                let ctx_provider = cp.bind(py);
+                let kwargs = [("locals", ctx_provider.call0()?)].into_py_dict(py)?;
+                resolved = evaluate_forward_ref.call((forward_ref,), Some(&kwargs))?;
+            } else {
+                resolved = evaluate_forward_ref.call1((forward_ref,))?;
+            }
+            Ok(Py::new(
+                py,
+                build_validator_from_annotation(
+                    self.name.bind(py),
+                    &resolved,
+                    self.type_containers,
+                    &get_type_tools(py)?,
+                    None,
+                )?
+                .type_validator,
+            )?)
+        });
+        match validator {
+            Ok(tv) => Ok(tv.bind(py).clone()),
+            Err(e) => Err(e.clone_ref(py)),
+        }
+    }
+}
+
+impl Clone for LateResolvedValidator {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            validator_cell: OnceLock::new(),
+            forward_ref: self.forward_ref.clone_ref(py),
+            ctx_provider: self.ctx_provider.as_ref().map(|cp| cp.clone_ref(py)),
+            type_containers: self.type_containers,
+            name: self.name.clone_ref(py),
+        })
+    }
+}
+
+///
+#[pyclass(frozen)]
+#[derive(Debug)]
 pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Any {},
@@ -93,11 +172,9 @@ pub enum TypeValidator {
         type_: Py<PyType>,
         attributes: Vec<(String, Validator)>,
     },
-    // XXX need a custom type to perform init validation
-    // ForwardTyped {
-    //     type_: Option<Py<PyType>>,
-    //     resolver: Py<PyAny>,
-    // },
+    ForwardValidator {
+        late_validator: LateResolvedValidator,
+    },
     // XXX need a custom type to perform init validation
     // XXX need a mode for union to cleanly validate list[int] | dict[int, int]
     // Sequence,
@@ -265,7 +342,10 @@ impl TypeValidator {
                 if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, titem) in tuple.iter().enumerate() {
-                        match item.get().validate(member, object, titem.clone()) {
+                        match item
+                            .borrow(value.py())
+                            .validate(member, object, titem.clone())
+                        {
                             Ok(v) => {
                                 if !v.is(item) {
                                     match &mut validated_items {
@@ -337,7 +417,7 @@ impl TypeValidator {
             }
             Self::Union { members } => {
                 let mut err = Vec::with_capacity(members.len());
-                for v in members {
+                for v in members.iter() {
                     match v.validate(member, object, Bound::clone(&value)) {
                         Ok(validated) => return Ok(validated),
                         Err(e) => err.push(e),
@@ -392,6 +472,13 @@ impl TypeValidator {
                 }
                 Ok(value)
             }
+            Self::ForwardValidator { late_validator } => {
+                let py = value.py();
+                let resolved_validator = late_validator.get_validator(py)?;
+                resolved_validator
+                    .get()
+                    .validate_type(member, object, value)
+            }
         }
     }
 
@@ -444,6 +531,9 @@ impl Clone for TypeValidator {
             Self::GenericAttributes { type_, attributes } => Self::GenericAttributes {
                 type_: type_.clone_ref(py),
                 attributes: attributes.clone(),
+            },
+            Self::ForwardValidator { late_validator } => Self::ForwardValidator {
+                late_validator: late_validator.clone(),
             },
         })
     }

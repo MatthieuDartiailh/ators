@@ -103,6 +103,13 @@ impl Coercer {
                 },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
                 TypeValidator::Instance { types } => types.coerce(value),
+                TypeValidator::ForwardValidator { late_validator } => self.coerce_value(
+                    is_init_coercion,
+                    &late_validator.get_validator(py)?.get(),
+                    member,
+                    object,
+                    value,
+                ),
                 TypeValidator::Union { members } => {
                     let mut err = Vec::with_capacity(members.len());
                     for m in members {

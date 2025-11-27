@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, FromPyObject, Py, PyAny, PyErr, PyResult, PyTypeInfo, intern,
+    Bound, Py, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
         PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
@@ -19,12 +19,13 @@ use std::ffi::CString;
 use crate::{
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
-    validators::{TypeValidator, ValidValues, Validator, ValueValidator, types::TypesTuple},
+    validators::{
+        TypeValidator, ValidValues, Validator, ValueValidator, types::LateResolvedValidator,
+    },
 };
 
 ///
-struct PyTypes<'py> {
-    type_: Bound<'py, PyAny>,
+pub(crate) struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
@@ -33,16 +34,53 @@ struct PyTypes<'py> {
     new_type: Bound<'py, PyAny>,
     forward_ref: Bound<'py, PyAny>,
     literal: Bound<'py, PyAny>,
+    type_alias: Bound<'py, PyAny>,
+    unpack: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // XXX defaultdict
 }
 
 ///
-struct TypeTools<'py> {
+pub(crate) struct TypeTools<'py> {
     get_origin: Bound<'py, PyAny>,
     get_args: Bound<'py, PyAny>,
     types: PyTypes<'py>,
+}
+
+pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyErr> {
+    let annotationlib = py.import(intern!(py, "annotationlib"))?;
+
+    let builtins_mod = py.import(intern!(py, "builtins"))?;
+    let types_mod = py.import(intern!(py, "types"))?;
+    let typing_mod = py.import(intern!(py, "typing"))?;
+
+    // FIXME This should be created only once
+    // Store the object in the _ators module namespace
+    // Require a different object not linked to the py lifetime...
+    // #[pymodule_init]
+    // fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    //     // Arbitrary code to run at the module initialization
+    //     m.add("double2", m.getattr("double")?)
+    // }
+    Ok(TypeTools {
+        get_args: typing_mod.getattr(intern!(py, "get_args"))?,
+        get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
+        types: PyTypes {
+            object: builtins_mod.getattr(intern!(py, "object"))?,
+            any: typing_mod.getattr(intern!(py, "Any"))?,
+            final_: typing_mod.getattr(intern!(py, "Final"))?,
+            union_: types_mod.getattr(intern!(py, "UnionType"))?,
+            type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
+            new_type: typing_mod.getattr(intern!(py, "NewType"))?,
+            forward_ref: annotationlib.getattr(intern!(py, "ForwardRef"))?,
+            literal: typing_mod.getattr(intern!(py, "Literal"))?,
+            type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
+            unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
+            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,  // XXX wrong module
+            // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
+        },
+    })
 }
 
 // NOTE bad idea for ators since I need to look into generic when building validators
@@ -75,17 +113,32 @@ struct TypeTools<'py> {
 // validation
 
 ///
-fn build_validator_from_annotation<'py>(
+pub fn build_validator_from_annotation<'py>(
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,
     type_containers: i64, // not sure this is worth keeping it
     tools: &TypeTools<'py>,
+    ctx_provider: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Validator> {
-    if ann.is_instance_of::<PyString>() || ann.is_instance(&tools.types.forward_ref)? {
+    if ann.is_instance_of::<PyString>() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "Str and ForwardRef annotations ({}) are not supported in ators classes",
+            "Str annotations ({}) are not supported in ators classes, use ForwardRef instead",
             ann.repr()?
         )));
+    } else if ann.is_instance(&tools.types.forward_ref)? {
+        return Ok(Validator::new(
+            TypeValidator::ForwardValidator {
+                late_validator: LateResolvedValidator::new(
+                    ann,
+                    ctx_provider,
+                    type_containers,
+                    name,
+                ),
+            },
+            None,
+            None,
+            None,
+        ));
     }
 
     let py = name.py();
@@ -122,6 +175,7 @@ fn build_validator_from_annotation<'py>(
                     &args.get_item(0).expect("Known 2-tuple"),
                     type_containers,
                     tools,
+                    ctx_provider,
                 )?;
                 Ok(Validator::new(
                     TypeValidator::VarTuple {
@@ -140,6 +194,7 @@ fn build_validator_from_annotation<'py>(
                         &item,
                         type_containers,
                         tools,
+                        ctx_provider,
                     )?;
                     items.push(item_validator);
                 }
@@ -158,7 +213,13 @@ fn build_validator_from_annotation<'py>(
                     members: args
                         .iter()
                         .map(|member| {
-                            build_validator_from_annotation(name, &member, type_containers, tools)
+                            build_validator_from_annotation(
+                                name,
+                                &member,
+                                type_containers,
+                                tools,
+                                ctx_provider,
+                            )
                         })
                         .collect::<PyResult<Vec<Validator>>>()?,
                 },
@@ -166,6 +227,12 @@ fn build_validator_from_annotation<'py>(
                 None,
                 None,
             ))
+        } else if origin.is(&tools.types.type_alias) {
+            Err(pyo3::exceptions::PyTypeError::new_err(
+                "Unsupported TypeAlias",
+            )) // FIXME
+        } else if origin.is(&tools.types.unpack) {
+            Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {
             let generic_attrs = get_generic_attributes_map(py);
             if let Some(attr_list) = generic_attrs.get_item(&origin)? {
@@ -179,6 +246,7 @@ fn build_validator_from_annotation<'py>(
                         &attr_type,
                         type_containers,
                         tools,
+                        ctx_provider,
                     )?;
                     attributes.push((attr_name_str, attr_validator));
                 }
@@ -223,6 +291,7 @@ fn build_validator_from_annotation<'py>(
             &ann.getattr(intern!(py, "__supertype__"))?,
             type_containers,
             tools,
+            ctx_provider,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok(Validator::default())
@@ -245,30 +314,12 @@ fn build_validator_from_annotation<'py>(
         ))
     } else {
         let ty = ann.clone().cast_into::<PyType>()?;
-        let type_instance_check = tools
-            .types
-            .type_
-            .getattr(intern!(py, "__instancecheck__"))?;
-        if ty
-            .getattr(intern!(py, "__instancecheck__"))?
-            .is(type_instance_check)
-        {
-            Ok(Validator::new(
-                TypeValidator::Typed { type_: ty.unbind() },
-                None,
-                None,
-                None,
-            ))
-        } else {
-            Ok(Validator::new(
-                TypeValidator::Instance {
-                    types: TypesTuple::extract_bound(&ty)?,
-                },
-                None,
-                None,
-                None,
-            ))
-        }
+        Ok(Validator::new(
+            TypeValidator::Typed { type_: ty.unbind() },
+            None,
+            None,
+            None,
+        ))
     }
 }
 
@@ -326,7 +377,16 @@ fn configure_member_builder_from_annotation<'py>(
 
     // Next analyze the annotation to build the validators (Final is not
     // permitted within container or generic).
-    let new = match build_validator_from_annotation(name, ann, type_containers, tools) {
+    let new = match build_validator_from_annotation(
+        name,
+        ann,
+        type_containers,
+        tools,
+        builder
+            .forward_ref_environment_factory
+            .as_ref()
+            .map(|f| f.bind(name.py())),
+    ) {
         Ok(v) => Ok(v),
         Err(err) => {
             let new_err = pyo3::exceptions::PyRuntimeError::new_err(
@@ -390,36 +450,10 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         }
     }?;
 
-    let builtins_mod = py.import(intern!(py, "builtins"))?;
-    let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
     let class_var = typing_mod.getattr(intern!(py, "ClassVar"))?;
 
-    // FIXME This should be created only once
-    // Store the object in the _ators module namespace
-    // Require a different object not linked to the py lifetime...
-    // #[pymodule_init]
-    // fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    //     // Arbitrary code to run at the module initialization
-    //     m.add("double2", m.getattr("double")?)
-    // }
-    let tools = TypeTools {
-        get_args: typing_mod.getattr(intern!(py, "get_args"))?,
-        get_origin: typing_mod.getattr(intern!(py, "get_origin"))?,
-        types: PyTypes {
-            type_: builtins_mod.getattr(intern!(py, "type"))?,
-            object: builtins_mod.getattr(intern!(py, "object"))?,
-            any: typing_mod.getattr(intern!(py, "Any"))?,
-            final_: typing_mod.getattr(intern!(py, "Final"))?,
-            union_: types_mod.getattr(intern!(py, "UnionType"))?,
-            type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
-            new_type: typing_mod.getattr(intern!(py, "NewType"))?,
-            forward_ref: annotationlib.getattr(intern!(py, "ForwardRef"))?,
-            literal: typing_mod.getattr(intern!(py, "Literal"))?,
-            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,  // XXX wrong module
-            // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
-        },
-    };
+    let tools = get_type_tools(py)?;
 
     let mut builders = HashMap::new();
     for (name, ann) in annotations.iter() {
