@@ -68,23 +68,6 @@ impl AtorsBase {
 }
 
 impl AtorsBase {
-    /// Get a clone (ref) of the value stored in the slot at index if any
-    pub(crate) fn get_slot<'py>(&self, index: u8, py: Python<'py>) -> Option<Py<PyAny>> {
-        self.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
-    }
-
-    /// Set the slot at index to the specified value
-    pub(crate) fn set_slot<'py>(&mut self, index: u8, value: Bound<'py, PyAny>) {
-        let py = value.py();
-        // This conversion cannot fail, so unwrap is safe
-        self.slots[index as usize].replace(value.into_py_any(py).unwrap());
-    }
-
-    /// Del the slot value at index
-    pub(crate) fn det_slot(&mut self, index: u8) {
-        self.slots[index as usize] = None;
-    }
-
     /// Check if a Ators instance is frozen
     #[inline]
     pub(crate) fn is_frozen(&self) -> bool {
@@ -92,6 +75,43 @@ impl AtorsBase {
     }
 }
 
+/// Get a clone (ref) of the value stored in the slot at index if any
+/// A critical section is used only if the object is not frozen.
+pub(crate) fn get_slot<'py>(
+    object: &Bound<'py, AtorsBase>,
+    index: u8,
+    py: Python<'py>,
+) -> Option<Py<PyAny>> {
+    let oref = object.borrow();
+    if oref.is_frozen() {
+        oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
+    } else {
+        with_critical_section(object, || {
+            oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
+        })
+    }
+}
+
+/// Set the slot at index to the specified value
+pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: Bound<'py, PyAny>) {
+    let py = object.py();
+    with_critical_section(object, || {
+        object.borrow_mut().slots[index as usize].replace(
+            value
+                .into_py_any(py)
+                .expect("Unfaillible conversion to Py<PyAny>"),
+        );
+    })
+}
+
+/// Del the slot value at index
+pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
+    with_critical_section(object, || {
+        object.borrow_mut().slots[index as usize] = None;
+    })
+}
+
+// FIXME move once #[init] has landed
 #[pyfunction]
 pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>) -> PyResult<()> {
     let members = self_.getattr(ATORS_MEMBERS)?;
@@ -156,7 +176,7 @@ pub fn get_members_by_tag<'py>(
     let py = obj.py();
     let members = PyDict::new(obj.py());
     for (k, v) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
-        if let Some(m) = v.cast::<Member>().unwrap().get().metadata()
+        if let Some(m) = v.cast::<Member>()?.get().metadata()
             && m.contains_key(&tag)
         {
             members.set_item(&k, (v.clone(), m[&tag].clone_ref(py)))?;
@@ -174,7 +194,7 @@ pub fn get_members_by_tag_and_value<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
     for (k, member) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
-        if let Some(m) = member.cast::<Member>().unwrap().get().metadata()
+        if let Some(m) = member.cast::<Member>()?.get().metadata()
             && m.contains_key(&tag)
             // If comparison fails the member should not be included
             && value.as_any().eq(&m[&tag]).unwrap_or(false)

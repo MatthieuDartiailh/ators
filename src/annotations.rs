@@ -361,7 +361,9 @@ fn configure_member_builder_from_annotation<'py>(
             builder,
             name,
             // SAFETY we just checked the tuple did contains one element
-            &args.get_item(0).unwrap(),
+            &args
+                .get_item(0)
+                .expect("The tuple is known to have one element as per previous check"),
             type_containers,
             tools,
             true,

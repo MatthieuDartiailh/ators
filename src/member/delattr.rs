@@ -27,7 +27,7 @@ impl DelattrBehavior {
     ) -> pyo3::PyResult<()> {
         match self {
             Self::Slot {} => {
-                object.borrow_mut().det_slot(member.borrow().index());
+                crate::core::del_slot(object, member.borrow().index());
                 Ok(())
             }
             Self::Undeletable {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(

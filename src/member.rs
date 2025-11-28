@@ -7,13 +7,12 @@
 |----------------------------------------------------------------------------*/
 ///
 use crate::{
-    core::AtorsBase,
+    core::{AtorsBase, get_slot, set_slot},
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
     Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
     pyclass, pymethods,
-    sync::with_critical_section2,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyModuleMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
@@ -57,7 +56,8 @@ impl ForwardRefEnvironmentCallable {
             let name_bound = name.bind(py);
             let module = py.import(name_bound)?;
             for (key, value) in module.dict().iter() {
-                dict.set_item(key, value).unwrap();
+                dict.set_item(key, value)
+                    .expect("Setting item in dict cannot fail when key is known to be a string.");
             }
         }
         Ok(dict)
@@ -145,26 +145,24 @@ impl Member {
         // We access the descriptor through an instance so we return the value
         } else {
             let member = self_.into_pyobject(py)?;
-            with_critical_section2(member.as_any(), object.as_any(), || {
-                let object = object.cast::<crate::core::AtorsBase>()?;
-                let m_ref = member.borrow();
-                m_ref.pre_getattr.pre_get(&member, object)?;
-                let slot_value = { object.borrow().get_slot(m_ref.slot_index, object.py()) };
-                let value = match slot_value {
-                    Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
-                    None => {
-                        // Attempt to create a default value
-                        let default = m_ref.default.default(&member, object)?;
-                        let new = m_ref
-                            .validator
-                            .validate(Some(&member), Some(object), default)?;
-                        object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
-                        new
-                    }
-                };
-                m_ref.post_getattr.post_get(&member, object, &value)?;
-                Ok(value)
-            })
+            let object = object.cast::<crate::core::AtorsBase>()?;
+            let m_ref = member.borrow();
+            m_ref.pre_getattr.pre_get(&member, object)?;
+            let slot_value = { get_slot(object, m_ref.slot_index, object.py()) };
+            let value = match slot_value {
+                Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
+                None => {
+                    // Attempt to create a default value
+                    let default = m_ref.default.default(&member, object)?;
+                    let new = m_ref
+                        .validator
+                        .validate(Some(&member), Some(object), default)?;
+                    set_slot(object, m_ref.slot_index, new.clone());
+                    new
+                }
+            };
+            m_ref.post_getattr.post_get(&member, object, &value)?;
+            Ok(value)
         }
     }
 
@@ -175,34 +173,32 @@ impl Member {
     ) -> PyResult<()> {
         let py = self_.py();
         let member = self_.into_pyobject(py)?;
-        with_critical_section2(member.as_any(), object.as_any(), || {
-            let m_ref = member.borrow();
-            let object = object.cast::<crate::core::AtorsBase>()?;
-            let current = object.borrow().get_slot(m_ref.slot_index, py);
+        let m_ref = member.borrow();
+        let object = object.cast::<crate::core::AtorsBase>()?;
+        let current = get_slot(&object, m_ref.slot_index, py);
 
-            // Validate it is legitimate to attempt to set the member
-            m_ref.pre_setattr.pre_set(&member, object, &current)?;
+        // Check the frozen bit of the object
+        if object.borrow().is_frozen() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot modify {} which is frozen.",
+                object.repr()?
+            )));
+        }
 
-            // Check the frozen bit of the object
-            if object.borrow().is_frozen() {
-                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Cannot modify {} which is frozen.",
-                    object.repr()?
-                )));
-            }
+        // Validate it is legitimate to attempt to set the member
+        m_ref.pre_setattr.pre_set(&member, object, &current)?;
 
-            // Validate the new value
-            let new = m_ref
-                .validator
-                .validate(Some(&member), Some(object), value)?; // XXX Need to map the error
-            object.borrow_mut().set_slot(m_ref.slot_index, new.clone());
+        // Validate the new value
+        let new = m_ref
+            .validator
+            .validate(Some(&member), Some(object), value)?; // XXX Need to map the error
+        set_slot(object, m_ref.slot_index, new.clone());
 
-            m_ref
-                .post_setattr
-                .post_set(&member, object, &current, &new)?;
+        m_ref
+            .post_setattr
+            .post_set(&member, object, &current, &new)?;
 
-            Ok(())
-        })
+        Ok(())
     }
 
     pub fn __delete__<'py>(
@@ -211,12 +207,8 @@ impl Member {
     ) -> pyo3::PyResult<()> {
         let py = self_.py();
         let member = self_.into_pyobject(py)?;
-        with_critical_section2(member.as_any(), object.as_any(), || {
-            let object = object.cast::<crate::core::AtorsBase>()?;
-
-            // Validate it is legitimate to attempt to set the member
-            member.borrow().delattr.del(&member, object)
-        })
+        let object = object.cast::<crate::core::AtorsBase>()?;
+        member.borrow().delattr.del(&member, object)
     }
 }
 
@@ -238,7 +230,6 @@ pub struct MemberBuilder {
     pub coerce_init: Option<Coercer>,
     pub metadata: Option<HashMap<String, Py<PyAny>>>,
     pub forward_ref_environment_factory: Option<Py<PyAny>>,
-    // XXX callable to create locals for forward refs
     inherit: bool,
     multiple_settings: HashMap<String, u8>,
 }
@@ -267,8 +258,13 @@ impl MemberBuilder {
         if let Some(tags) = tags
             && let Some(d) = &mut self_.metadata
         {
-            // tags are keyword args so keys are guaranteed to be strings making unwrap safe
-            d.extend(tags.iter().map(|(k, v)| (k.extract().unwrap(), v.unbind())));
+            d.extend(tags.iter().map(|(k, v)| {
+                (
+                    k.extract()
+                        .expect("Tags keys are string by construction making unwrap safe"),
+                    v.unbind(),
+                )
+            }));
         };
         Ok(self_)
     }

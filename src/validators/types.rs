@@ -299,7 +299,11 @@ impl TypeValidator {
                                         None => {
                                             let mut vec = Vec::with_capacity(t_length);
                                             for i in 0..index {
-                                                vec.push(tuple.get_item(i).unwrap());
+                                                vec.push(
+                                                    tuple.get_item(i).expect(
+                                                        "All indexes are known to be valid.",
+                                                    ),
+                                                );
                                             }
                                             vec.push(v);
                                             validated_items = Some(vec);
@@ -353,7 +357,11 @@ impl TypeValidator {
                                         None => {
                                             let mut vec = Vec::with_capacity(tuple.len());
                                             for i in 0..index {
-                                                vec.push(tuple.get_item(i).unwrap());
+                                                vec.push(
+                                                    tuple.get_item(i).expect(
+                                                        "All indexes are known to be valid.",
+                                                    ),
+                                                );
                                             }
                                             vec.push(v);
                                             validated_items = Some(vec);

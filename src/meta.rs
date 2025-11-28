@@ -109,9 +109,13 @@ fn make_unknown_method_error<'py>(
     pyo3::exceptions::PyTypeError::new_err(format!(
         "Member {member_name} {behavior_name} behavior reference method {} \
         which does not exist. Known methods are {}",
-        // SAFETY string and set of string is safe to get a repr from
-        meth_name.bind(methods.py()).repr().unwrap(),
-        methods.repr().unwrap()
+        meth_name
+            .bind(methods.py())
+            .repr()
+            .expect("String is safe to get a repr from."),
+        methods
+            .repr()
+            .expect("Set of string is safe to get a repr from.")
     ))
 }
 
@@ -142,7 +146,11 @@ pub fn create_ators_subclass<'py>(
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
-    if enable_weakrefs && !mro.iter().any(|b| b.hasattr(slot_name).unwrap()) {
+    if enable_weakrefs
+        && !mro
+            .iter()
+            .any(|b| b.hasattr(slot_name).expect("Hasattr cannot fail."))
+    {
         dct.set_item(slot_name, (intern!(py, "__weakref__"),))?;
     } else {
         dct.set_item(slot_name, ())?;
@@ -198,11 +206,13 @@ pub fn create_ators_subclass<'py>(
                     .iter()
                     // SAFETY we know k is a string and that checking if it is in
                     // the set of specific member is safe.
-                    .filter(|(k, _)| spm.contains(k).unwrap())
+                    .filter(|(k, _)| spm.contains(k).expect("Checking str in set[str] is safe"))
                     .map(|(k, v)| {
                         (
-                            k.extract::<String>().unwrap(),
-                            v.cast_into::<Member>().unwrap(),
+                            k.extract::<String>()
+                                .expect("__ators_members__ keys should only be keys"),
+                            v.cast_into::<Member>()
+                                .expect("__ators_members__ values should only be Member"),
                         )
                     }),
             );
@@ -254,7 +264,9 @@ pub fn create_ators_subclass<'py>(
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
                     "'{k}' and '{}' are assigned the same member which is not supported",
                     // SAFETY we checked the key is in the HashMap so unwrapping is safe.
-                    unannotated_member_builder_ids.get(&mb_id).unwrap()
+                    unannotated_member_builder_ids
+                        .get(&mb_id)
+                        .expect("Key is known to be in the map")
                 )));
             }
             let name: String = k.extract()?;
