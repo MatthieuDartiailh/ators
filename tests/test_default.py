@@ -38,6 +38,24 @@ def test_static_default():
     assert a.a == 2
 
 
+def test_static_set_default():
+    default = {2}
+
+    class A(Ators):
+        a: set[int] = default
+
+    a = A()
+    assert a.a == default
+    assert a.a is not default  # Ensure a copy is made
+
+    class B(Ators):
+        a: set[int] = member().default(default)
+
+    a = B()
+    assert a.a == default
+    assert a.a is not default  # Ensure a copy is made
+
+
 def test_call_default():
     i = 0
 

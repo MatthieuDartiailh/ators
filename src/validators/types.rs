@@ -12,7 +12,8 @@ use pyo3::{
     pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyFrozenSetMethods, PySet, PySetMethods, PyString,
+        PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{convert::Infallible, sync::OnceLock};
@@ -64,7 +65,7 @@ impl<'py> IntoPyObject<'py> for &TypesTuple {
 #[pyclass(frozen)]
 #[derive(Debug)]
 
-pub(crate) struct LateResolvedValidator {
+pub struct LateResolvedValidator {
     validator_cell: OnceLock<PyResult<Py<TypeValidator>>>,
     forward_ref: Py<PyAny>,
     ctx_provider: Option<Py<PyAny>>,
@@ -175,16 +176,16 @@ pub enum TypeValidator {
     ForwardValidator {
         late_validator: LateResolvedValidator,
     },
-    // XXX need a custom type to perform init validation
-    // XXX need a mode for union to cleanly validate list[int] | dict[int, int]
+    #[pyo3(constructor = (item))]
+    FrozenSet { item: Option<Py<Validator>> },
+    #[pyo3(constructor = (item))]
+    Set { item: Option<Py<Validator>> },
     // Sequence,
     // List,
-    // FrozenSet,
-    // Set,
     // Mapping,
     // Dict,
     // DefaultDict,
-    // NumpyArray,
+    // OrderedDict,
     // Callable,
 }
 
@@ -407,6 +408,126 @@ impl TypeValidator {
                     validation_error!("tuple", member, object, value)
                 }
             }
+            Self::FrozenSet { item: Some(item) } => {
+                if let Ok(fset) = value.cast_exact::<pyo3::types::PyFrozenSet>() {
+                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                    for (index, titem) in fset.iter().enumerate() {
+                        match item
+                            .borrow(value.py())
+                            .validate(member, object, titem.clone())
+                        {
+                            Ok(v) => {
+                                if !v.is(item) {
+                                    match &mut validated_items {
+                                        Some(vec) => vec.push(v),
+                                        None => {
+                                            let mut vec = Vec::with_capacity(fset.len());
+                                            for i in 0..index {
+                                                vec.push(
+                                                    fset.get_item(i).expect(
+                                                        "All indexes are known to be valid.",
+                                                    ),
+                                                );
+                                            }
+                                            vec.push(v);
+                                            validated_items = Some(vec);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(cause) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {} for the member {} of {}.",
+                                        index,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {index}.",
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                }
+                            }
+                        }
+                    }
+                    Ok(if let Some(vi) = validated_items {
+                        pyo3::types::PyFrozenSet::new(value.py(), vi)?.into_any()
+                    } else {
+                        value
+                    })
+                } else {
+                    validation_error!("frozenset", member, object, value)
+                }
+            }
+            Self::FrozenSet { item: None } => {
+                if value.cast_exact::<pyo3::types::PyFrozenSet>().is_ok() {
+                    Ok(value)
+                } else {
+                    validation_error!("frozenset", member, object, value)
+                }
+            }
+            Self::Set { item: Some(item) } => {
+                // FIXME add a fast path for ATorsSet with matching object and memeber
+                if let Ok(set) = value.cast::<pyo3::types::PySet>() {
+                    let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
+                    for (index, titem) in set.iter().enumerate() {
+                        match item
+                            .borrow(value.py())
+                            .validate(member, object, titem.clone())
+                        {
+                            Ok(v) => validated_items.push(v),
+                            Err(cause) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {} for the member {} of {}.",
+                                        index,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {index}.",
+                                    ));
+                                    exc.set_cause(value.py(), Some(cause));
+                                    return Err(exc);
+                                }
+                            }
+                        }
+                    }
+                    Ok({
+                        let py = value.py();
+                        crate::containers::AtorsSet::new(
+                            py,
+                            item.extract(py)?,
+                            member.map(|m| m.clone().unbind()),
+                            object.map(|m| m.clone().unbind()),
+                            validated_items,
+                        )?
+                        .into_any()
+                    })
+                } else {
+                    validation_error!("set", member, object, value)
+                }
+            }
+            Self::Set { item: None } => {
+                if let Ok(v) = value.cast::<pyo3::types::PySet>() {
+                    // Preserve the copy on assignment semantic
+                    PySet::new(v.py(), v.iter()).map(|s| s.into_any())
+                } else {
+                    validation_error!("set", member, object, value)
+                }
+            }
             Self::Typed { type_ } => {
                 let t = type_.bind(value.py());
                 if value.is_instance(t)? {
@@ -525,6 +646,12 @@ impl Clone for TypeValidator {
                 items: items.to_vec(),
             },
             Self::VarTuple { item } => Self::VarTuple {
+                item: item.as_ref().map(|inner| inner.clone_ref(py)),
+            },
+            Self::FrozenSet { item } => Self::FrozenSet {
+                item: item.as_ref().map(|inner| inner.clone_ref(py)),
+            },
+            Self::Set { item } => Self::Set {
                 item: item.as_ref().map(|inner| inner.clone_ref(py)),
             },
             Self::Typed { type_ } => Self::Typed {

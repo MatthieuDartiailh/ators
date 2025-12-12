@@ -288,6 +288,9 @@ impl MemberBuilder {
             Ok(b) => mself.default = Some(b.as_any().extract()?),
             Err(_) => {
                 mself.default = Some(DefaultBehavior::Static {
+                    // For mutable containers we will always create a new instance
+                    // as part of the validation process so we can use a static value
+                    // approach here.
                     value: default_behavior.unbind(),
                 })
             }

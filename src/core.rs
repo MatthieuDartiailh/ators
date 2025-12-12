@@ -226,5 +226,3 @@ pub fn get_members_by_tag_and_value<'py>(
 //         return obj.borrow().notification_enabled;
 //     })
 // }
-
-// XXX add member access functions (with tag filtering)

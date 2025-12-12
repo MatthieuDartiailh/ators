@@ -12,6 +12,7 @@ use pyo3::{
 };
 
 mod annotations;
+mod containers;
 mod core;
 mod member;
 mod meta;

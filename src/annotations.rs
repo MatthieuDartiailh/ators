@@ -9,7 +9,7 @@
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
     types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
+        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt, PySet,
         PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
@@ -38,7 +38,7 @@ pub(crate) struct PyTypes<'py> {
     unpack: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
-    // XXX defaultdict
+    // FIXME defaultdict
 }
 
 ///
@@ -83,7 +83,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
-            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,  // XXX wrong module
+            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
     })
@@ -222,6 +222,48 @@ pub fn build_validator_from_annotation<'py>(
                     None,
                 ))
             }
+        } else if origin.is(py.get_type::<PyFrozenSet>()) {
+            let item_val = if let Ok(item_arg) = args.get_item(0) {
+                Some(Py::new(
+                    py,
+                    build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-item")).cast()?,
+                        &item_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                    )?,
+                )?)
+            } else {
+                None
+            };
+            Ok(Validator::new(
+                TypeValidator::FrozenSet { item: item_val },
+                None,
+                None,
+                None,
+            ))
+        } else if origin.is(py.get_type::<PySet>()) {
+            let item_val = if let Ok(item_arg) = args.get_item(0) {
+                Some(Py::new(
+                    py,
+                    build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-item")).cast()?,
+                        &item_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                    )?,
+                )?)
+            } else {
+                None
+            };
+            Ok(Validator::new(
+                TypeValidator::Set { item: item_val },
+                None,
+                None,
+                None,
+            ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant

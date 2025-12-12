@@ -9,8 +9,8 @@
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
     types::{
-        PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PySequence, PySequenceMethods, PyString,
-        PyTuple,
+        PyAnyMethods, PyBool, PyBytes, PyFloat, PyFrozenSet, PyInt, PySequence, PySequenceMethods,
+        PySet, PyString, PyTuple,
     },
 };
 
@@ -86,6 +86,44 @@ impl Coercer {
                 TypeValidator::VarTuple { item } => {
                     let temp = value.cast::<PySequence>()?;
                     PyTuple::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::FrozenSet { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    PyFrozenSet::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::Set { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    // FIXME create the right container upfront so that we can use
+                    // a fast validation path
+                    PySet::new(
                         py,
                         temp
                         .try_iter()?
