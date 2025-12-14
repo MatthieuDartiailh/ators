@@ -17,6 +17,8 @@ use pyo3::{
 };
 use std::{clone::Clone, collections::HashMap};
 
+use crate::utils::err_with_cause;
+
 mod default;
 mod delattr;
 mod getattr;
@@ -147,21 +149,75 @@ impl Member {
             let member = self_.into_pyobject(py)?;
             let object = object.cast::<crate::core::AtorsBase>()?;
             let m_ref = member.borrow();
-            m_ref.pre_getattr.pre_get(&member, object)?;
+
+            // Run pre getattr behavior
+            if let Err(e) = m_ref.pre_getattr.pre_get(&member, object) {
+                return Err(err_with_cause(
+                    py,
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "pre-get failed for member '{}' of {}",
+                        member.get().name,
+                        object.repr()?,
+                    )),
+                    e,
+                ));
+            };
+
+            // Get the value from the slot and build a default value if needed
             let slot_value = { get_slot(object, m_ref.slot_index, object.py()) };
             let value = match slot_value {
                 Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
                 None => {
                     // Attempt to create a default value
-                    let default = m_ref.default.default(&member, object)?;
-                    let new = m_ref
+                    let default = match m_ref.default.default(&member, object) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                                    "Failed to get default value for member '{}' of {}",
+                                    member.get().name,
+                                    object.repr()?,
+                                )),
+                                e,
+                            ));
+                        }
+                    };
+                    // Validate and set the default value
+                    let new = match m_ref
                         .validator
-                        .validate(Some(&member), Some(object), default)?;
+                        .validate(Some(&member), Some(object), default)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                                    "Failed to validate default value for member '{}' of {}",
+                                    member.get().name,
+                                    object.repr()?,
+                                )),
+                                e,
+                            ));
+                        }
+                    };
                     set_slot(object, m_ref.slot_index, new.clone());
                     new
                 }
             };
-            m_ref.post_getattr.post_get(&member, object, &value)?;
+
+            // Run post getattr behavior
+            if let Err(e) = m_ref.post_getattr.post_get(&member, object, &value) {
+                return Err(err_with_cause(
+                    py,
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "post-get failed for member '{}' of {}",
+                        member.get().name,
+                        object.repr()?,
+                    )),
+                    e,
+                ));
+            };
             Ok(value)
         }
     }
@@ -175,7 +231,7 @@ impl Member {
         let member = self_.into_pyobject(py)?;
         let m_ref = member.borrow();
         let object = object.cast::<crate::core::AtorsBase>()?;
-        let current = get_slot(&object, m_ref.slot_index, py);
+        let current = get_slot(object, m_ref.slot_index, py);
 
         // Check the frozen bit of the object
         if object.borrow().is_frozen() {
@@ -186,17 +242,46 @@ impl Member {
         }
 
         // Validate it is legitimate to attempt to set the member
-        m_ref.pre_setattr.pre_set(&member, object, &current)?;
+        if let Err(e) = m_ref.pre_setattr.pre_set(&member, object, &current) {
+            return Err(err_with_cause(
+                py,
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "pre-set failed for member '{}' of {}",
+                    member.get().name,
+                    object.repr()?,
+                )),
+                e,
+            ));
+        };
 
         // Validate the new value
-        let new = m_ref
-            .validator
-            .validate(Some(&member), Some(object), value)?; // XXX Need to map the error
+        let new = match m_ref.validator.validate(Some(&member), Some(object), value) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(err_with_cause(
+                    py,
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Validation failed for member '{}' of {}",
+                        member.get().name,
+                        object.repr()?,
+                    )),
+                    e,
+                ));
+            }
+        };
         set_slot(object, m_ref.slot_index, new.clone());
 
-        m_ref
-            .post_setattr
-            .post_set(&member, object, &current, &new)?;
+        if let Err(e) = m_ref.post_setattr.post_set(&member, object, &current, &new) {
+            return Err(err_with_cause(
+                py,
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "post-set failed for member '{}' of {}",
+                    member.get().name,
+                    object.repr()?,
+                )),
+                e,
+            ));
+        };
 
         Ok(())
     }
@@ -210,6 +295,8 @@ impl Member {
         let object = object.cast::<crate::core::AtorsBase>()?;
         member.borrow().delattr.del(&member, object)
     }
+
+    // XXX because the class is frozen I cannot implement clear....
 }
 
 #[pyclass(name = "member")]
@@ -247,6 +334,7 @@ impl MemberBuilder {
         Ok(self_)
     }
 
+    ///
     #[pyo3(signature = (**tags))]
     pub fn tag<'py>(
         mut self_: PyRefMut<'py, Self>,
