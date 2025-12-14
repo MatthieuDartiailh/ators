@@ -23,6 +23,23 @@ from ._ators import (
 from ._meta import AtorsMeta as _Meta
 
 
+# Register generic type attributes for numpy ndarray if numpy is available
+try:
+    import numpy as np
+
+    add_generic_type_attributes(np.ndarray, ("shape", "dtype"))
+except ImportError:
+    pass
+
+# Register generic type attributes for pint Quantity if pint is available
+try:
+    from pint import Quantity
+
+    add_generic_type_attributes(Quantity, ("_magnitude",))
+except ImportError:
+    pass
+
+
 def __newobj__(cls, *args):
     """A compatibility pickler function.
 
