@@ -19,6 +19,7 @@ use std::ffi::CString;
 use crate::{
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
+    utils::err_with_cause,
     validators::{
         TypeValidator, ValidValues, Validator, ValueValidator, types::LateResolvedValidator,
     },
@@ -480,17 +481,15 @@ fn configure_member_builder_from_annotation<'py>(
             .map(|f| f.bind(name.py())),
     ) {
         Ok(v) => Ok(v),
-        Err(err) => {
-            let new_err = pyo3::exceptions::PyRuntimeError::new_err(
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Failed to build validator for member {} from annotation {}",
-                    name,
-                    ann.repr()?,
-                )),
-            );
-            new_err.set_cause(name.py(), Some(err));
-            Err(new_err)
-        }
+        Err(err) => Err(err_with_cause(
+            name.py(),
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to build validator for member {} from annotation {}",
+                name,
+                ann.repr()?,
+            )),
+            err,
+        )),
     }?;
 
     // Set the type validator
@@ -587,11 +586,13 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             false,
         )
         .map_err(|err| {
-            let new_err = pyo3::exceptions::PyTypeError::new_err(format!(
-                "Failed to configure Member {name} from annotation {ann:?}"
-            ));
-            new_err.set_cause(py, Some(err));
-            new_err
+            err_with_cause(
+                py,
+                pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Failed to configure Member {name} from annotation {ann:?}"
+                )),
+                err,
+            )
         })?;
 
         // Set the member name

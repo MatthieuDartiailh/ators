@@ -321,20 +321,24 @@ impl TypeValidator {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {} for the member {} of {}.",
-                                        index,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {index}.",
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 }
                             }
                         }
@@ -379,20 +383,24 @@ impl TypeValidator {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {} for the member {} of {}.",
-                                        index,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {index}.",
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 }
                             }
                         }
@@ -444,20 +452,24 @@ impl TypeValidator {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {} for the member {} of {}.",
-                                        index,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {index}.",
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 }
                             }
                         }
@@ -490,20 +502,24 @@ impl TypeValidator {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {} for the member {} of {}.",
-                                        index,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate item {index}.",
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
                                     ));
-                                    exc.set_cause(value.py(), Some(cause));
-                                    return Err(exc);
                                 }
                             }
                         }
@@ -548,44 +564,52 @@ impl TypeValidator {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate key '{}' for the member {} of {}.",
-                                        tk.repr()?,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}' for the member {} of {}.",
+                                            tk.repr()?,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        err,
                                     ));
-                                    exc.set_cause(value.py(), Some(err));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate key '{}'.",
-                                        tk.repr()?,
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}'.",
+                                            tk.repr()?,
+                                        )),
+                                        err,
                                     ));
-                                    exc.set_cause(value.py(), Some(err));
-                                    return Err(exc);
                                 }
                             }
                             (Ok(_), Err(err)) => {
                                 if let Some(m) = member
                                     && let Some(o) = object
                                 {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate value '{}' with key '{}' for the member {} of {}.",
-                                        tv.repr()?,
-                                        tk.repr()?,
-                                        m.borrow().name(),
-                                        o.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                            m.borrow().name(),
+                                            o.repr()?
+                                        )),
+                                        err,
                                     ));
-                                    exc.set_cause(value.py(), Some(err));
-                                    return Err(exc);
                                 } else {
-                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Failed to validate value '{}' with key '{}'.",
-                                        tk.repr()?,
-                                        tv.repr()?
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}'.",
+                                            tk.repr()?,
+                                            tv.repr()?
+                                        )),
+                                        err,
                                     ));
-                                    exc.set_cause(value.py(), Some(err));
-                                    return Err(exc);
                                 }
                             }
                         }
@@ -643,11 +667,11 @@ impl TypeValidator {
                     value.repr()?,
                     members
                 ));
-                eg.set_cause(
+                return Err(crate::utils::err_with_cause(
                     value.py(),
-                    Some(pyo3::exceptions::PyBaseExceptionGroup::new_err(err)),
-                );
-                Err(eg)
+                    eg,
+                    pyo3::exceptions::PyBaseExceptionGroup::new_err(err),
+                ));
             }
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());
@@ -664,23 +688,27 @@ impl TypeValidator {
                             if let Some(m) = member
                                 && let Some(o) = object
                             {
-                                let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                    "Failed to validate attribute '{}' of {} for the member {} of {}.",
-                                    attr_name,
-                                    value.repr()?,
-                                    m.borrow().name(),
-                                    o.repr()?
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {} for the member {} of {}.",
+                                        attr_name,
+                                        value.repr()?,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    )),
+                                    cause,
                                 ));
-                                exc.set_cause(value.py(), Some(cause));
-                                return Err(exc);
                             } else {
-                                let exc = pyo3::exceptions::PyTypeError::new_err(format!(
-                                    "Failed to validate attribute '{}' of {}.",
-                                    attr_name,
-                                    value.repr()?
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {}.",
+                                        attr_name,
+                                        value.repr()?
+                                    )),
+                                    cause,
                                 ));
-                                exc.set_cause(value.py(), Some(cause));
-                                return Err(exc);
                             }
                         }
                     }

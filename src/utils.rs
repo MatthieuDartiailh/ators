@@ -10,7 +10,13 @@
 ///
 use pyo3::{PyErr, PyResult, Python};
 
-// Copied from pypo3 internals
+///
+pub(crate) fn err_with_cause<'py>(py: Python<'py>, err: PyErr, cause: PyErr) -> PyErr {
+    err.set_cause(py, Some(cause));
+    err
+}
+
+// Copied from pyo3 internals
 
 /// Returns Ok if the error code is not -1.
 #[inline]

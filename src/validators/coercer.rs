@@ -16,7 +16,7 @@ use pyo3::{
 };
 
 use super::TypeValidator;
-use crate::utils::create_behavior_callable_checker;
+use crate::utils::{create_behavior_callable_checker, err_with_cause};
 
 create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueInit, 4);
@@ -198,16 +198,17 @@ impl Coercer {
                             Err(e) => err.push(e),
                         }
                     }
-                    let eg = pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Could not coerce value {} to any member in union {:?}",
-                        value.repr()?,
-                        members
-                    ));
-                    eg.set_cause(
-                        value.py(),
-                        Some(pyo3::exceptions::PyBaseExceptionGroup::new_err(err)),
-                    );
-                    Err(eg)
+                    Err(
+                        err_with_cause(
+                            value.py(),
+                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Could not coerce value {} to any member in union {:?}",
+                                value.repr()?,
+                                members
+                            )),
+                            pyo3::exceptions::PyBaseExceptionGroup::new_err(err)
+                        )
+                    )
                 },
                 TypeValidator::GenericAttributes { type_, .. } => {
                     type_.bind(py).call1((value,))
