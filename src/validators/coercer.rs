@@ -22,7 +22,7 @@ create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallMemberObjectValueInit, 4);
 
 ///
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Debug)]
 pub enum Coercer {
     #[pyo3(constructor = ())]

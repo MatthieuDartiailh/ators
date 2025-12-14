@@ -25,7 +25,7 @@ pub use values::ValueValidator;
 // NOTE There is no sanity check that value validators make sense in combination
 // with the type validator since arbitrary code (member method, object method)
 // prevent any truly meaningful validation
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Debug)]
 pub struct Validator {
     pub type_validator: TypeValidator,

@@ -16,7 +16,7 @@ use crate::{core::AtorsBase, member::Member, validators::Validator};
 // #[pyclass(extends=PyList)]
 // struct AtorsList;
 
-#[pyclass(extends=PySet)]
+#[pyclass(module = "_ators", extends=PySet)]
 pub struct AtorsSet {
     validator: Validator,
     member: Option<Py<Member>>,
@@ -138,7 +138,7 @@ impl AtorsSet {
 
 // XXX validators do not need to be optional since type annotations mandate to
 // specify both key and value type
-#[pyclass(extends=PyDict)]
+#[pyclass(module = "_ators", extends=PyDict)]
 pub struct AtorsDict {
     key_validator: Validator,
     value_validator: Validator,

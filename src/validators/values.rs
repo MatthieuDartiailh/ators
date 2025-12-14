@@ -47,7 +47,7 @@ impl<'py> IntoPyObject<'py> for &ValidValues {
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Debug)]
 pub enum ValueValidator {
     #[pyo3(constructor = (values))]

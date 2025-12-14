@@ -9,7 +9,7 @@
 use pyo3::{pyclass, types::PyAnyMethods};
 
 ///
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Clone, Debug)]
 pub enum DelattrBehavior {
     #[pyo3(constructor = ())]

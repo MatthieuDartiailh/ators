@@ -62,7 +62,7 @@ impl<'py> IntoPyObject<'py> for &TypesTuple {
 }
 
 ///
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Debug)]
 
 pub struct LateResolvedValidator {
@@ -138,7 +138,7 @@ impl Clone for LateResolvedValidator {
 
 // XXX Impl GC methods
 ///
-#[pyclass(frozen)]
+#[pyclass(module = "_ators", frozen)]
 #[derive(Debug)]
 pub enum TypeValidator {
     #[pyo3(constructor = ())]
