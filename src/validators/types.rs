@@ -12,8 +12,8 @@ use pyo3::{
     pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyFrozenSetMethods, PySet, PySetMethods, PyString,
-        PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods,
+        PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{convert::Infallible, sync::OnceLock};
@@ -105,7 +105,7 @@ impl LateResolvedValidator {
             } else {
                 resolved = evaluate_forward_ref.call1((forward_ref,))?;
             }
-            Ok(Py::new(
+            Py::new(
                 py,
                 build_validator_from_annotation(
                     self.name.bind(py),
@@ -115,7 +115,7 @@ impl LateResolvedValidator {
                     None,
                 )?
                 .type_validator,
-            )?)
+            )
         });
         match validator {
             Ok(tv) => Ok(tv.bind(py).clone()),
@@ -136,6 +136,7 @@ impl Clone for LateResolvedValidator {
     }
 }
 
+// XXX Impl GC methods
 ///
 #[pyclass(frozen)]
 #[derive(Debug)]
@@ -180,6 +181,10 @@ pub enum TypeValidator {
     FrozenSet { item: Option<Py<Validator>> },
     #[pyo3(constructor = (item))]
     Set { item: Option<Py<Validator>> },
+    #[pyo3(constructor = (items))]
+    Dict {
+        items: Option<(Py<Validator>, Py<Validator>)>,
+    },
     // Sequence,
     // List,
     // Mapping,
@@ -476,12 +481,10 @@ impl TypeValidator {
             Self::Set { item: Some(item) } => {
                 // FIXME add a fast path for ATorsSet with matching object and memeber
                 if let Ok(set) = value.cast::<pyo3::types::PySet>() {
+                    let py = value.py();
                     let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
                     for (index, titem) in set.iter().enumerate() {
-                        match item
-                            .borrow(value.py())
-                            .validate(member, object, titem.clone())
-                        {
+                        match item.borrow(py).validate(member, object, titem.clone()) {
                             Ok(v) => validated_items.push(v),
                             Err(cause) => {
                                 if let Some(m) = member
@@ -506,7 +509,6 @@ impl TypeValidator {
                         }
                     }
                     Ok({
-                        let py = value.py();
                         crate::containers::AtorsSet::new(
                             py,
                             item.extract(py)?,
@@ -526,6 +528,90 @@ impl TypeValidator {
                     PySet::new(v.py(), v.iter()).map(|s| s.into_any())
                 } else {
                     validation_error!("set", member, object, value)
+                }
+            }
+            Self::Dict {
+                items: Some((key_v, val_v)),
+            } => {
+                // FIXME add a fast path for AtorsDict with matching object and memeber
+                if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
+                    let py = value.py();
+                    let mut validated_items: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
+                        Vec::with_capacity(dict.len());
+                    for (tk, tv) in dict.iter() {
+                        match (
+                            key_v.borrow(py).validate(member, object, tk.clone()),
+                            val_v.borrow(py).validate(member, object, tv.clone()),
+                        ) {
+                            (Ok(k), Ok(v)) => validated_items.push((k, v)),
+                            (Err(err), __ior__) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}' for the member {} of {}.",
+                                        tk.repr()?,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(err));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}'.",
+                                        tk.repr()?,
+                                    ));
+                                    exc.set_cause(value.py(), Some(err));
+                                    return Err(exc);
+                                }
+                            }
+                            (Ok(_), Err(err)) => {
+                                if let Some(m) = member
+                                    && let Some(o) = object
+                                {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                        tv.repr()?,
+                                        tk.repr()?,
+                                        m.borrow().name(),
+                                        o.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(err));
+                                    return Err(exc);
+                                } else {
+                                    let exc = pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}'.",
+                                        tk.repr()?,
+                                        tv.repr()?
+                                    ));
+                                    exc.set_cause(value.py(), Some(err));
+                                    return Err(exc);
+                                }
+                            }
+                        }
+                    }
+                    Ok({
+                        let py = value.py();
+                        crate::containers::AtorsDict::new(
+                            py,
+                            key_v.extract(py)?,
+                            val_v.extract(py)?,
+                            member.map(|m| m.clone().unbind()),
+                            object.map(|m| m.clone().unbind()),
+                            validated_items,
+                        )?
+                        .into_any()
+                    })
+                } else {
+                    validation_error!("dict", member, object, value)
+                }
+            }
+            Self::Dict { items: None } => {
+                if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
+                    // Preserve the copy on assignment semantic
+                    PyDict::from_sequence(v).map(|d| d.into_any())
+                } else {
+                    validation_error!("dict", member, object, value)
                 }
             }
             Self::Typed { type_ } => {
@@ -653,6 +739,11 @@ impl Clone for TypeValidator {
             },
             Self::Set { item } => Self::Set {
                 item: item.as_ref().map(|inner| inner.clone_ref(py)),
+            },
+            Self::Dict { items } => Self::Dict {
+                items: items
+                    .as_ref()
+                    .map(|(k, v)| (k.clone_ref(py), v.clone_ref(py))),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

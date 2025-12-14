@@ -56,6 +56,24 @@ def test_static_set_default():
     assert a.a is not default  # Ensure a copy is made
 
 
+def test_static_dict_default():
+    default = {2: 4}
+
+    class A(Ators):
+        a: dict[int, int] = default
+
+    a = A()
+    assert a.a == default
+    assert a.a is not default  # Ensure a copy is made
+
+    class B(Ators):
+        a: dict[int, int] = member().default(default)
+
+    a = B()
+    assert a.a == default
+    assert a.a is not default  # Ensure a copy is made
+
+
 def test_call_default():
     i = 0
 

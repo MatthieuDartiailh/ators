@@ -6,6 +6,40 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
+///
+///
+use pyo3::{PyErr, PyResult, Python};
+
+// Copied from pypo3 internals
+
+/// Returns Ok if the error code is not -1.
+#[inline]
+pub(crate) fn error_on_minusone<T: SignedInteger>(py: Python<'_>, result: T) -> PyResult<()> {
+    if result != T::MINUS_ONE {
+        Ok(())
+    } else {
+        Err(PyErr::fetch(py))
+    }
+}
+
+pub(crate) trait SignedInteger: Eq {
+    const MINUS_ONE: Self;
+}
+
+macro_rules! impl_signed_integer {
+    ($t:ty) => {
+        impl SignedInteger for $t {
+            const MINUS_ONE: Self = -1;
+        }
+    };
+}
+
+impl_signed_integer!(i8);
+impl_signed_integer!(i16);
+impl_signed_integer!(i32);
+impl_signed_integer!(i64);
+impl_signed_integer!(i128);
+impl_signed_integer!(isize);
 
 ///
 macro_rules! create_behavior_callable_checker {

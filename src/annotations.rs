@@ -264,6 +264,41 @@ pub fn build_validator_from_annotation<'py>(
                 None,
                 None,
             ))
+        } else if origin.is(py.get_type::<PyDict>()) {
+            let items_validator = if let Ok((key_arg, val_arg)) = args.extract() {
+                Some((
+                    Py::new(
+                        py,
+                        build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-key")).cast()?,
+                            &key_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                        )?,
+                    )?,
+                    Py::new(
+                        py,
+                        build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-value")).cast()?,
+                            &val_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                        )?,
+                    )?,
+                ))
+            } else {
+                None
+            };
+            Ok(Validator::new(
+                TypeValidator::Dict {
+                    items: items_validator,
+                },
+                None,
+                None,
+                None,
+            ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant

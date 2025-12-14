@@ -69,11 +69,13 @@ type MyInt = int
         (tuple, [()], [1, ""]),
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)]),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")]),
-        # frozenset and set without item
         (frozenset, [frozenset(), frozenset((1,)), frozenset({1, "a"})], [1, ()]),
         (frozenset[int], [frozenset(), frozenset((1,))], [1, (), frozenset({1, "a"})]),
         (set, [set(), {1}, {1, "a"}], [1, ()]),
         (set[int], [set(), {1}], [1, (), {1, "a"}]),
+        (dict, [{}, {1: 1}, {1: "a"}], [1, ()]),
+        (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}]),
+        # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"]),
         (CustomBase, [CustomObj()], ["", 1, object()]),
         (int | str, [1, "a"], [1.0, object()]),
