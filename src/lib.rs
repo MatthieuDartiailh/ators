@@ -5,6 +5,8 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+#![deny(unused_must_use)]
+
 use pyo3::{
     Bound, Py, PyResult, Python, pymodule,
     sync::PyOnceLock,
