@@ -302,21 +302,22 @@ impl Member {
 #[pyclass(module = "ators._ators", name = "member")]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
-    // all those could be private with read-only rust accessors
+    // `name` and `slot_index` are public for direct Rust-level access
     pub name: Option<String>,
     pub slot_index: Option<u8>,
-    pub pre_getattr: Option<PreGetattrBehavior>,
-    pub post_getattr: Option<PostGetattrBehavior>,
-    pub pre_setattr: Option<PreSetattrBehavior>,
-    pub post_setattr: Option<PostSetattrBehavior>,
-    pub delattr: Option<DelattrBehavior>,
-    pub default: Option<DefaultBehavior>,
-    pub type_validator: Option<TypeValidator>,
-    pub value_validators: Option<Vec<ValueValidator>>,
-    pub coerce: Option<Coercer>,
-    pub coerce_init: Option<Coercer>,
-    pub metadata: Option<HashMap<String, Py<PyAny>>>,
-    pub forward_ref_environment_factory: Option<Py<PyAny>>,
+    pre_getattr: Option<PreGetattrBehavior>,
+    post_getattr: Option<PostGetattrBehavior>,
+    pre_setattr: Option<PreSetattrBehavior>,
+    post_setattr: Option<PostSetattrBehavior>,
+    delattr: Option<DelattrBehavior>,
+    default: Option<DefaultBehavior>,
+    type_validator: Option<TypeValidator>,
+    value_validators: Option<Vec<ValueValidator>>,
+    coerce: Option<Coercer>,
+    coerce_init: Option<Coercer>,
+    metadata: Option<HashMap<String, Py<PyAny>>>,
+    forward_ref_environment_factory: Option<Py<PyAny>>,
+    pickle: bool,
     inherit: bool,
     multiple_settings: HashMap<String, u8>,
 }
@@ -628,11 +629,95 @@ impl MemberBuilder {
 }
 
 impl MemberBuilder {
-    ///
+    #[inline]
     pub fn should_inherit(&self) -> bool {
         self.inherit
     }
 
+    #[inline]
+    pub fn pre_getattr(&self) -> Option<&PreGetattrBehavior> {
+        self.pre_getattr.as_ref()
+    }
+
+    #[inline]
+    pub fn post_getattr(&self) -> Option<&PostGetattrBehavior> {
+        self.post_getattr.as_ref()
+    }
+
+    #[inline]
+    pub fn pre_setattr(&self) -> Option<&PreSetattrBehavior> {
+        self.pre_setattr.as_ref()
+    }
+
+    #[inline]
+    pub fn post_setattr(&self) -> Option<&PostSetattrBehavior> {
+        self.post_setattr.as_ref()
+    }
+
+    #[inline]
+    pub fn delattr(&self) -> Option<&DelattrBehavior> {
+        self.delattr.as_ref()
+    }
+
+    #[inline]
+    pub fn default_behavior(&self) -> Option<&DefaultBehavior> {
+        self.default.as_ref()
+    }
+
+    #[inline]
+    pub fn value_validators(&self) -> Option<&Vec<ValueValidator>> {
+        self.value_validators.as_ref()
+    }
+
+    #[inline]
+    pub fn coercer(&self) -> Option<&Coercer> {
+        self.coerce.as_ref()
+    }
+
+    #[inline]
+    pub fn init_coercer(&self) -> Option<&Coercer> {
+        self.coerce_init.as_ref()
+    }
+
+    #[inline]
+    pub fn metadata(&self) -> &Option<HashMap<String, Py<PyAny>>> {
+        &self.metadata
+    }
+
+    #[inline]
+    pub fn forward_ref_environment_factory(&self) -> Option<&Py<PyAny>> {
+        self.forward_ref_environment_factory.as_ref()
+    }
+
+    #[inline]
+    pub fn set_default(&mut self, d: DefaultBehavior) {
+        self.default = Some(d);
+    }
+
+    #[inline]
+    pub fn set_pre_setattr(&mut self, v: PreSetattrBehavior) {
+        self.pre_setattr = Some(v);
+    }
+
+    #[inline]
+    pub fn set_delattr(&mut self, v: DelattrBehavior) {
+        self.delattr = Some(v);
+    }
+
+    #[inline]
+    pub fn set_type_validator(&mut self, tv: TypeValidator) {
+        self.type_validator = Some(tv);
+    }
+
+    #[inline]
+    pub fn take_value_validators(&mut self) -> Option<Vec<ValueValidator>> {
+        self.value_validators.take()
+    }
+
+    #[inline]
+    pub fn set_value_validators(&mut self, v: Vec<ValueValidator>) {
+        self.value_validators = Some(v);
+    }
     ///
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
         if self.pre_getattr.is_none() {

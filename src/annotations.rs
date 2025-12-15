@@ -446,17 +446,17 @@ fn configure_member_builder_from_annotation<'py>(
             tools,
             true,
         )?;
-        match builder.pre_setattr {
+        match builder.pre_setattr() {
             Some(PreSetattrBehavior::Constant {}) => {}
-            _ => builder.pre_setattr = Some(PreSetattrBehavior::ReadOnly {}),
+            _ => builder.set_pre_setattr(PreSetattrBehavior::ReadOnly {}),
         };
-        builder.delattr = Some(DelattrBehavior::Undeletable {});
+        builder.set_delattr(DelattrBehavior::Undeletable {});
         return Ok(());
     }
 
     // Ensure we do not have a pre set behavior that mandates the use of Final
     if !final_annotated {
-        match builder.pre_setattr {
+        match builder.pre_setattr() {
             Some(PreSetattrBehavior::Constant {}) | Some(PreSetattrBehavior::ReadOnly {}) => {
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                     "Member {} prevents mutation but type is not annotated as final {}.",
@@ -476,8 +476,7 @@ fn configure_member_builder_from_annotation<'py>(
         type_containers,
         tools,
         builder
-            .forward_ref_environment_factory
-            .as_ref()
+            .forward_ref_environment_factory()
             .map(|f| f.bind(name.py())),
     ) {
         Ok(v) => Ok(v),
@@ -493,13 +492,13 @@ fn configure_member_builder_from_annotation<'py>(
     }?;
 
     // Set the type validator
-    builder.type_validator = Some(new.type_validator);
+    builder.set_type_validator(new.type_validator);
 
     // Append the user specified value validators to the ones inferred from type
     // annotation.
-    let temp: Option<Vec<ValueValidator>> = builder.value_validators.take();
+    let temp: Option<Vec<ValueValidator>> = builder.take_value_validators();
     if !new.value_validators.is_empty() || temp.is_some() {
-        builder.value_validators = Some(
+        builder.set_value_validators(
             new.value_validators
                 .into_iter()
                 .chain(temp.unwrap_or_default())
@@ -567,7 +566,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                 mb.clone().extract()?
             } else {
                 let mut mb = MemberBuilder::default();
-                mb.default = Some(DefaultBehavior::Static {
+                mb.set_default(DefaultBehavior::Static {
                     value: value.into(),
                 });
                 mb

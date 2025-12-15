@@ -310,7 +310,7 @@ pub fn create_ators_subclass<'py>(
 
         // FIXME low prio (use a macro to reduce repetition)
         // Ensure all the method the members are using do exist.
-        if let Some(PreGetattrBehavior::ObjectMethod { meth_name }) = &mb.pre_getattr
+        if let Some(PreGetattrBehavior::ObjectMethod { meth_name }) = mb.pre_getattr()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(
@@ -320,7 +320,7 @@ pub fn create_ators_subclass<'py>(
                 &methods,
             ));
         }
-        if let Some(PostGetattrBehavior::ObjectMethod { meth_name }) = &mb.post_getattr
+        if let Some(PostGetattrBehavior::ObjectMethod { meth_name }) = mb.post_getattr()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(
@@ -330,7 +330,7 @@ pub fn create_ators_subclass<'py>(
                 &methods,
             ));
         }
-        if let Some(PreSetattrBehavior::ObjectMethod { meth_name }) = &mb.pre_setattr
+        if let Some(PreSetattrBehavior::ObjectMethod { meth_name }) = mb.pre_setattr()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(
@@ -340,7 +340,7 @@ pub fn create_ators_subclass<'py>(
                 &methods,
             ));
         }
-        if let Some(PostSetattrBehavior::ObjectMethod { meth_name }) = &mb.post_setattr
+        if let Some(PostSetattrBehavior::ObjectMethod { meth_name }) = mb.post_setattr()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(
@@ -350,17 +350,17 @@ pub fn create_ators_subclass<'py>(
                 &methods,
             ));
         }
-        if let Some(DefaultBehavior::ObjectMethod { meth_name }) = &mb.default
+        if let Some(DefaultBehavior::ObjectMethod { meth_name }) = mb.default_behavior()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(k, "default", meth_name, &methods));
         }
-        if let Some(Coercer::ObjectMethod { meth_name }) = &mb.coerce
+        if let Some(Coercer::ObjectMethod { meth_name }) = mb.coercer()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(k, "coerce", meth_name, &methods));
         }
-        if let Some(Coercer::ObjectMethod { meth_name }) = &mb.coerce
+        if let Some(Coercer::ObjectMethod { meth_name }) = mb.init_coercer()
             && !methods.contains(meth_name.bind(py))?
         {
             return Err(make_unknown_method_error(
@@ -370,15 +370,14 @@ pub fn create_ators_subclass<'py>(
                 &methods,
             ));
         }
-
-        for vv in mb.value_validators.as_ref().unwrap_or(&Vec::new()) {
-            if let ValueValidator::ObjectMethod { meth_name } = vv
+        for vv in mb.value_validators().map_or(&Vec::new(), |v| v) {
+            if let ValueValidator::ObjectMethod { meth_name } = vv.clone()
                 && !methods.contains(meth_name.bind(py))?
             {
                 return Err(make_unknown_method_error(
                     k,
                     "value_validator",
-                    meth_name,
+                    &meth_name,
                     &methods,
                 ));
             }
