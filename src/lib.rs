@@ -57,6 +57,10 @@ mod _ators {
     #[pymodule_export]
     use self::validators::{Coercer, TypeValidator, Validator, ValueValidator};
 
+    // Exported only to enable pickling
+    #[pymodule_export]
+    use self::containers::{AtorsDict, AtorsSet};
+
     #[pyfunction]
     pub(crate) fn add_generic_type_attributes<'py>(
         py: Python<'py>,

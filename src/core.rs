@@ -20,7 +20,7 @@ use crate::member::{Member, member_coerce_init};
 
 pub static ATORS_MEMBERS: &str = "__ators_members__";
 
-#[pyclass(module = "_ators", subclass)]
+#[pyclass(module = "ators._ators", subclass)]
 pub struct AtorsBase {
     frozen: bool,
     notification_enabled: bool,

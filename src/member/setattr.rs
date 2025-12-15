@@ -15,7 +15,7 @@ use pyo3::{
 create_behavior_callable_checker!(pres_callmov, PreSetattrBehavior, CallMemberObject, 3);
 
 ///
-#[pyclass(module = "_ators", frozen)]
+#[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum PreSetattrBehavior {
     #[pyo3(constructor = ())]
@@ -97,7 +97,7 @@ create_behavior_callable_checker!(
     4
 );
 
-#[pyclass(module = "_ators", frozen)]
+#[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum PostSetattrBehavior {
     #[pyo3(constructor = ())]

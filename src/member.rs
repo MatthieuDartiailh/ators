@@ -45,7 +45,7 @@ fn clone_metadata(
 /// Helper class to generate a callable from a list of module names.
 ///
 /// Used for forward reference environment creation.
-#[pyclass(module = "_ators", frozen)]
+#[pyclass(module = "ators._ators", frozen)]
 struct ForwardRefEnvironmentCallable {
     names: Vec<Py<PyString>>,
 }
@@ -67,7 +67,7 @@ impl ForwardRefEnvironmentCallable {
 }
 
 /// A Python descriptor that defines a member of an Ators class.
-#[pyclass(module = "_ators", frozen, get_all)]
+#[pyclass(module = "ators._ators", frozen, get_all)]
 #[derive(Debug)]
 pub struct Member {
     name: String,
@@ -299,7 +299,7 @@ impl Member {
     // XXX because the class is frozen I cannot implement clear....
 }
 
-#[pyclass(module = "_ators", name = "member")]
+#[pyclass(module = "ators._ators", name = "member")]
 #[derive(Debug, Default)]
 pub struct MemberBuilder {
     // all those could be private with read-only rust accessors

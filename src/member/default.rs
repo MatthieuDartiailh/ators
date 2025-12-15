@@ -17,7 +17,7 @@ create_behavior_callable_checker!(db_call, DefaultBehavior, Call, 0);
 create_behavior_callable_checker!(db_callmo, DefaultBehavior, CallMemberObject, 2);
 
 ///
-#[pyclass(module = "_ators", frozen)]
+#[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum DefaultBehavior {
     #[pyo3(constructor = ())]
