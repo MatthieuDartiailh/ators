@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PySet, PySetMethods},
 };
 
-use crate::{core::AtorsBase, member::Member, validators::Validator};
+use crate::{core::AtorsBase, validators::Validator};
 
 // #[pyclass(extends=PyList)]
 // struct AtorsList;
@@ -57,7 +57,7 @@ impl AtorsSet {
             ));
         }
         let mut validated_items = Vec::with_capacity(value.len()?);
-        let m = self.member_name.as_ref().map(|s| s.as_str());
+        let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, item?)?;
@@ -76,7 +76,7 @@ impl AtorsSet {
     pub fn add<'py>(self_: PyRefMut<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.validator.validate(
-            self_.member_name.as_ref().map(|s| s.as_str()),
+            self_.member_name.as_deref(),
             self_.object.as_ref().map(|o| o.bind(py)),
             value,
         )?;
@@ -177,7 +177,7 @@ impl AtorsDict {
         py: Python<'py>,
         key: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member_name.as_ref().map(|s| s.as_str());
+        let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
         self.key_validator.validate(m, o, key)
     }
@@ -188,7 +188,7 @@ impl AtorsDict {
         py: Python<'py>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member_name.as_ref().map(|s| s.as_str());
+        let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
         self.value_validator.validate(m, o, value)
     }
@@ -200,7 +200,7 @@ impl AtorsDict {
         key: Bound<'py, PyAny>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let m = self.member_name.as_ref().map(|s| s.as_str());
+        let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
         let valid_key = self.key_validator.validate(m, o, key)?;
         let valid_value = self.value_validator.validate(m, o, value)?;
