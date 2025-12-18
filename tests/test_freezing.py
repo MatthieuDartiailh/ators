@@ -11,6 +11,8 @@ import pytest
 
 from ators import Ators, freeze, is_frozen
 
+# XXX forbid freezing object containing mutable members
+
 
 def test_freezing_post_init():
     class A(Ators):

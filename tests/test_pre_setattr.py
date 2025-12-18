@@ -65,35 +65,35 @@ def test_read_only_preset_bad_annotation():
     assert "Failed to configure" in e.exconly()
 
 
-def test_call_member_object_value_preset():
+def test_call_name_object_value_preset():
     i = 0
     m = None
     obj = None
     current = None
 
-    def pre_set(member, object, c):
+    def pre_set(name, object, c):
         nonlocal i, m, obj, current
         i += 1
-        m = member
+        m = name
         obj = object
         current = c
         return 5
 
     class A(Ators):
-        a: int = member().preset(PreSetAttr.CallMemberObjectValue(pre_set))
+        a: int = member().preset(PreSetAttr.CallNameObjectValue(pre_set))
 
     a = A()
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert current is None
 
     a.a = 5
     assert a.a == 5
     assert i == 2
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert current == 2
 
@@ -118,12 +118,12 @@ def test_method_preset():
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert current is None
 
     a.a = 4
     assert a.a == 4
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert current == 2
     assert i == 2
 
@@ -141,12 +141,12 @@ def test_method_preset():
 def test_inherited_preset_behavior():
     i = 0
 
-    def pre_set(member, object, c):
+    def pre_set(name, object, c):
         nonlocal i
         i += 1
 
     class A(Ators):
-        a: int = member().preset(PreSetAttr.CallMemberObjectValue(pre_set))
+        a: int = member().preset(PreSetAttr.CallNameObjectValue(pre_set))
 
     class B(A):
         a = member().inherit()
@@ -158,7 +158,7 @@ def test_inherited_preset_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PreSetAttr.CallMemberObjectValue, lambda: 1, 3, 0)],
+    [(PreSetAttr.CallNameObjectValue, lambda: 1, 3, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -214,6 +214,6 @@ def test_warn_on_multiple_setting_of_postget():
         class A(Ators):
             a: int = (
                 member()
-                .preset(PreSetAttr.CallMemberObjectValue(lambda m, o, c: 1))
+                .preset(PreSetAttr.CallNameObjectValue(lambda m, o, c: 1))
                 .preset(PreSetAttr.NoOp())
             )

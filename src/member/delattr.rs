@@ -6,7 +6,7 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 ///
-use pyo3::{pyclass, types::PyAnyMethods};
+use pyo3::{Bound, PyRef, PyResult, pyclass, types::PyAnyMethods};
 
 ///
 #[pyclass(module = "ators._ators", frozen)]
@@ -22,17 +22,17 @@ impl DelattrBehavior {
     ///
     pub(crate) fn del<'py>(
         &self,
-        member: &pyo3::Bound<'py, super::Member>,
-        object: &pyo3::Bound<'py, crate::core::AtorsBase>,
-    ) -> pyo3::PyResult<()> {
+        member: &PyRef<'py, super::Member>,
+        object: &Bound<'py, crate::core::AtorsBase>,
+    ) -> PyResult<()> {
         match self {
             Self::Slot {} => {
-                crate::core::del_slot(object, member.borrow().index());
+                crate::core::del_slot(object, member.index());
                 Ok(())
             }
             Self::Undeletable {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The member {} from {} cannot be deleted",
-                member.borrow().name,
+                member.name,
                 object.repr()?
             ))),
         }

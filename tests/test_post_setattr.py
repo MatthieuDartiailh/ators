@@ -13,30 +13,30 @@ from ators import Ators, member, Member
 from ators.behaviors import PostSetAttr, postset
 
 
-def test_call_member_object_old_new_postset():
+def test_call_name_object_old_new_postset():
     i = 0
     m = None
     obj = None
     old = None
     new = None
 
-    def post_set(member, object, o, n):
+    def post_set(name, object, o, n):
         nonlocal i, m, obj, old, new
         i += 1
-        m = member
+        m = name
         obj = object
         old = o
         new = n
         return 5
 
     class A(Ators):
-        a: int = member().postset(PostSetAttr.CallMemberObjectOldNew(post_set))
+        a: int = member().postset(PostSetAttr.CallNameObjectOldNew(post_set))
 
     a = A()
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert old is None
     assert new == 2
@@ -44,7 +44,7 @@ def test_call_member_object_old_new_postset():
     a.a = 5
     assert a.a == 5
     assert i == 2
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert old == 2
     assert new == 5
@@ -71,14 +71,14 @@ def test_method_postset():
     a = A()
     a.a = 2
     assert a.a == 2
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert old is None
     assert new == 2
     assert i == 1
 
     a.a = 4
     assert a.a == 4
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert old == 2
     assert new == 4
     assert i == 2
@@ -102,7 +102,7 @@ def test_inherited_postset_behavior():
         i += 1
 
     class A(Ators):
-        a: int = member().postset(PostSetAttr.CallMemberObjectOldNew(post_set))
+        a: int = member().postset(PostSetAttr.CallNameObjectOldNew(post_set))
 
     class B(A):
         a = member().inherit()
@@ -114,7 +114,7 @@ def test_inherited_postset_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PostSetAttr.CallMemberObjectOldNew, lambda: 1, 4, 0)],
+    [(PostSetAttr.CallNameObjectOldNew, lambda: 1, 4, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -170,6 +170,6 @@ def test_warn_on_multiple_setting_of_postget():
         class A(Ators):
             a: int = (
                 member()
-                .postset(PostSetAttr.CallMemberObjectOldNew(lambda m, o, ol, n: 1))
+                .postset(PostSetAttr.CallNameObjectOldNew(lambda m, o, ol, n: 1))
                 .postset(PostSetAttr.NoOp())
             )

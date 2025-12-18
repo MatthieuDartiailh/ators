@@ -17,7 +17,7 @@ use crate::utils::create_behavior_callable_checker;
 use std::convert::Infallible;
 
 create_behavior_callable_checker!(vv_callv, ValueValidator, CallValue, 1);
-create_behavior_callable_checker!(vv_callmov, ValueValidator, CallMemberObjectValue, 3);
+create_behavior_callable_checker!(vv_callmov, ValueValidator, CallNameObjectValue, 3);
 
 #[derive(Debug)]
 pub(crate) struct ValidValues(pub Py<PyFrozenSet>);
@@ -59,7 +59,7 @@ pub enum ValueValidator {
     #[pyo3(constructor = (callable))]
     CallValue { callable: vv_callv::Callable },
     #[pyo3(constructor = (callable))]
-    CallMemberObjectValue { callable: vv_callmov::Callable },
+    CallNameObjectValue { callable: vv_callmov::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
     // #[pyo3(constructor = (min, max))]
@@ -71,7 +71,7 @@ pub enum ValueValidator {
 impl ValueValidator {
     pub fn validate_value<'py>(
         &self,
-        member: Option<&Bound<'py, crate::member::Member>>,
+        member_name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
@@ -99,16 +99,16 @@ impl ValueValidator {
                     ),
                 )
                 .map(|_| ()),
-            Self::CallMemberObjectValue { callable } => callable
+            Self::CallNameObjectValue { callable } => callable
                 .0.bind(value.py())
                 .call1(
                     (
-                        member.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
-                            "Cannot use CallMemberObjectValue validation when validator is not linked to a member."
+                        member_name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                            "Cannot use CallNameObjectValue validation when validator is not linked to a member."
                         ))?,
                         object.ok_or(
                             pyo3::exceptions::PyTypeError::new_err(
-                                "Cannot use CallMemberObjectValue validation when validator is not linked to a member."
+                                "Cannot use CallNameObjectValue validation when validator is not linked to a member."
                             )
                         )?,
                         value,
@@ -119,7 +119,7 @@ impl ValueValidator {
                 .ok_or(pyo3::exceptions::PyTypeError::new_err(
                     "Cannot use ObjectMethod validation when validator is not linked to a member.",
                 ))?
-                .call_method1(meth_name, (member.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                .call_method1(meth_name, (member_name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
                     "Cannot use ObjectMethod validation when validator is not linked to a member."
                 ))?, value))
                 .map(|_| ()),
@@ -136,7 +136,7 @@ impl Clone for ValueValidator {
             Self::CallValue { callable } => Self::CallValue {
                 callable: vv_callv::Callable(callable.0.clone_ref(py)),
             },
-            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+            Self::CallNameObjectValue { callable } => Self::CallNameObjectValue {
                 callable: vv_callmov::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {

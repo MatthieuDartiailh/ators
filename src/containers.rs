@@ -19,7 +19,7 @@ use crate::{core::AtorsBase, member::Member, validators::Validator};
 #[pyclass(module = "ators._ators", extends=PySet)]
 pub struct AtorsSet {
     validator: Validator,
-    member: Option<Py<Member>>,
+    member_name: Option<String>,
     object: Option<Py<AtorsBase>>,
 }
 
@@ -27,7 +27,7 @@ impl AtorsSet {
     pub(crate) fn new<'py>(
         py: Python<'py>,
         validator: Validator,
-        member: Option<Py<Member>>,
+        member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
         values: Vec<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, AtorsSet>> {
@@ -35,7 +35,7 @@ impl AtorsSet {
             py,
             AtorsSet {
                 validator,
-                member,
+                member_name: member_name.map(|m| m.to_string()),
                 object,
             },
         )?
@@ -57,7 +57,7 @@ impl AtorsSet {
             ));
         }
         let mut validated_items = Vec::with_capacity(value.len()?);
-        let m = self.member.as_ref().map(|m| m.bind(py));
+        let m = self.member_name.as_ref().map(|s| s.as_str());
         let o = self.object.as_ref().map(|o| o.bind(py));
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, item?)?;
@@ -76,7 +76,7 @@ impl AtorsSet {
     pub fn add<'py>(self_: PyRefMut<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.validator.validate(
-            self_.member.as_ref().map(|m| m.bind(py)),
+            self_.member_name.as_ref().map(|s| s.as_str()),
             self_.object.as_ref().map(|o| o.bind(py)),
             value,
         )?;
@@ -142,7 +142,7 @@ impl AtorsSet {
 pub struct AtorsDict {
     key_validator: Validator,
     value_validator: Validator,
-    member: Option<Py<Member>>,
+    member_name: Option<String>,
     object: Option<Py<AtorsBase>>,
 }
 
@@ -151,7 +151,7 @@ impl AtorsDict {
         py: Python<'py>,
         key_validator: Validator,
         value_validator: Validator,
-        member: Option<Py<Member>>,
+        member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
         items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>,
     ) -> PyResult<Bound<'py, AtorsDict>> {
@@ -160,7 +160,7 @@ impl AtorsDict {
             AtorsDict {
                 key_validator,
                 value_validator,
-                member,
+                member_name: member_name.map(|m| m.to_string()),
                 object,
             },
         )?
@@ -177,7 +177,7 @@ impl AtorsDict {
         py: Python<'py>,
         key: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member.as_ref().map(|m| m.bind(py));
+        let m = self.member_name.as_ref().map(|s| s.as_str());
         let o = self.object.as_ref().map(|o| o.bind(py));
         self.key_validator.validate(m, o, key)
     }
@@ -188,7 +188,7 @@ impl AtorsDict {
         py: Python<'py>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member.as_ref().map(|m| m.bind(py));
+        let m = self.member_name.as_ref().map(|s| s.as_str());
         let o = self.object.as_ref().map(|o| o.bind(py));
         self.value_validator.validate(m, o, value)
     }
@@ -200,7 +200,7 @@ impl AtorsDict {
         key: Bound<'py, PyAny>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let m = self.member.as_ref().map(|m| m.bind(py));
+        let m = self.member_name.as_ref().map(|s| s.as_str());
         let o = self.object.as_ref().map(|o| o.bind(py));
         let valid_key = self.key_validator.validate(m, o, key)?;
         let valid_value = self.value_validator.validate(m, o, value)?;

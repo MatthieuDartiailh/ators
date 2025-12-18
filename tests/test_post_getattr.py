@@ -13,28 +13,28 @@ from ators import Ators, member, Member
 from ators.behaviors import PostGetAttr, postget
 
 
-def test_call_member_object_value_postget():
+def test_call_name_object_value_postget():
     i = 0
     m = None
     obj = None
     value = None
 
-    def post_get(member, object, v):
+    def post_get(name, object, v):
         nonlocal i, m, obj, value
         i += 1
-        m = member
+        m = name
         obj = object
         value = v
         return 5
 
     class A(Ators):
-        a: int = member().postget(PostGetAttr.CallMemberObjectValue(post_get))
+        a: int = member().postget(PostGetAttr.CallNameObjectValue(post_get))
 
     a = A()
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert value == 2
     assert a.a == 2
@@ -60,7 +60,7 @@ def test_method_postget():
     a = A()
     a.a = 2
     assert a.a == 2
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert value == 2
     assert i == 1
     assert a.a == 2
@@ -86,7 +86,7 @@ def test_inherited_postget_behavior():
         i += 1
 
     class A(Ators):
-        a: int = member().postget(PostGetAttr.CallMemberObjectValue(post_get))
+        a: int = member().postget(PostGetAttr.CallNameObjectValue(post_get))
 
     class B(A):
         a = member().inherit()
@@ -99,7 +99,7 @@ def test_inherited_postget_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PostGetAttr.CallMemberObjectValue, lambda: 1, 3, 0)],
+    [(PostGetAttr.CallNameObjectValue, lambda: 1, 3, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -155,6 +155,6 @@ def test_warn_on_multiple_setting_of_postget():
         class A(Ators):
             a: int = (
                 member()
-                .postget(PostGetAttr.CallMemberObjectValue(lambda m, o, v: 1))
+                .postget(PostGetAttr.CallNameObjectValue(lambda m, o, v: 1))
                 .postget(PostGetAttr.NoOp())
             )

@@ -8,7 +8,7 @@
 ///
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
-    Bound, Py, PyResult, Python, pyclass,
+    Bound, Py, PyRef, PyResult, Python, pyclass,
     types::PyString,
     types::{PyAny, PyAnyMethods},
 };
@@ -32,7 +32,7 @@ impl PreGetattrBehavior {
     // new is unvalidated at this stage
     pub(crate) fn pre_get<'py>(
         &self,
-        member: &Bound<'py, super::Member>,
+        member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
     ) -> PyResult<()> {
         match self {
@@ -81,7 +81,7 @@ impl PostGetattrBehavior {
     // Value cannot be modified this is a design choice
     pub(crate) fn post_get<'py>(
         &self,
-        member: &Bound<'py, super::Member>,
+        member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {

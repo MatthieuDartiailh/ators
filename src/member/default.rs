@@ -8,7 +8,7 @@
 ///
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
-    Bound, Py, PyAny, PyResult, Python, pyclass,
+    Bound, Py, PyAny, PyRef, PyResult, Python, pyclass,
     types::{PyAnyMethods, PyDict, PyString, PyTuple},
 };
 
@@ -41,18 +41,17 @@ impl DefaultBehavior {
     ///
     pub(crate) fn default<'py>(
         &self,
-        member: &Bound<'py, super::Member>,
+        member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Self::NoDefault {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The member {} from {} value is unset and has no default",
-                member.borrow().name,
+                member.name,
                 object.repr()?
             ))),
             Self::Static { value } => Ok(value.clone_ref(member.py()).into_bound(member.py())),
             Self::ValidatorDelegate { args, kwargs } => member
-                .borrow()
                 .validator
                 .create_default(args.bind(member.py()), kwargs),
             Self::Call { callable } => callable.0.bind(member.py()).call0(),
@@ -62,6 +61,7 @@ impl DefaultBehavior {
             // XXX improve error message since people writing the method may not
             // realize the required signature and we cannot check it at
             // behavior definition time
+            // Do it if the call fails only and do it for all relevant behavior
             Self::ObjectMethod { meth_name } => object.call_method1(meth_name, (member,)),
         }
     }

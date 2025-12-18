@@ -13,7 +13,7 @@ from ators import Ators, member, Member
 from ators.behaviors import PreGetAttr, preget
 
 
-def test_call_member_object_preget():
+def test_call_name_object_preget():
     i = 0
     m = None
     obj = None
@@ -26,13 +26,13 @@ def test_call_member_object_preget():
         return 5
 
     class A(Ators):
-        a: int = member().preget(PreGetAttr.CallMemberObject(pre_get))
+        a: int = member().preget(PreGetAttr.CallNameObject(pre_get))
 
     a = A()
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert a.a == 2
     assert i == 2
@@ -55,7 +55,7 @@ def test_method_preget():
     a = A()
     a.a = 2
     assert a.a == 2
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert i == 1
     assert a.a == 2
     assert i == 2
@@ -75,12 +75,12 @@ def test_method_preget():
 def test_inherited_preget_behavior():
     i = 0
 
-    def pre_get(member, object):
+    def pre_get(name, object):
         nonlocal i
         i += 1
 
     class A(Ators):
-        a: int = member().preget(PreGetAttr.CallMemberObject(pre_get))
+        a: int = member().preget(PreGetAttr.CallNameObject(pre_get))
 
     class B(A):
         a = member().inherit()
@@ -93,7 +93,7 @@ def test_inherited_preget_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PreGetAttr.CallMemberObject, lambda: 1, 2, 0)],
+    [(PreGetAttr.CallNameObject, lambda: 1, 2, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -149,6 +149,6 @@ def test_warn_on_multiple_setting_of_preget():
         class A(Ators):
             a: int = (
                 member()
-                .preget(PreGetAttr.CallMemberObject(lambda m, o: 1))
+                .preget(PreGetAttr.CallNameObject(lambda m, o: 1))
                 .preget(PreGetAttr.NoOp())
             )

@@ -8,7 +8,7 @@
 ///
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
-    Bound, Py, PyResult, Python, pyclass,
+    Bound, Py, PyRef, PyResult, Python, pyclass,
     types::{PyAny, PyAnyMethods, PyString},
 };
 
@@ -34,7 +34,7 @@ impl PreSetattrBehavior {
     ///
     pub(crate) fn pre_set<'py>(
         &self,
-        member: &Bound<'py, super::Member>,
+        member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
         current: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
@@ -112,7 +112,7 @@ impl PostSetattrBehavior {
     ///
     pub(crate) fn post_set<'py>(
         &self,
-        member: &Bound<'py, super::Member>,
+        member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
         old: &Option<Py<PyAny>>,
         new: &Bound<'py, PyAny>,
