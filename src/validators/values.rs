@@ -71,7 +71,7 @@ pub enum ValueValidator {
 impl ValueValidator {
     pub fn validate_value<'py>(
         &self,
-        member_name: Option<&str>,
+        name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
@@ -103,7 +103,7 @@ impl ValueValidator {
                 .0.bind(value.py())
                 .call1(
                     (
-                        member_name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                        name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
                             "Cannot use CallNameObjectValue validation when validator is not linked to a member."
                         ))?,
                         object.ok_or(
@@ -119,7 +119,7 @@ impl ValueValidator {
                 .ok_or(pyo3::exceptions::PyTypeError::new_err(
                     "Cannot use ObjectMethod validation when validator is not linked to a member.",
                 ))?
-                .call_method1(meth_name, (member_name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                .call_method1(meth_name, (name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
                     "Cannot use ObjectMethod validation when validator is not linked to a member."
                 ))?, value))
                 .map(|_| ()),

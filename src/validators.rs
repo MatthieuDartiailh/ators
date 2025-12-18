@@ -89,17 +89,17 @@ impl Validator {
     ///
     pub fn validate<'py>(
         &self,
-        member_name: Option<&str>,
+        name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         // NOTE not sure how to avoid cloning somewhere in the call chain if not here
         // We are only cloning a reference so the cost should be minimal
-        match self.strict_validate(member_name, object, Bound::clone(&value)) {
+        match self.strict_validate(name, object, Bound::clone(&value)) {
             Ok(v) => Ok(v),
             Err(err) => {
                 if let Some(c) = &self.coercer {
-                    c.coerce_value(false, &self.type_validator, member_name, object, &value)
+                    c.coerce_value(false, &self.type_validator, name, object, &value)
                 } else {
                     Err(err)
                 }

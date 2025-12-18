@@ -42,7 +42,7 @@ impl Coercer {
         &self,
         is_init_coercion: bool,
         type_validator: &TypeValidator,
-        member_name: Option<&str>,
+        name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -78,7 +78,7 @@ impl Coercer {
                         .try_iter()?
                         .zip(items)
                         .map(|(v, t)| -> PyResult<Bound<'py, PyAny>> {
-                            self.coerce_value(is_init_coercion, &t.type_validator, member_name, object, &v?)
+                            self.coerce_value(is_init_coercion, &t.type_validator, name, object, &v?)
                             }
                         )
                         .collect::<PyResult<Vec<_>>>()?
@@ -92,7 +92,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member_name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -110,7 +110,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member_name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -130,7 +130,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, member_name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -145,8 +145,8 @@ impl Coercer {
                     if let Ok(t) = value.cast::<PyDict>() {
                         for (k, v) in t.iter(){
                             if let Some((key_validator, val_validator)) = items {
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, member_name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, member_name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
@@ -156,8 +156,8 @@ impl Coercer {
                         for i in tm.items()?.iter(){
                             let (k, v) = i.extract()?;
                             if let Some((key_validator, val_validator)) = items {
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, member_name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, member_name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
@@ -168,8 +168,8 @@ impl Coercer {
                             let (k, v) = p?.extract()?;
                             if let Some((key_validator, val_validator)) = items {
 
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, member_name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, member_name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
@@ -186,14 +186,14 @@ impl Coercer {
                 TypeValidator::ForwardValidator { late_validator } => self.coerce_value(
                     is_init_coercion,
                     late_validator.get_validator(py)?.get(),
-                    member_name,
+                    name,
                     object,
                     value,
                 ),
                 TypeValidator::Union { members } => {
                     let mut err = Vec::with_capacity(members.len());
                     for m in members {
-                        match m.coerce_value(is_init_coercion, member_name, object, value) {
+                        match m.coerce_value(is_init_coercion, name, object, value) {
                             Ok(validated) => return Ok(validated),
                             Err(e) => err.push(e),
                         }
@@ -219,7 +219,7 @@ impl Coercer {
                 .0.bind(value.py())
                 .call1(
                 (
-                        member_name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
+                        name.ok_or(pyo3::exceptions::PyRuntimeError::new_err(
                     "Cannot use CallNameObjectValueInit coercion when validator is not linked to a member."
                         ))?,
                         object.ok_or(
@@ -238,7 +238,7 @@ impl Coercer {
                 .call_method1(
                     meth_name,
                     (
-                        member_name.ok_or(
+                        name.ok_or(
                             pyo3::exceptions::PyTypeError::new_err(
                                 "Cannot use ObjectMethod coercion when validator is not linked to a member."
                             )

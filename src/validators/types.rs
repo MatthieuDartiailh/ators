@@ -222,7 +222,7 @@ impl TypeValidator {
     ///
     pub fn validate_type<'py>(
         &self,
-        member_name: Option<&str>,
+        name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -232,42 +232,42 @@ impl TypeValidator {
                 if value.is_none() {
                     Ok(value)
                 } else {
-                    validation_error!("None", member_name, object, value)
+                    validation_error!("None", name, object, value)
                 }
             }
             Self::Bool {} => {
                 if unsafe { PyBool_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
-                    validation_error!("bool", member_name, object, value)
+                    validation_error!("bool", name, object, value)
                 }
             }
             Self::Int {} => {
                 if unsafe { PyLong_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
-                    validation_error!("int", member_name, object, value)
+                    validation_error!("int", name, object, value)
                 }
             }
             Self::Float {} => {
                 if unsafe { PyFloat_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
-                    validation_error!("float", member_name, object, value)
+                    validation_error!("float", name, object, value)
                 }
             }
             Self::Str {} => {
                 if unsafe { PyUnicode_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
-                    validation_error!("str", member_name, object, value)
+                    validation_error!("str", name, object, value)
                 }
             }
             Self::Bytes {} => {
                 if unsafe { PyBytes_Check(value.as_ptr()) } != 0 {
                     Ok(value)
                 } else {
-                    validation_error!("bytes", member_name, object, value)
+                    validation_error!("bytes", name, object, value)
                 }
             }
             Self::Tuple { items } => {
@@ -275,7 +275,7 @@ impl TypeValidator {
                     let t_length = tuple.len();
                     if t_length != items.len() {
                         return {
-                            if let Some(m) = member_name
+                            if let Some(m) = name
                                 && let Some(o) = object
                             {
                                 Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -318,7 +318,7 @@ impl TypeValidator {
                                 }
                             }
                             Err(cause) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -349,7 +349,7 @@ impl TypeValidator {
                         value
                     })
                 } else {
-                    validation_error!("tuple", member_name, object, value)
+                    validation_error!("tuple", name, object, value)
                 }
             }
             Self::VarTuple { item: Some(item) } => {
@@ -380,7 +380,7 @@ impl TypeValidator {
                                 }
                             }
                             Err(cause) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -411,14 +411,14 @@ impl TypeValidator {
                         value
                     })
                 } else {
-                    validation_error!("tuple", member_name, object, value)
+                    validation_error!("tuple", name, object, value)
                 }
             }
             Self::VarTuple { item: None } => {
                 if value.cast_exact::<pyo3::types::PyTuple>().is_ok() {
                     Ok(value)
                 } else {
-                    validation_error!("tuple", member_name, object, value)
+                    validation_error!("tuple", name, object, value)
                 }
             }
             Self::FrozenSet { item: Some(item) } => {
@@ -449,7 +449,7 @@ impl TypeValidator {
                                 }
                             }
                             Err(cause) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -480,14 +480,14 @@ impl TypeValidator {
                         value
                     })
                 } else {
-                    validation_error!("frozenset", member_name, object, value)
+                    validation_error!("frozenset", name, object, value)
                 }
             }
             Self::FrozenSet { item: None } => {
                 if value.cast_exact::<pyo3::types::PyFrozenSet>().is_ok() {
                     Ok(value)
                 } else {
-                    validation_error!("frozenset", member_name, object, value)
+                    validation_error!("frozenset", name, object, value)
                 }
             }
             Self::Set { item: Some(item) } => {
@@ -499,7 +499,7 @@ impl TypeValidator {
                         match item.borrow(py).validate(member_name, object, titem.clone()) {
                             Ok(v) => validated_items.push(v),
                             Err(cause) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -528,14 +528,14 @@ impl TypeValidator {
                         crate::containers::AtorsSet::new(
                             py,
                             item.extract(py)?,
-                            member_name,
+                            name,
                             object.map(|m| m.clone().unbind()),
                             validated_items,
                         )?
                         .into_any()
                     })
                 } else {
-                    validation_error!("set", member_name, object, value)
+                    validation_error!("set", name, object, value)
                 }
             }
             Self::Set { item: None } => {
@@ -543,7 +543,7 @@ impl TypeValidator {
                     // Preserve the copy on assignment semantic
                     PySet::new(v.py(), v.iter()).map(|s| s.into_any())
                 } else {
-                    validation_error!("set", member_name, object, value)
+                    validation_error!("set", name, object, value)
                 }
             }
             Self::Dict {
@@ -561,7 +561,7 @@ impl TypeValidator {
                         ) {
                             (Ok(k), Ok(v)) => validated_items.push((k, v)),
                             (Err(err), __ior__) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -586,7 +586,7 @@ impl TypeValidator {
                                 }
                             }
                             (Ok(_), Err(err)) => {
-                                if let Some(m) = member_name
+                                if let Some(m) = name
                                     && let Some(o) = object
                                 {
                                     return Err(crate::utils::err_with_cause(
@@ -620,14 +620,14 @@ impl TypeValidator {
                             py,
                             key_v.extract(py)?,
                             val_v.extract(py)?,
-                            member_name,
+                            name,
                             object.map(|m| m.clone().unbind()),
                             validated_items,
                         )?
                         .into_any()
                     })
                 } else {
-                    validation_error!("dict", member_name, object, value)
+                    validation_error!("dict", name, object, value)
                 }
             }
             Self::Dict { items: None } => {
@@ -635,7 +635,7 @@ impl TypeValidator {
                     // Preserve the copy on assignment semantic
                     PyDict::from_sequence(v).map(|d| d.into_any())
                 } else {
-                    validation_error!("dict", member_name, object, value)
+                    validation_error!("dict", name, object, value)
                 }
             }
             Self::Typed { type_ } => {
@@ -643,7 +643,7 @@ impl TypeValidator {
                 if value.is_instance(t)? {
                     Ok(value)
                 } else {
-                    validation_error!(t.repr()?, member_name, object, value)
+                    validation_error!(t.repr()?, name, object, value)
                 }
             }
             Self::Instance { types } => {
@@ -651,13 +651,13 @@ impl TypeValidator {
                 if value.is_instance(t)? {
                     Ok(value)
                 } else {
-                    validation_error!(t.repr()?, member_name, object, value)
+                    validation_error!(t.repr()?, name, object, value)
                 }
             }
             Self::Union { members } => {
                 let mut err = Vec::with_capacity(members.len());
                 for v in members.iter() {
-                    match v.validate(member_name, object, Bound::clone(&value)) {
+                    match v.validate(name, object, Bound::clone(&value)) {
                         Ok(validated) => return Ok(validated),
                         Err(e) => err.push(e),
                     }
@@ -676,16 +676,16 @@ impl TypeValidator {
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());
                 if !value.is_instance(t)? {
-                    return validation_error!(t.repr()?, member_name, object, value);
+                    return validation_error!(t.repr()?, name, object, value);
                 }
                 for (attr_name, validator) in attributes {
                     let attr_value = value.getattr(attr_name.as_str())?;
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
-                    match validator.strict_validate(member_name, object, attr_value) {
+                    match validator.strict_validate(name, object, attr_value) {
                         Ok(_) => {}
                         Err(cause) => {
-                            if let Some(m) = member_name
+                            if let Some(m) = name
                                 && let Some(o) = object
                             {
                                 return Err(crate::utils::err_with_cause(
@@ -718,9 +718,7 @@ impl TypeValidator {
             Self::ForwardValidator { late_validator } => {
                 let py = value.py();
                 let resolved_validator = late_validator.get_validator(py)?;
-                resolved_validator
-                    .get()
-                    .validate_type(member_name, object, value)
+                resolved_validator.get().validate_type(name, object, value)
             }
         }
     }
