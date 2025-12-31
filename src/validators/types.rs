@@ -308,7 +308,7 @@ impl TypeValidator {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, (item, validator)) in tuple.iter().zip(items).enumerate() {
                         // FIXME the loop body logic could be extracted into a helper function
-                        match validator.validate(member_name, object, item.clone()) {
+                        match validator.validate(name, object, item.clone()) {
                             Ok(v) => {
                                 if !v.is(item) {
                                     match &mut validated_items {
@@ -369,7 +369,7 @@ impl TypeValidator {
                     for (index, titem) in tuple.iter().enumerate() {
                         match item
                             .borrow(value.py())
-                            .validate(member_name, object, titem.clone())
+                            .validate(name, object, titem.clone())
                         {
                             Ok(v) => {
                                 if !v.is(item) {
@@ -438,7 +438,7 @@ impl TypeValidator {
                     for (index, titem) in fset.iter().enumerate() {
                         match item
                             .borrow(value.py())
-                            .validate(member_name, object, titem.clone())
+                            .validate(name, object, titem.clone())
                         {
                             Ok(v) => {
                                 if !v.is(item) {
@@ -507,7 +507,7 @@ impl TypeValidator {
                     let py = value.py();
                     let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
                     for (index, titem) in set.iter().enumerate() {
-                        match item.borrow(py).validate(member_name, object, titem.clone()) {
+                        match item.borrow(py).validate(name, object, titem.clone()) {
                             Ok(v) => validated_items.push(v),
                             Err(cause) => {
                                 if let Some(m) = name
@@ -567,8 +567,8 @@ impl TypeValidator {
                         Vec::with_capacity(dict.len());
                     for (tk, tv) in dict.iter() {
                         match (
-                            key_v.borrow(py).validate(member_name, object, tk.clone()),
-                            val_v.borrow(py).validate(member_name, object, tv.clone()),
+                            key_v.borrow(py).validate(name, object, tk.clone()),
+                            val_v.borrow(py).validate(name, object, tv.clone()),
                         ) {
                             (Ok(k), Ok(v)) => validated_items.push((k, v)),
                             (Err(err), __ior__) => {
