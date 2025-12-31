@@ -9,9 +9,9 @@
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
     types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt,
-        PyListMethods, PyMapping, PyMappingMethods, PySequence, PySequenceMethods, PySet, PyString,
-        PyTuple,
+        PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
+        PyInt, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySequenceMethods, PySet,
+        PyString, PyTuple,
     },
 };
 
@@ -58,6 +58,7 @@ impl Coercer {
                 TypeValidator::Bool {} => PyBool::type_object(py).call1((value,)),
                 TypeValidator::Int {} => PyInt::type_object(py).call1((value,)),
                 TypeValidator::Float {} => PyFloat::type_object(py).call1((value,)),
+                TypeValidator::Complex {} => PyComplex::type_object(py).call1((value,)),
                 TypeValidator::Str {} => PyString::type_object(py).call1((value,)),
                 TypeValidator::Bytes {} => PyBytes::type_object(py).call1((value,)),
                 TypeValidator::Tuple { items } => {

@@ -8,8 +8,10 @@
 ///
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
-    ffi::{PyBool_Check, PyBytes_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check},
-    pyclass, pymethods,
+    ffi::{
+        PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
+    },
+    intern, pyclass, pyfunction, pymethods,
     sync::OnceLockExt,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods,
@@ -152,6 +154,8 @@ pub enum TypeValidator {
     #[pyo3(constructor = ())]
     Float {},
     #[pyo3(constructor = ())]
+    Complex {},
+    #[pyo3(constructor = ())]
     Str {},
     #[pyo3(constructor = ())]
     Bytes {},
@@ -254,6 +258,13 @@ impl TypeValidator {
                     Ok(value)
                 } else {
                     validation_error!("float", name, object, value)
+                }
+            }
+            Self::Complex {} => {
+                if unsafe { PyComplex_Check(value.as_ptr()) } != 0 {
+                    Ok(value)
+                } else {
+                    validation_error!("complex", name, object, value)
                 }
             }
             Self::Str {} => {
@@ -752,6 +763,7 @@ impl Clone for TypeValidator {
             Self::Bool {} => Self::Bool {},
             Self::Int {} => Self::Int {},
             Self::Float {} => Self::Float {},
+            Self::Complex {} => Self::Complex {},
             Self::Str {} => Self::Str {},
             Self::Bytes {} => Self::Bytes {},
             Self::Tuple { items } => Self::Tuple {

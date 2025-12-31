@@ -9,8 +9,8 @@
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
     types::{
-        PyAnyMethods, PyBool, PyBytes, PyDict, PyDictMethods, PyFloat, PyFrozenSet, PyInt, PySet,
-        PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
+        PyInt, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -392,6 +392,8 @@ pub fn build_validator_from_annotation<'py>(
         Ok(Validator::new(TypeValidator::Int {}, None, None, None))
     } else if ann.is(py.get_type::<PyFloat>()) {
         Ok(Validator::new(TypeValidator::Float {}, None, None, None))
+    } else if ann.is(py.get_type::<PyComplex>()) {
+        Ok(Validator::new(TypeValidator::Complex {}, None, None, None))
     } else if ann.is(py.get_type::<PyBytes>()) {
         Ok(Validator::new(TypeValidator::Bytes {}, None, None, None))
     } else if ann.is(py.get_type::<PyString>()) {
