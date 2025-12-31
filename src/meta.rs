@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFunction, PySet,
-        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
+        PyFunction, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 
@@ -21,11 +21,11 @@ use crate::member::{
 };
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
-    member::MemberBuilder,
+    member::{MemberBuilder, MemberCustomizationTool},
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{ATORS_MEMBERS, AtorsBase},
+    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, AtorsBase},
     member::PreGetattrBehavior,
 };
 
@@ -386,9 +386,6 @@ pub fn create_ators_subclass<'py>(
 
     let new_members = member_builders
         .into_iter()
-        // SAFETY The above logic guarantee the name and slot_index are set
-        // but accessing the warning module and calling it might fail (even
-        // though it should not).
         .map(|(k, v)| v.clone().build(&name).map(|v| (k, v)))
         .collect::<PyResult<Vec<(String, Member)>>>()?
         .into_py_dict(py)?;
@@ -402,15 +399,63 @@ pub fn create_ators_subclass<'py>(
         PyFrozenSet::new(py, specific_members)?,
     )?;
     dct.set_item(ATORS_METHODS, PyFrozenSet::new(py, methods)?)?;
-    dct.set_item(crate::core::ATORS_MEMBERS, all_members)?;
+    dct.set_item(crate::core::ATORS_MEMBERS, Bound::clone(&all_members))?;
 
     // Store whether or not the instance should be frozen after creation.
     dct.set_item(intern!(py, ATORS_FROZEN), frozen)?;
 
     // Since the only slot we use is __weakref__ we do not need copyreg
 
-    // Finally create the class
-    py.import(intern!(py, "builtins"))?
+    // Add member customization tool to be used in __init__subclass__ and
+    // create the class
+    dct.set_item(
+        ATORS_MEMBER_CUSTOMIZER,
+        MemberCustomizationTool::new(&all_members),
+    )?;
+    let cls = py
+        .import(intern!(py, "builtins"))?
         .getattr(intern!(py, "type"))?
-        .call_method1(intern!(py, "__new__"), (meta, name, bases, dct))
+        .call_method1(intern!(py, "__new__"), (meta, name.clone(), bases, dct))?;
+
+    // Retrieve the customization tool and customize the members as needed
+    let mut tool = cls
+        .getattr(ATORS_MEMBER_CUSTOMIZER)?
+        .cast_exact::<MemberCustomizationTool>()?
+        .borrow_mut();
+    let mut new_specific_members = None;
+    for (mname, mut mb) in tool.get_builders(py) {
+        // Create the new member inheriting behaviors from the existing ones.
+        let existing = cls.getattr(&mname)?.cast::<Member>()?.borrow();
+        mb.name = Some(existing.name().to_owned());
+        mb.slot_index = Some(existing.index());
+        mb.get_inherited_behavior_from_member(&existing);
+        let new_member = Bound::new(py, mb.build(&name)?)?;
+
+        // Replace the exiting member references by references by the new member
+        cls.setattr(&mname, Bound::clone(&new_member))?;
+        cls.getattr(ATORS_MEMBERS)?
+            .cast_exact::<PyDict>()?
+            .set_item(&mname, Bound::clone(&new_member))?;
+
+        // Manual initialization to make it easier to handle result
+        if new_specific_members.is_none() {
+            new_specific_members = Some(PySet::new(
+                py,
+                cls.getattr(ATORS_SPECIFIC_MEMBERS)?
+                    .cast_into_exact::<PyFrozenSet>()?
+                    .iter(),
+            )?);
+        }
+        let spec_members = new_specific_members.as_ref().expect("Initialized");
+        spec_members.discard(existing)?;
+        spec_members.add(new_member)?;
+    }
+    if let Some(sm) = new_specific_members {
+        cls.setattr(ATORS_SPECIFIC_MEMBERS, PyFrozenSet::new(py, sm)?)?;
+    }
+
+    // Set the customizer to None to mark that the class has been created.
+    cls.setattr(ATORS_MEMBER_CUSTOMIZER, py.None())?;
+
+    Ok(cls)
 }

@@ -19,6 +19,7 @@ from ._ators import (
     get_members,
     get_members_by_tag,
     get_members_by_tag_and_value,
+    get_member_customization_tool,
 )
 from ._meta import AtorsMeta as _Meta
 
@@ -88,4 +89,5 @@ __all__ = [
     "get_members",
     "get_members_by_tag",
     "get_members_by_tag_and_value",
+    "get_member_customization_tool",
 ]

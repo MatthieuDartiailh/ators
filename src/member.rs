@@ -11,9 +11,9 @@ use crate::{
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
-    Bound, IntoPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern,
-    pyclass, pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyModuleMethods, PyString},
+    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern, pyclass,
+    pymethods,
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -322,12 +322,22 @@ impl Member {
         self_: PyRef<'py, Member>,
         object: Bound<'py, PyAny>,
     ) -> pyo3::PyResult<()> {
-        let py = self_.py();
         let object = object.cast::<crate::core::AtorsBase>()?;
         self_.delattr.del(&self_, object)
     }
 
-    // XXX because the class is frozen I cannot implement clear....
+    pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
+        if let Some(m) = &self.metadata {
+            for (_k, v) in m.iter() {
+                visit.call(v)?
+            }
+        }
+        Ok(())
+    }
+
+    // The class is frozen so another mutable object must be involved to
+    // create a cycle and as a consequence it is not necessary to implement
+    // __clear__
 }
 
 #[pyclass(module = "ators._ators", name = "member")]
@@ -927,5 +937,65 @@ impl Clone for MemberBuilder {
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
         }
+    }
+}
+
+#[pyclass(module = "ators._ators")]
+pub struct MemberCustomizationTool {
+    members: HashMap<String, Option<Py<MemberBuilder>>>,
+}
+
+impl MemberCustomizationTool {
+    pub fn new<'py>(members: &Bound<'py, PyDict>) -> Self {
+        MemberCustomizationTool {
+            members: members
+                .keys()
+                .iter()
+                .map(|o| {
+                    o.extract()
+                        .expect("Internally built dict is guaranteed to contain only strings")
+                })
+                .map(|m| (m, None))
+                .collect(),
+        }
+    }
+
+    pub fn get_builders<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> impl Iterator<Item = (String, MemberBuilder)> {
+        self.members.iter_mut().filter_map(move |(k, v)| {
+            v.take().map(|v| {
+                (
+                    k.clone(),
+                    v.extract(py).expect(
+                        "MemberBuilder was constructed internally so extraction cannot fail",
+                    ),
+                )
+            })
+        })
+    }
+}
+
+#[pymethods]
+impl MemberCustomizationTool {
+    ///
+    pub fn __getitem__<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        name: &str,
+    ) -> PyResult<Bound<'py, MemberBuilder>> {
+        if !self_.members.contains_key(name) {
+            return Err(pyo3::exceptions::PyKeyError::new_err(format!(
+                "No member named '{name}' to customize."
+            )));
+        }
+        let py = self_.py();
+        let entry = self_
+            .members
+            .get_mut(name)
+            .expect("Key is known to be in map")
+            .get_or_insert_with(|| Py::new(py, MemberBuilder::default()).unwrap())
+            .bind(py);
+        Ok(Bound::clone(entry))
     }
 }

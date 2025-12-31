@@ -12,13 +12,14 @@ use pyo3::{
     types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
 
-use crate::member::{Member, member_coerce_init};
+use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 
 // FIXME reduce memory footprint
 // See for initializing allocated memory https://docs.rs/init_array/latest/src/init_array/stable.rs.html#71-95
 // But we need to understand how to make it Send and Sync first
 
 pub static ATORS_MEMBERS: &str = "__ators_members__";
+pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 
 #[pyclass(module = "ators._ators", subclass)]
 pub struct AtorsBase {
@@ -203,6 +204,22 @@ pub fn get_members_by_tag_and_value<'py>(
         }
     }
     Ok(members)
+}
+
+/// Retrieve the member customization tool from a class.
+#[pyfunction]
+pub fn get_member_customization_tool<'py>(
+    cls: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, MemberCustomizationTool>> {
+    let attr = cls.getattr(ATORS_MEMBER_CUSTOMIZER)?;
+    if attr.is_none() {
+        Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "Member customization is only possible during __init_subclass__ for class {}",
+            cls.get_type().name().unwrap()
+        )))
+    } else {
+        Ok(attr.cast_into::<MemberCustomizationTool>()?)
+    }
 }
 
 // FIXME re-enable once notification are implemented

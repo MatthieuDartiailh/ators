@@ -16,6 +16,7 @@ from ators import (
     get_members,
     get_members_by_tag,
     get_members_by_tag_and_value,
+    get_member_customization_tool,
 )
 from ators.behaviors import PreSetAttr, DelAttr
 
@@ -79,3 +80,30 @@ def test_member_access_fucntions():
             assert m.name == k
             assert v == {"a": 1, "b": 2}[k]
         assert list(get_members_by_tag_and_value(obj, "t", 1)) == ["a"]
+
+
+def test_member_init_subclass():
+    class A(Ators):
+        a = member().constant()
+
+        def __init_subclass__(cls):
+            t = get_member_customization_tool(cls)
+            for m in get_members(cls):
+                t[m].tag(a=1)
+
+    class B(A):
+        b = member().constant()
+
+    assert isinstance(B.a.pre_setattr, PreSetAttr.Constant)
+    assert isinstance(B.a.delattr, DelAttr.Undeletable)
+    assert B.a.metadata == {"a": 1}
+    assert isinstance(B.b.pre_setattr, PreSetAttr.Constant)
+    assert isinstance(B.b.delattr, DelAttr.Undeletable)
+    assert B.b.metadata == {"a": 1}
+    assert B.__ators_members__["a"] is B.a
+    assert B.__ators_members__["b"] is B.b
+    assert B.a in B.__ators_specific_members__
+    assert B.b in B.__ators_specific_members__
+
+    with pytest.raises(RuntimeError):
+        get_member_customization_tool(B)
