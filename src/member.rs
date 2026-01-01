@@ -501,7 +501,11 @@ impl MemberBuilder {
         Ok(self_)
     }
 
+    /// Attach or configure the pre-get behavior for this member.
     ///
+    /// Accepts a behavior object (or compatible callable) which will be
+    /// invoked before attribute access on instances to allow preparation
+    /// or short-circuiting of the returned value.
     pub fn preget<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_getattr: Bound<'py, PyAny>,
@@ -522,7 +526,11 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
+    /// Attach or configure the post-get behavior for this member.
     ///
+    /// The provided behavior is called after a value is retrieved from
+    /// the instance; it can inspect or transform the value before it is
+    /// returned to callers.
     pub fn postget<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_getattr: Bound<'py, PyAny>,
@@ -543,7 +551,10 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
+    /// Attach or configure the pre-set behavior for this member.
     ///
+    /// The provided behavior will be invoked prior to assigning a new
+    /// value to the member, allowing validation or state adjustment.
     pub fn preset<'py>(
         mut self_: PyRefMut<'py, Self>,
         pre_setattr: Bound<'py, PyAny>,
@@ -564,7 +575,10 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
+    /// Mark this member as constant (immutable) and undeletable.
     ///
+    /// This convenience method sets a constant `pre_setattr` behavior
+    /// and an `Undeletable` `delattr` behavior on the builder.
     pub fn constant<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
@@ -574,7 +588,11 @@ impl MemberBuilder {
         Ok(self_)
     }
 
+    /// Attach or configure the post-set behavior for this member.
     ///
+    /// The provided behavior is invoked after a successful assignment
+    /// and can be used to react to value changes (notifications,
+    /// derived updates, etc.).
     pub fn postset<'py>(
         mut self_: PyRefMut<'py, Self>,
         post_setattr: Bound<'py, PyAny>,
@@ -595,7 +613,11 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
+    /// Attach or configure the delete behavior for this member.
     ///
+    /// The provided behavior controls what happens when the attribute
+    /// is deleted on instances (e.g. disallow deletion or remove the
+    /// underlying slot value).
     pub fn del_<'py>(
         mut self_: PyRefMut<'py, Self>,
         delattr_behavior: Bound<'py, DelattrBehavior>,
@@ -614,7 +636,10 @@ impl MemberBuilder {
         Ok(self_)
     }
 
+    /// Set whether this member participates in pickling/deserialization.
     ///
+    /// When `pickle` is true the member's value will be included in
+    /// object state used by picklers; otherwise it will be omitted.
     #[pyo3(name = "pickle")]
     pub fn py_pickle<'py>(
         mut self_: PyRefMut<'py, Self>,
@@ -634,7 +659,12 @@ impl MemberBuilder {
         Ok(self_)
     }
 
+    /// Configure the forward-reference environment for this member.
     ///
+    /// Accepts either a zero-argument callable that returns a mapping,
+    /// a fully-qualified class/module name (string), or a sequence of
+    /// such names. The environment is used when resolving forward
+    /// references for type annotations.
     pub fn forward_ref_environment<'py>(
         mut self_: PyRefMut<'py, Self>,
         factory_or_modules: Bound<'py, PyAny>,
@@ -790,7 +820,11 @@ impl MemberBuilder {
         self.pickle = new;
     }
 
+    /// Populate unset behaviors from an existing `Member` instance.
     ///
+    /// This copies any behavior or validator that is not already set on
+    /// the builder from the provided `member`, enabling inheritance of
+    /// default behaviors during customization.
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
@@ -827,7 +861,10 @@ impl MemberBuilder {
         }
     }
 
+    /// Finalize the builder and construct a `Member` descriptor.
     ///
+    /// Validates required fields (name, slot) and normalizes validator
+    /// and coercer configuration before returning the built `Member`.
     pub fn build<'py>(self, type_name: &Bound<'py, PyString>) -> PyResult<Member> {
         let Some(name) = self.name else {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
