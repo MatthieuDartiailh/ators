@@ -13,14 +13,15 @@ use pyo3::{
 
 use crate::{core::AtorsBase, validators::Validator};
 
-// #[pyclass(extends=PyList)]
+// #[pyclass(extends=PyList)]  Possible in PyO3 0.28 to be released soon
 // struct AtorsList;
 
+// XXX not pickable ...
 #[pyclass(module = "ators._ators", extends=PySet)]
 pub struct AtorsSet {
     validator: Validator,
     member_name: Option<String>,
-    object: Option<Py<AtorsBase>>,
+    object: Option<Py<AtorsBase>>, // WeakRef?
 }
 
 impl AtorsSet {
@@ -117,27 +118,22 @@ impl AtorsSet {
         AtorsSet::__ixor__(self_, other)
     }
 
-    // XXX
-    // pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-    //     if let Some(m) = &self.member {
-    //         visit.call(m)?;
-    //     }
-    //     if let Some(o) = &self.object {
-    //         visit.call(o)?;
-    //     }
-    //     // XXX need to traverse the type and the base PySet
-    //     Ok(())
-    // }
+    // The traverse method of the parent class (PySet) is called automatically and
+    // the type is also traversed so we only need to visit our own references.
+    pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
+        if let Some(o) = &self.object {
+            visit.call(o)?;
+        }
+        Ok(())
+    }
 
-    // pub fn __clear__(&mut self) {
-    //     self.member = None;
-    //     self.object = None;
-    //     // XXX clear base set
-    // }
+    // The clear method of the parent class (PySet) is called automatically and
+    // so we only need to visit our own references.
+    pub fn __clear__(&mut self) {
+        self.object = None;
+    }
 }
 
-// XXX validators do not need to be optional since type annotations mandate to
-// specify both key and value type
 #[pyclass(module = "ators._ators", extends=PyDict)]
 pub struct AtorsDict {
     key_validator: Validator,
@@ -324,21 +320,20 @@ impl AtorsDict {
         AtorsDict::update(self_, Some(&other), None)
     }
 
-    // XXX
-    // pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-    //     if let Some(m) = &self.member {
-    //         visit.call(m)?;
-    //     }
-    //     if let Some(o) = &self.object {
-    //         visit.call(o)?;
-    //     }
-    //     // XXX need to traverse the type and the base PySet
-    //     Ok(())
-    // }
+    // The traverse method of the parent class (PyDict) is called automatically and
+    // the type is also traversed so we only need to visit our own references.
+    pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
+        if let Some(o) = &self.object {
+            visit.call(o)?;
+        }
+        Ok(())
+    }
 
-    // pub fn __clear__(&mut self) {
-    //     self.member = None;
-    //     self.object = None;
-    //     // XXX clear base set
-    // }
+    // The clear method of the parent class (PyDict) is called automatically and
+    // so we only need to clear our own references.
+    pub fn __clear__(&mut self) {
+        self.object = None;
+    }
+
+    // XXX can simply implement __getstate__ and __setstate__ without dealing with items
 }
