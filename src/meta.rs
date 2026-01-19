@@ -46,7 +46,7 @@ fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, P
         })
         .collect::<PyResult<Vec<Vec<Bound<'py, PyType>>>>>()?;
 
-    // Container to store teh computed MRO
+    // Container to store the computed MRO
     let mut mro = Vec::new();
 
     while !inputs.is_empty() {
