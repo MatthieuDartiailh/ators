@@ -1,5 +1,5 @@
 /*-----------------------------------------------------------------------------
-| Copyright (c) 2025, Ators contributors, see git history for details
+| Copyright (c) 2025-2026, Ators contributors, see git history for details
 |
 | Distributed under the terms of the Modified BSD License.
 |
@@ -8,7 +8,7 @@
 ///
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyRefMut, PyResult, Python, ffi, intern, pyclass, pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PySet, PySetMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PySet, PySetMethods},
 };
 
 use crate::{core::AtorsBase, validators::Validator};

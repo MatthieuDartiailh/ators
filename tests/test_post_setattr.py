@@ -1,5 +1,5 @@
 # --------------------------------------------------------------------------------------
-# Copyright (c) 2025, Ators contributors, see git history for details
+# Copyright (c) 2025-2026, Ators contributors, see git history for details
 #
 # Distributed under the terms of the Modified BSD License.
 #
