@@ -11,7 +11,7 @@ use pyo3::{
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    intern, pyclass, pyfunction, pymethods,
+    intern, pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods,
@@ -22,6 +22,51 @@ use std::{convert::Infallible, sync::OnceLock};
 
 use super::Validator;
 use crate::annotations::{build_validator_from_annotation, get_type_tools};
+use crate::core::AtorsBase;
+use crate::get_type_mutability_map;
+use crate::meta::ATORS_FROZEN;
+
+/// Enum representing whether a type is mutable, immutable, or mutability is undecidable
+#[pyclass(module = "ators._ators", eq, frozen)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mutability {
+    /// The type is mutable
+    Mutable,
+    /// The type is immutable
+    Immutable,
+    /// The type's mutability cannot be determined
+    Undecidable,
+}
+
+pub fn is_type_mutable<'py>(type_: &Bound<'py, PyType>) -> Mutability {
+    let py = type_.py();
+    if let Ok(t) = type_.cast::<AtorsBase>() {
+        if t.getattr(ATORS_FROZEN)
+            .expect("Subclass of AtorsBase must have __ators_frozen__ set")
+            .extract::<bool>()
+            .expect("__ators_frozen__ should always be a bool")
+        {
+            Mutability::Immutable
+        } else {
+            Mutability::Mutable
+        }
+    } else if let Ok(params) = type_.getattr(intern!(py, "__dataclass_params__"))
+        && params
+            .getattr(intern!(py, "frozen"))
+            .expect("DataclassParams have a frozen attr")
+            .extract()
+            .expect("Frozen is a bool")
+    {
+        Mutability::Immutable
+    } else {
+        let mut_map = get_type_mutability_map(py);
+        match mut_map.borrow().get_type_mutability(type_) {
+            None => Mutability::Undecidable,
+            Some(true) => Mutability::Mutable,
+            Some(false) => Mutability::Immutable,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct TypesTuple(Py<PyTuple>);
@@ -32,6 +77,13 @@ impl TypesTuple {
         let py = value.py();
         let type_ = self.0.bind(py).get_item(0)?;
         type_.call1((value,))
+    }
+
+    pub fn iter<'py>(&self, py: Python<'py>) -> impl Iterator<Item = Bound<'py, PyType>> {
+        self.0
+            .bind(py)
+            .iter()
+            .map(|o| o.cast_into::<PyType>().expect("Known tuple of types"))
     }
 }
 
@@ -122,6 +174,14 @@ impl LateResolvedValidator {
         match validator {
             Ok(tv) => Ok(tv.bind(py).clone()),
             Err(e) => Err(e.clone_ref(py)),
+        }
+    }
+
+    ///
+    pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
+        match self.get_validator(py) {
+            Ok(validator) => validator.get().is_type_mutable(py),
+            Err(_) => Mutability::Undecidable,
         }
     }
 }
@@ -751,6 +811,98 @@ impl TypeValidator {
             _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot create a default value using args and kwargs for {self:?}"
             ))),
+        }
+    }
+
+    pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
+        match self {
+            Self::None {}
+            | Self::Bool {}
+            | Self::Int {}
+            | Self::Float {}
+            | Self::Complex {}
+            | Self::Bytes {}
+            | Self::Str {} => Mutability::Immutable,
+            Self::Any {} => Mutability::Undecidable,
+            Self::FrozenSet { item } | Self::VarTuple { item } => match item {
+                None => Mutability::Immutable,
+                Some(iv) => iv.borrow(py).type_validator.is_type_mutable(py),
+            },
+            // NOTE try_fold does not seem relevant here
+            Self::Tuple { items } => {
+                items
+                    .iter()
+                    .fold(Mutability::Immutable, |acc: Mutability, e| {
+                        match (acc, e.type_validator.is_type_mutable(py)) {
+                            // If one item is mutable the tuple is seen as mutable
+                            (Mutability::Mutable, _) => Mutability::Mutable,
+                            // If one item is undecidable, the tuple is mutable if the
+                            // new item is otherwise it remains undecidable
+                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
+                            (Mutability::Undecidable, Mutability::Undecidable) => {
+                                Mutability::Undecidable
+                            }
+                            (Mutability::Undecidable, Mutability::Immutable) => {
+                                Mutability::Undecidable
+                            }
+                            // If all previous items are immutable everything depend on
+                            // the last visited one.
+                            (Mutability::Immutable, im) => im,
+                        }
+                    })
+            }
+            Self::Set { item: _ } => Mutability::Mutable,
+            Self::Dict { items: _ } => Mutability::Mutable,
+            Self::Typed { type_ } => is_type_mutable(type_.bind(py)),
+            Self::Instance { types } => {
+                types
+                    .iter(py)
+                    .fold(Mutability::Immutable, |acc: Mutability, e| {
+                        match (acc, is_type_mutable(&e)) {
+                            // If one item is mutable the tuple is seen as mutable
+                            (Mutability::Mutable, _) => Mutability::Mutable,
+                            // If one item is undecidable, the tuple is mutable if the
+                            // new item is otherwise it remains undecidable
+                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
+                            (Mutability::Undecidable, Mutability::Undecidable) => {
+                                Mutability::Undecidable
+                            }
+                            (Mutability::Undecidable, Mutability::Immutable) => {
+                                Mutability::Undecidable
+                            }
+                            // If all previous items are immutable everything depend on
+                            // the last visited one.
+                            (Mutability::Immutable, im) => im,
+                        }
+                    })
+            }
+            Self::ForwardValidator { late_validator } => late_validator.is_type_mutable(py),
+            Self::GenericAttributes {
+                type_,
+                attributes: _,
+            } => is_type_mutable(type_.bind(py)),
+            Self::Union { members } => {
+                members
+                    .iter()
+                    .fold(Mutability::Immutable, |acc: Mutability, e| {
+                        match (acc, e.type_validator.is_type_mutable(py)) {
+                            // If one item is mutable the tuple is seen as mutable
+                            (Mutability::Mutable, _) => Mutability::Mutable,
+                            // If one item is undecidable, the tuple is mutable if the
+                            // new item is otherwise it remains undecidable
+                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
+                            (Mutability::Undecidable, Mutability::Undecidable) => {
+                                Mutability::Undecidable
+                            }
+                            (Mutability::Undecidable, Mutability::Immutable) => {
+                                Mutability::Undecidable
+                            }
+                            // If all previous items are immutable everything depend on
+                            // the last visited one.
+                            (Mutability::Immutable, im) => im,
+                        }
+                    })
+            }
         }
     }
 }

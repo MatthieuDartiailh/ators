@@ -13,6 +13,8 @@ use pyo3::{
     types::{PyAnyMethods, PyDict, PyTuple, PyType},
 };
 
+use crate::utils::TypeMutabilityMap;
+
 mod annotations;
 mod containers;
 mod core;
@@ -29,6 +31,15 @@ static GENERIC_ATTRIBUTES: PyOnceLock<Py<PyDict>> = PyOnceLock::new();
 fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
     GENERIC_ATTRIBUTES
         .get_or_init(py, || PyDict::new(py).into())
+        .clone_ref(py)
+        .into_bound(py)
+}
+
+static TYPE_MUTABILITY: PyOnceLock<Py<utils::TypeMutabilityMap>> = PyOnceLock::new();
+
+fn get_type_mutability_map<'py>(py: Python<'py>) -> Bound<'py, TypeMutabilityMap> {
+    TYPE_MUTABILITY
+        .get_or_init(py, || TypeMutabilityMap::new(py))
         .clone_ref(py)
         .into_bound(py)
 }
@@ -69,5 +80,59 @@ mod _ators {
     ) -> PyResult<()> {
         let map = get_generic_attributes_map(py);
         map.set_item(type_, attributes)
+    }
+
+    #[pyfunction]
+    /// Register a mutability specification for a given type.
+    ///
+    /// This function allows registering custom mutability information for a Python type.
+    /// The mutability specification can be either a boolean or a callable.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_` - The Python type for which to register mutability information (type: type[T])
+    /// * `mutability` - Either:
+    ///   - `True` (bool): The type is always considered mutable
+    ///   - `False` (bool): The type is always considered immutable
+    ///   - A callable `Callable[[T], bool]`: A function that takes an instance of type T
+    ///     and returns a bool indicating whether that specific instance is mutable (True)
+    ///     or immutable (False)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the registration was successful
+    /// * `Err(PyErr)` - If the mutability value is neither a bool nor a valid callable
+    ///   with the appropriate signature (must accept exactly one argument)
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from ators import add_type_mutability
+    ///
+    /// # Register that list is always mutable
+    /// add_type_mutability(list, True)
+    ///
+    /// # Register that tuple is always immutable
+    /// add_type_mutability(tuple, False)
+    ///
+    /// # Register custom mutability check
+    /// class MyClass:
+    ///     def __init__(self, is_mutable):
+    ///         self.is_mutable = is_mutable
+    ///
+    /// def check_mutability(obj):
+    ///     return obj.is_mutable
+    ///
+    /// add_type_mutability(MyClass, check_mutability)
+    /// ```
+    pub(crate) fn register_type_mutability_info<'py>(
+        py: Python<'py>,
+        type_: &Bound<'py, PyType>,
+        mutability: &Bound<'py, pyo3::PyAny>,
+    ) -> PyResult<()> {
+        let map_py = TYPE_MUTABILITY.get_or_init(py, || TypeMutabilityMap::new(py));
+        let map_bound = map_py.clone_ref(py).into_bound(py);
+        // Use Python's setitem protocol
+        map_bound.set_item(type_, mutability)
     }
 }

@@ -15,6 +15,7 @@ from ._ators import (
     is_frozen,
     member,
     Member,
+    register_type_mutability_info,
     get_member,
     get_members,
     get_members_by_tag,
@@ -29,6 +30,7 @@ try:
     import numpy as np
 
     add_generic_type_attributes(np.ndarray, ("shape", "dtype"))
+    register_type_mutability_info(np.ndarray, lambda obj: obj.flags.writeable)
 except ImportError:
     pass
 
@@ -90,4 +92,5 @@ __all__ = [
     "get_members_by_tag",
     "get_members_by_tag_and_value",
     "get_member_customization_tool",
+    "register_type_mutability_info",
 ]

@@ -113,6 +113,10 @@ impl Member {
     pub fn metadata(&self) -> &Option<HashMap<String, Py<PyAny>>> {
         &self.metadata
     }
+
+    pub fn validator(&self) -> &Validator {
+        &self.validator
+    }
 }
 
 pub fn member_set_unpickled_value<'py>(

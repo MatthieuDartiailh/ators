@@ -22,16 +22,16 @@ use crate::member::{
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
     member::{MemberBuilder, MemberCustomizationTool},
-    validators::{Coercer, ValueValidator},
+    validators::{Coercer, ValueValidator, types::Mutability},
 };
 use crate::{
-    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, AtorsBase},
+    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, AtorsBase, ClassMutability},
     member::PreGetattrBehavior,
 };
 
 static ATORS_SPECIFIC_MEMBERS: &str = "__ators_specific_members__";
 static ATORS_METHODS: &str = "__ators_methods__";
-static ATORS_FROZEN: &str = "__ators_frozen__";
+pub(crate) static ATORS_FROZEN: &str = "__ators_frozen__";
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
@@ -456,6 +456,50 @@ pub fn create_ators_subclass<'py>(
 
     // Set the customizer to None to mark that the class has been created.
     cls.setattr(ATORS_MEMBER_CUSTOMIZER, py.None())?;
+
+    // Determine class mutability based on member type validators
+    let members_dict_obj = cls.getattr(ATORS_MEMBERS)?;
+    let members_dict = members_dict_obj.cast::<PyDict>()?;
+    let mut class_mutability = ClassMutability::Immutable {};
+    let mut inspect_values_names = Vec::new();
+
+    for (member_name, member_obj) in members_dict.iter() {
+        let member = member_obj.cast::<Member>()?;
+
+        // Get the validator from the member using the accessor method
+        let member_borrow = member.borrow();
+        let validator = member_borrow.validator();
+
+        // Get the type validator from the validator
+        let mutability = validator.type_validator.is_type_mutable(py);
+        match mutability {
+            Mutability::Mutable => {
+                class_mutability = ClassMutability::Mutable {};
+                break;
+            }
+            Mutability::Undecidable => {
+                inspect_values_names.push(member_name.extract::<String>()?);
+            }
+            Mutability::Immutable => {
+                // Keep iterating
+            }
+        }
+    }
+
+    // If we haven't found a mutable type and we have undecidable types, set to InspectValues
+    match class_mutability {
+        ClassMutability::Immutable {} if !inspect_values_names.is_empty() => {
+            class_mutability = ClassMutability::InspectValues {
+                values: inspect_values_names,
+            };
+        }
+        _ => {}
+    }
+
+    cls.setattr(
+        crate::core::ATORS_MEMBERS_MUTABILITY,
+        Bound::new(py, class_mutability)?,
+    )?;
 
     Ok(cls)
 }
