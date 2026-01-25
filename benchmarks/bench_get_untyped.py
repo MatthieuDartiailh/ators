@@ -48,6 +48,17 @@ def test_benchmark_get_ators(benchmark, ators_untyped):
     def get_ops():
         _ = ators_untyped.field
 
+
+    benchmark(get_ops)
+
+
+@pytest.mark.benchmark(group="get_untyped")
+def test_benchmark_get_ators_frozen(benchmark, ators_frozen_untyped):
+    """Benchmark frozen Ators __get__ performance with Any annotation."""
+
+    def get_ops():
+        _ = ators_frozen_untyped.field
+
     benchmark(get_ops)
 
 

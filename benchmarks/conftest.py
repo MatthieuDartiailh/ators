@@ -2,7 +2,7 @@
 
 import pytest
 from typing import Optional, Literal, Any
-from ators import Ators, member
+from ators import Ators, member, freeze
 from ators.behaviors import ValueValidator
 
 try:
@@ -151,6 +151,14 @@ def py_plain_untyped():
 def ators_untyped():
     """Fresh AtorsUntypedClass instance for each benchmark."""
     return AtorsUntypedClass(field=42)
+
+
+@pytest.fixture
+def ators_frozen_untyped():
+    """Fresh frozen AtorsUntypedClass instance for each benchmark."""
+    obj = AtorsUntypedClass(field=42)
+    freeze(obj)
+    return obj
 
 
 @pytest.fixture
