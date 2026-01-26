@@ -22,7 +22,63 @@ use pyo3::{
         PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
-use std::{convert::Infallible, sync::OnceLock};
+use std::{
+    convert::Infallible,
+    ops::{Deref, DerefMut},
+    sync::OnceLock,
+};
+
+/// A newtype wrapper around `Box<Validator>` that implements PyO3 conversion traits.
+/// This allows using heap-allocated validators in TypeValidator variants without
+/// requiring GIL-bound storage (Py<Validator>).
+#[derive(Debug, Clone)]
+pub struct BoxedValidator(pub Box<Validator>);
+
+impl Deref for BoxedValidator {
+    type Target = Validator;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for BoxedValidator {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Validator> for BoxedValidator {
+    fn from(v: Validator) -> Self {
+        BoxedValidator(Box::new(v))
+    }
+}
+
+impl FromPyObject<'_> for BoxedValidator {
+    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let validator: Validator = ob.extract()?;
+        Ok(BoxedValidator(Box::new(validator)))
+    }
+}
+
+impl<'py> IntoPyObject<'py> for BoxedValidator {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = pyo3::PyErr;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        // Convert the inner Validator to a Python object
+        Py::new(py, *self.0).map(|p| p.into_bound(py).into_any())
+    }
+}
+
+impl<'py> IntoPyObject<'py> for &BoxedValidator {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = pyo3::PyErr;
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        // Clone and convert the inner Validator to a Python object
+        Py::new(py, (*self.0).clone()).map(|p| p.into_bound(py).into_any())
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct TypesTuple(Py<PyTuple>);
@@ -181,7 +237,7 @@ pub enum TypeValidator {
     #[pyo3(constructor = (items))]
     Tuple { items: Vec<Validator> },
     #[pyo3(constructor = (item))]
-    VarTuple { item: Option<Py<Validator>> },
+    VarTuple { item: Option<BoxedValidator> },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
     #[pyo3(constructor = (types))]
@@ -201,12 +257,12 @@ pub enum TypeValidator {
         late_validator: LateResolvedValidator,
     },
     #[pyo3(constructor = (item))]
-    FrozenSet { item: Option<Py<Validator>> },
+    FrozenSet { item: Option<BoxedValidator> },
     #[pyo3(constructor = (item))]
-    Set { item: Option<Py<Validator>> },
+    Set { item: Option<BoxedValidator> },
     #[pyo3(constructor = (items))]
     Dict {
-        items: Option<(Py<Validator>, Py<Validator>)>,
+        items: Option<(BoxedValidator, BoxedValidator)>,
     },
     // Sequence,
     // List,
@@ -385,12 +441,9 @@ impl TypeValidator {
                 if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, titem) in tuple.iter().enumerate() {
-                        match item
-                            .borrow(value.py())
-                            .validate(name, object, titem.clone())
-                        {
+                        match item.validate(name, object, titem.clone()) {
                             Ok(v) => {
-                                if !v.is(item) {
+                                if !v.is(&titem) {
                                     match &mut validated_items {
                                         Some(vec) => vec.push(v),
                                         None => {
@@ -454,12 +507,9 @@ impl TypeValidator {
                 if let Ok(fset) = value.cast_exact::<pyo3::types::PyFrozenSet>() {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, titem) in fset.iter().enumerate() {
-                        match item
-                            .borrow(value.py())
-                            .validate(name, object, titem.clone())
-                        {
+                        match item.validate(name, object, titem.clone()) {
                             Ok(v) => {
-                                if !v.is(item) {
+                                if !v.is(&titem) {
                                     match &mut validated_items {
                                         Some(vec) => vec.push(v),
                                         None => {
@@ -525,7 +575,7 @@ impl TypeValidator {
                     let py = value.py();
                     let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
                     for (index, titem) in set.iter().enumerate() {
-                        match item.borrow(py).validate(name, object, titem.clone()) {
+                        match item.validate(name, object, titem.clone()) {
                             Ok(v) => validated_items.push(v),
                             Err(cause) => {
                                 if let Some(m) = name
@@ -556,7 +606,7 @@ impl TypeValidator {
                     Ok({
                         crate::containers::AtorsSet::new(
                             py,
-                            item.extract(py)?,
+                            (*item.0).clone(),
                             name,
                             object.map(|m| m.clone().unbind()),
                             validated_items,
@@ -585,8 +635,8 @@ impl TypeValidator {
                         Vec::with_capacity(dict.len());
                     for (tk, tv) in dict.iter() {
                         match (
-                            key_v.borrow(py).validate(name, object, tk.clone()),
-                            val_v.borrow(py).validate(name, object, tv.clone()),
+                            key_v.validate(name, object, tk.clone()),
+                            val_v.validate(name, object, tv.clone()),
                         ) {
                             (Ok(k), Ok(v)) => validated_items.push((k, v)),
                             (Err(err), __ior__) => {
@@ -647,8 +697,8 @@ impl TypeValidator {
                         let py = value.py();
                         crate::containers::AtorsDict::new(
                             py,
-                            key_v.extract(py)?,
-                            val_v.extract(py)?,
+                            (*key_v.0).clone(),
+                            (*val_v.0).clone(),
                             name,
                             object.map(|m| m.clone().unbind()),
                             validated_items,
@@ -784,7 +834,7 @@ impl TypeValidator {
             Self::Any {} => Mutability::Undecidable,
             Self::FrozenSet { item } | Self::VarTuple { item } => match item {
                 None => Mutability::Immutable,
-                Some(iv) => iv.borrow(py).type_validator.is_type_mutable(py),
+                Some(iv) => iv.type_validator.is_type_mutable(py),
             },
             // NOTE try_fold does not seem relevant here
             Self::Tuple { items } => {
@@ -886,19 +936,11 @@ impl Clone for TypeValidator {
             Self::Tuple { items } => Self::Tuple {
                 items: items.to_vec(),
             },
-            Self::VarTuple { item } => Self::VarTuple {
-                item: item.as_ref().map(|inner| inner.clone_ref(py)),
-            },
-            Self::FrozenSet { item } => Self::FrozenSet {
-                item: item.as_ref().map(|inner| inner.clone_ref(py)),
-            },
-            Self::Set { item } => Self::Set {
-                item: item.as_ref().map(|inner| inner.clone_ref(py)),
-            },
+            Self::VarTuple { item } => Self::VarTuple { item: item.clone() },
+            Self::FrozenSet { item } => Self::FrozenSet { item: item.clone() },
+            Self::Set { item } => Self::Set { item: item.clone() },
             Self::Dict { items } => Self::Dict {
-                items: items
-                    .as_ref()
-                    .map(|(k, v)| (k.clone_ref(py), v.clone_ref(py))),
+                items: items.clone(),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

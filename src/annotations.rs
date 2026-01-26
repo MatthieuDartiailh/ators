@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, Py, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
+    Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
@@ -21,7 +21,8 @@ use crate::{
     member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
     utils::err_with_cause,
     validators::{
-        TypeValidator, ValidValues, Validator, ValueValidator, types::LateResolvedValidator,
+        TypeValidator, ValidValues, Validator, ValueValidator,
+        types::{BoxedValidator, LateResolvedValidator},
     },
 };
 
@@ -197,7 +198,7 @@ pub fn build_validator_from_annotation<'py>(
                 )?;
                 Ok(Validator::new(
                     TypeValidator::VarTuple {
-                        item: Some(Py::new(py, item_validator)?),
+                        item: Some(BoxedValidator::from(item_validator)),
                     },
                     None,
                     None,
@@ -225,16 +226,13 @@ pub fn build_validator_from_annotation<'py>(
             }
         } else if origin.is(py.get_type::<PyFrozenSet>()) {
             let item_val = if let Ok(item_arg) = args.get_item(0) {
-                Some(Py::new(
-                    py,
-                    build_validator_from_annotation(
-                        PyString::new(py, &format!("{name}-item")).cast()?,
-                        &item_arg,
-                        type_containers,
-                        tools,
-                        ctx_provider,
-                    )?,
-                )?)
+                Some(BoxedValidator::from(build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?))
             } else {
                 None
             };
@@ -246,16 +244,13 @@ pub fn build_validator_from_annotation<'py>(
             ))
         } else if origin.is(py.get_type::<PySet>()) {
             let item_val = if let Ok(item_arg) = args.get_item(0) {
-                Some(Py::new(
-                    py,
-                    build_validator_from_annotation(
-                        PyString::new(py, &format!("{name}-item")).cast()?,
-                        &item_arg,
-                        type_containers,
-                        tools,
-                        ctx_provider,
-                    )?,
-                )?)
+                Some(BoxedValidator::from(build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?))
             } else {
                 None
             };
@@ -268,26 +263,20 @@ pub fn build_validator_from_annotation<'py>(
         } else if origin.is(py.get_type::<PyDict>()) {
             let items_validator = if let Ok((key_arg, val_arg)) = args.extract() {
                 Some((
-                    Py::new(
-                        py,
-                        build_validator_from_annotation(
-                            PyString::new(py, &format!("{name}-key")).cast()?,
-                            &key_arg,
-                            type_containers,
-                            tools,
-                            ctx_provider,
-                        )?,
-                    )?,
-                    Py::new(
-                        py,
-                        build_validator_from_annotation(
-                            PyString::new(py, &format!("{name}-value")).cast()?,
-                            &val_arg,
-                            type_containers,
-                            tools,
-                            ctx_provider,
-                        )?,
-                    )?,
+                    BoxedValidator::from(build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-key")).cast()?,
+                        &key_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                    )?),
+                    BoxedValidator::from(build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-value")).cast()?,
+                        &val_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                    )?),
                 ))
             } else {
                 None

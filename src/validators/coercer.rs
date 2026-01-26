@@ -93,7 +93,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -111,7 +111,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -131,7 +131,7 @@ impl Coercer {
                         .try_iter()?
                         .map(|v| -> PyResult<Bound<'py, PyAny>> {
                                 if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.get().type_validator, name, object, &v?)
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
                                 }
                                 else {
                                     v
@@ -146,8 +146,8 @@ impl Coercer {
                     if let Ok(t) = value.cast::<PyDict>() {
                         for (k, v) in t.iter(){
                             if let Some((key_validator, val_validator)) = items {
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
@@ -157,8 +157,8 @@ impl Coercer {
                         for i in tm.items()?.iter(){
                             let (k, v) = i.extract()?;
                             if let Some((key_validator, val_validator)) = items {
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
@@ -169,8 +169,8 @@ impl Coercer {
                             let (k, v) = p?.extract()?;
                             if let Some((key_validator, val_validator)) = items {
 
-                                let ck = self.coerce_value(is_init_coercion, &key_validator.get().type_validator, name, object, &k);
-                                let cv = self.coerce_value(is_init_coercion, &val_validator.get().type_validator, name, object, &v);
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
                                 coerced.set_item(ck?, cv?)?;
                             } else {
                                 coerced.set_item(k, v)?;
