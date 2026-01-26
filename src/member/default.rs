@@ -14,7 +14,7 @@ use pyo3::{
 
 create_behavior_callable_checker!(db_call, DefaultBehavior, Call, 0);
 
-create_behavior_callable_checker!(db_callmo, DefaultBehavior, CallMemberObject, 2);
+create_behavior_callable_checker!(db_callmo, DefaultBehavior, CallNameObject, 2);
 
 ///
 #[pyclass(module = "ators._ators", frozen)]
@@ -32,7 +32,7 @@ pub enum DefaultBehavior {
     #[pyo3(constructor = (callable))]
     Call { callable: db_call::Callable },
     #[pyo3(constructor = (callable))]
-    CallMemberObject { callable: db_callmo::Callable },
+    CallNameObject { callable: db_callmo::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -55,8 +55,8 @@ impl DefaultBehavior {
                 .validator
                 .create_default(args.bind(member.py()), kwargs),
             Self::Call { callable } => callable.0.bind(member.py()).call0(),
-            Self::CallMemberObject { callable } => {
-                callable.0.bind(member.py()).call1((member, object))
+            Self::CallNameObject { callable } => {
+                callable.0.bind(member.py()).call1((&member.name, object))
             }
             // XXX improve error message since people writing the method may not
             // realize the required signature and we cannot check it at
@@ -81,7 +81,7 @@ impl Clone for DefaultBehavior {
             Self::Call { callable } => Self::Call {
                 callable: db_call::Callable(callable.0.clone_ref(py)),
             },
-            Self::CallMemberObject { callable } => Self::CallMemberObject {
+            Self::CallNameObject { callable } => Self::CallNameObject {
                 callable: db_callmo::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {

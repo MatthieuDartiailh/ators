@@ -94,21 +94,21 @@ def test_call_member_object_value_value_validation():
 
     class A(Ators):
         a: int = member().append_value_validator(
-            ValueValidator.CallMemberObjectValue(validate_value)
+            ValueValidator.CallNameObjectValue(validate_value)
         )
 
     a = A()
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert value == 2
 
     a.a = 5
     assert a.a == 5
     assert i == 2
-    assert isinstance(m, Member)
+    assert isinstance(m, str)
     assert isinstance(obj, A)
     assert value == 5
 
@@ -133,12 +133,12 @@ def test_method_value_validation():
     a.a = 2
     assert a.a == 2
     assert i == 1
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert value == 2
 
     a.a = 4
     assert a.a == 4
-    assert isinstance(me, Member)
+    assert isinstance(me, str)
     assert value == 4
     assert i == 2
 
@@ -163,7 +163,7 @@ def test_inherited_value_validation_behavior():
 
     class A(Ators):
         a: int = member().append_value_validator(
-            ValueValidator.CallMemberObjectValue(validate)
+            ValueValidator.CallNameObjectValue(validate)
         )
 
     class B(A):
@@ -181,7 +181,7 @@ def test_inherited_value_validation_behavior():
     "behavior, callable, expected, got",
     [
         (ValueValidator.CallValue, lambda: 1, 1, 0),
-        (ValueValidator.CallMemberObjectValue, lambda: 1, 3, 0),
+        (ValueValidator.CallNameObjectValue, lambda: 1, 3, 0),
     ],
 )
 def test_bad_signature(behavior, callable, expected, got):

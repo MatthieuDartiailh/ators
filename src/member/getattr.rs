@@ -13,7 +13,7 @@ use pyo3::{
     types::{PyAny, PyAnyMethods},
 };
 
-create_behavior_callable_checker!(preg_callmo, PreGetattrBehavior, CallMemberObject, 2);
+create_behavior_callable_checker!(preg_callmo, PreGetattrBehavior, CallNameObject, 2);
 
 ///
 #[pyclass(module = "ators._ators", frozen)]
@@ -22,7 +22,7 @@ pub enum PreGetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
     #[pyo3(constructor = (callable))]
-    CallMemberObject { callable: preg_callmo::Callable },
+    CallNameObject { callable: preg_callmo::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -37,10 +37,10 @@ impl PreGetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            Self::CallMemberObject { callable } => callable
+            Self::CallNameObject { callable } => callable
                 .0
                 .bind(member.py())
-                .call1((member, object))
+                .call1((&member.name, object))
                 .map(|_| ()),
             Self::ObjectMethod { meth_name } => {
                 object.call_method1(meth_name, (member,)).map(|_| ())
@@ -53,7 +53,7 @@ impl Clone for PreGetattrBehavior {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::NoOp {} => Self::NoOp {},
-            Self::CallMemberObject { callable } => Self::CallMemberObject {
+            Self::CallNameObject { callable } => Self::CallNameObject {
                 callable: preg_callmo::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
@@ -63,7 +63,7 @@ impl Clone for PreGetattrBehavior {
     }
 }
 
-create_behavior_callable_checker!(postg_callmov, PreGetattrBehavior, CallMemberObject, 3);
+create_behavior_callable_checker!(postg_callmov, PreGetattrBehavior, CallNameObjectValue, 3);
 
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
@@ -71,7 +71,7 @@ pub enum PostGetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
     #[pyo3(constructor = (callable))]
-    CallMemberObjectValue { callable: postg_callmov::Callable },
+    CallNameObjectValue { callable: postg_callmov::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -87,10 +87,10 @@ impl PostGetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            Self::CallMemberObjectValue { callable } => callable
+            Self::CallNameObjectValue { callable } => callable
                 .0
                 .bind(member.py())
-                .call1((member, object, value))
+                .call1((&member.name, object, value))
                 .map(|_| ()),
             Self::ObjectMethod { meth_name } => {
                 object.call_method1(meth_name, (member, value)).map(|_| ())
@@ -103,7 +103,7 @@ impl Clone for PostGetattrBehavior {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::NoOp {} => Self::NoOp {},
-            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+            Self::CallNameObjectValue { callable } => Self::CallNameObjectValue {
                 callable: postg_callmov::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {

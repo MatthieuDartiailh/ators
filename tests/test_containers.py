@@ -55,12 +55,11 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
-# XXX bad module
-# def test_ators_set_pickling(ators_set_object):
-#     dumped = pickle.dumps(ators_set_object.a)
-#     loaded = pickle.loads(dumped)
-#     assert loaded == ators_set_object.a
-#     assert type(loaded) is set
+def test_ators_set_pickling(ators_set_object):
+    dumped = pickle.dumps(ators_set_object.a)
+    loaded = pickle.loads(dumped)
+    assert loaded == ators_set_object.a
+    assert type(loaded) is set
 
 
 @pytest.fixture()
@@ -118,9 +117,8 @@ def test_dict_container_validation(
     assert ators_dict_object.a == expected
 
 
-# XXX bad module
-# def test_ators_dict_pickling(ators_dict_object):
-#     dumped = pickle.dumps(ators_dict_object.a)
-#     loaded = pickle.loads(dumped)
-#     assert loaded == ators_dict_object.a
-#     assert type(loaded) is dict
+def test_ators_dict_pickling(ators_dict_object):
+    dumped = pickle.dumps(ators_dict_object.a)
+    loaded = pickle.loads(dumped)
+    assert loaded == ators_dict_object.a
+    assert type(loaded) is dict

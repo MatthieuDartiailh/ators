@@ -12,7 +12,7 @@ use pyo3::{
     types::{PyAny, PyAnyMethods, PyString},
 };
 
-create_behavior_callable_checker!(pres_callmov, PreSetattrBehavior, CallMemberObject, 3);
+create_behavior_callable_checker!(pres_callmov, PreSetattrBehavior, CallNameObjectValue, 3);
 
 ///
 #[pyclass(module = "ators._ators", frozen)]
@@ -25,7 +25,7 @@ pub enum PreSetattrBehavior {
     #[pyo3(constructor = ())]
     ReadOnly {},
     #[pyo3(constructor = (callable))]
-    CallMemberObjectValue { callable: pres_callmov::Callable },
+    CallNameObjectValue { callable: pres_callmov::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -52,7 +52,7 @@ impl PreSetattrBehavior {
                     Ok(())
                 }
             }
-            Self::CallMemberObjectValue { callable } => {
+            Self::CallNameObjectValue { callable } => {
                 let py = member.py();
                 println!("Calling");
                 callable
@@ -60,7 +60,7 @@ impl PreSetattrBehavior {
                     .bind(py)
                     // XXX should use sentinel value
                     .call1((
-                        member,
+                        &member.name,
                         object,
                         current.as_ref().unwrap_or(&py.None()).bind(py),
                     ))
@@ -68,7 +68,7 @@ impl PreSetattrBehavior {
             }
             Self::ObjectMethod { meth_name } => object
                 // XXX should use sentinel value
-                .call_method1(meth_name, (member, current))
+                .call_method1(meth_name, (&member.name, current))
                 .map(|_| ()),
         }
     }
@@ -80,7 +80,7 @@ impl Clone for PreSetattrBehavior {
             Self::NoOp {} => Self::NoOp {},
             Self::Constant {} => Self::Constant {},
             Self::ReadOnly {} => Self::ReadOnly {},
-            Self::CallMemberObjectValue { callable } => Self::CallMemberObjectValue {
+            Self::CallNameObjectValue { callable } => Self::CallNameObjectValue {
                 callable: pres_callmov::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {
@@ -90,12 +90,7 @@ impl Clone for PreSetattrBehavior {
     }
 }
 
-create_behavior_callable_checker!(
-    posts_callmoon,
-    PostSetattrBehavior,
-    CallMemberObjectOldNew,
-    4
-);
+create_behavior_callable_checker!(posts_callmoon, PostSetattrBehavior, CallNameObjectOldNew, 4);
 
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
@@ -103,7 +98,7 @@ pub enum PostSetattrBehavior {
     #[pyo3(constructor = ())]
     NoOp {},
     #[pyo3(constructor = (callable))]
-    CallMemberObjectOldNew { callable: posts_callmoon::Callable },
+    CallNameObjectOldNew { callable: posts_callmoon::Callable },
     #[pyo3(constructor = (meth_name))]
     ObjectMethod { meth_name: Py<PyString> },
 }
@@ -119,15 +114,15 @@ impl PostSetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            Self::CallMemberObjectOldNew { callable } => callable
+            Self::CallNameObjectOldNew { callable } => callable
                 .0
                 .bind(member.py())
                 // XXX should use sentinel value
-                .call1((member, object, old, new))
+                .call1((&member.name, object, old, new))
                 .map(|_| ()),
             Self::ObjectMethod { meth_name } => object
                 // XXX should use sentinel value
-                .call_method1(meth_name, (member, old, new))
+                .call_method1(meth_name, (&member.name, old, new))
                 .map(|_| ()),
         }
     }
@@ -137,7 +132,7 @@ impl Clone for PostSetattrBehavior {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {
             Self::NoOp {} => Self::NoOp {},
-            Self::CallMemberObjectOldNew { callable } => Self::CallMemberObjectOldNew {
+            Self::CallNameObjectOldNew { callable } => Self::CallNameObjectOldNew {
                 callable: posts_callmoon::Callable(callable.0.clone_ref(py)),
             },
             Self::ObjectMethod { meth_name } => Self::ObjectMethod {

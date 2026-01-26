@@ -102,7 +102,7 @@ def test_call_member_object_coerce(init, inputs, called, expected):
 
     class A(Ators):
         a: int = getattr(member(), "coerce_init" if init else "coerce")(
-            Coercer.CallMemberObjectValueInit(make_coerce)
+            Coercer.CallNameObjectValueInit(make_coerce)
         )
 
     a = A(**{"a": inputs[0]})
@@ -110,7 +110,7 @@ def test_call_member_object_coerce(init, inputs, called, expected):
     assert a.a == expected[0]
     if called[0]:
         assert init_coercion is init
-        assert isinstance(m, Member)
+        assert isinstance(m, str)
         assert isinstance(obj, Ators)
 
     for inp, c, exp in zip(inputs[1:], called[1:], expected[1:]):
@@ -152,7 +152,7 @@ def test_method_coerce(init, inputs, called, expected):
     assert a.a == expected[0]
     if called[0]:
         assert init_coercion is init
-        assert isinstance(me, Member)
+        assert isinstance(me, str)
 
     for inp, c, exp in zip(inputs[1:], called[1:], expected[1:]):
         if isinstance(exp, Exception):
@@ -188,7 +188,7 @@ def test_inherited_coerce_behavior(init):
     "behavior, callable, expected, got",
     [
         (Coercer.CallValue, lambda: 1, 1, 0),
-        (Coercer.CallMemberObjectValueInit, lambda: 1, 4, 0),
+        (Coercer.CallNameObjectValueInit, lambda: 1, 4, 0),
     ],
 )
 def test_bad_signature(init, behavior, callable, expected, got):
