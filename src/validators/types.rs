@@ -5,13 +5,17 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+use super::Validator;
+use crate::annotations::{build_validator_from_annotation, get_type_tools};
+use crate::get_type_mutability_map;
+use crate::utils::Mutability;
 ///
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    intern, pyclass, pymethods,
+    pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods,
@@ -19,54 +23,6 @@ use pyo3::{
     },
 };
 use std::{convert::Infallible, sync::OnceLock};
-
-use super::Validator;
-use crate::annotations::{build_validator_from_annotation, get_type_tools};
-use crate::core::AtorsBase;
-use crate::get_type_mutability_map;
-use crate::meta::ATORS_FROZEN;
-
-/// Enum representing whether a type is mutable, immutable, or mutability is undecidable
-#[pyclass(module = "ators._ators", eq, frozen)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mutability {
-    /// The type is mutable
-    Mutable,
-    /// The type is immutable
-    Immutable,
-    /// The type's mutability cannot be determined
-    Undecidable,
-}
-
-pub fn is_type_mutable<'py>(type_: &Bound<'py, PyType>) -> Mutability {
-    let py = type_.py();
-    if let Ok(t) = type_.cast::<AtorsBase>() {
-        if t.getattr(ATORS_FROZEN)
-            .expect("Subclass of AtorsBase must have __ators_frozen__ set")
-            .extract::<bool>()
-            .expect("__ators_frozen__ should always be a bool")
-        {
-            Mutability::Immutable
-        } else {
-            Mutability::Mutable
-        }
-    } else if let Ok(params) = type_.getattr(intern!(py, "__dataclass_params__"))
-        && params
-            .getattr(intern!(py, "frozen"))
-            .expect("DataclassParams have a frozen attr")
-            .extract()
-            .expect("Frozen is a bool")
-    {
-        Mutability::Immutable
-    } else {
-        let mut_map = get_type_mutability_map(py);
-        match mut_map.borrow().get_type_mutability(type_) {
-            None => Mutability::Undecidable,
-            Some(true) => Mutability::Mutable,
-            Some(false) => Mutability::Immutable,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct TypesTuple(Py<PyTuple>);
@@ -198,7 +154,10 @@ impl Clone for LateResolvedValidator {
     }
 }
 
-// XXX Impl GC methods
+// XXX Impl GC methods, it may make sense to use Py<> inside vector since
+// otherwise traversal will be weird, but not having a Py was a nice way to
+// avoid a performance cost.
+// Should ask on PyO3 issue tracker about best practices here.
 ///
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
@@ -252,7 +211,6 @@ pub enum TypeValidator {
     // Sequence,
     // List,
     // Mapping,
-    // Dict,
     // DefaultDict,
     // OrderedDict,
     // Callable,
@@ -853,12 +811,17 @@ impl TypeValidator {
             }
             Self::Set { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
-            Self::Typed { type_ } => is_type_mutable(type_.bind(py)),
+            Self::Typed { type_ } => get_type_mutability_map(py)
+                .borrow()
+                .get_type_mutability(type_.bind(py)),
             Self::Instance { types } => {
                 types
                     .iter(py)
                     .fold(Mutability::Immutable, |acc: Mutability, e| {
-                        match (acc, is_type_mutable(&e)) {
+                        match (
+                            acc,
+                            get_type_mutability_map(py).borrow().get_type_mutability(&e),
+                        ) {
                             // If one item is mutable the tuple is seen as mutable
                             (Mutability::Mutable, _) => Mutability::Mutable,
                             // If one item is undecidable, the tuple is mutable if the
@@ -880,7 +843,9 @@ impl TypeValidator {
             Self::GenericAttributes {
                 type_,
                 attributes: _,
-            } => is_type_mutable(type_.bind(py)),
+            } => get_type_mutability_map(py)
+                .borrow()
+                .get_type_mutability(type_.bind(py)),
             Self::Union { members } => {
                 members
                     .iter()

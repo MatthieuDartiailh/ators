@@ -22,7 +22,8 @@ use crate::member::{
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
     member::{MemberBuilder, MemberCustomizationTool},
-    validators::{Coercer, ValueValidator, types::Mutability},
+    utils::Mutability,
+    validators::{Coercer, ValueValidator},
 };
 use crate::{
     core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, AtorsBase, ClassMutability},

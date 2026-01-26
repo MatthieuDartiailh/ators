@@ -7,9 +7,9 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, pyclass,
+    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
-    types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType},
+    types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
 
@@ -143,6 +143,22 @@ create_behavior_callable_checker!(mutability_callable_check, TypeMutabilityMap, 
 // #[pyclass]
 // pub struct GenericAttributesMap
 
+use crate::core::AtorsBase;
+
+use crate::meta::ATORS_FROZEN;
+
+/// Enum representing whether a type is mutable, immutable, or mutability is undecidable
+#[pyclass(module = "ators._ators", eq, frozen)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mutability {
+    /// The type is mutable
+    Mutable,
+    /// The type is immutable
+    Immutable,
+    /// The type's mutability cannot be determined
+    Undecidable,
+}
+
 /// Enum representing the mutability specification for a type
 enum MutabilitySpec {
     /// Type is always mutable
@@ -204,45 +220,89 @@ impl TypeMutabilityMap {
         Ok(())
     }
 
-    pub fn get_type_mutability(&self, type_: &Bound<'_, PyType>) -> Option<bool> {
-        self.map.get(&type_.into()).and_then(|spec| match spec {
-            MutabilitySpec::Mutable => Some(true),
-            MutabilitySpec::Immutable => Some(false),
-            MutabilitySpec::Inspect(_) => None,
-        })
+    pub fn get_type_mutability<'py>(&self, type_: &Bound<'py, PyType>) -> Mutability {
+        let py = type_.py();
+        if let Ok(t) = type_.cast::<AtorsBase>() {
+            if t.getattr(ATORS_FROZEN)
+                .expect("Subclass of AtorsBase must have __ators_frozen__ set")
+                .extract::<bool>()
+                .expect("__ators_frozen__ should always be a bool")
+            {
+                Mutability::Immutable
+            } else {
+                Mutability::Mutable
+            }
+        } else if let Ok(params) = type_.getattr(intern!(py, "__dataclass_params__"))
+            && params
+                .getattr(intern!(py, "frozen"))
+                .expect("DataclassParams have a frozen attr")
+                .extract()
+                .expect("Frozen is a bool")
+        {
+            Mutability::Immutable
+        } else {
+            self.map
+                .get(&type_.into())
+                .map_or(Mutability::Undecidable, |spec| match spec {
+                    MutabilitySpec::Mutable => Mutability::Mutable,
+                    MutabilitySpec::Immutable => Mutability::Immutable,
+                    MutabilitySpec::Inspect(_) => Mutability::Undecidable,
+                })
+        }
     }
 
-    pub fn get_object_mutability<'py>(&self, obj: &Bound<'py, PyAny>) -> PyResult<Option<bool>> {
-        let py = obj.py();
+    pub fn get_object_mutability<'py>(&self, obj: &Bound<'py, PyAny>) -> PyResult<Mutability> {
         let obj_type = obj.get_type();
+        let py = obj.py();
+        let ators_base_type = py.get_type::<AtorsBase>();
 
-        match self.map.get(&(&obj_type).into()) {
-            None => Ok(None),
-            Some(spec) => match spec {
-                MutabilitySpec::Mutable => Ok(Some(true)),
-                MutabilitySpec::Immutable => Ok(Some(false)),
-                MutabilitySpec::Inspect(callable) => {
-                    let call_result = callable.call1(py, (obj,))?;
-                    let call_result_bound = call_result.bind(py);
-                    call_result_bound.extract::<bool>().map_err(|_| {
-                        let obj_type_name = obj_type
-                            .getattr("__name__")
-                            .and_then(|n| n.extract::<String>())
-                            .unwrap_or_else(|_| "<unknown>".to_string());
-                        let result_type = call_result_bound.get_type();
-                        let result_type_name = result_type
-                            .getattr("__name__")
-                            .and_then(|n| n.extract::<String>())
-                            .unwrap_or_else(|_| "<unknown>".to_string());
-                        PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                            format!(
-                                "Mutability callable for type {} did not return a bool, but returned {}",
-                                obj_type_name, result_type_name
-                            )
-                        )
-                    }).map(Some)
+        if obj_type.is_subclass(&ators_base_type)? {
+            // For Ators objects, check if frozen
+            let ators_obj = obj.cast::<AtorsBase>()?;
+            if ators_obj.borrow().is_frozen() {
+                Ok(Mutability::Immutable)
+            } else {
+                Ok(Mutability::Mutable)
+            }
+        } else {
+            // For other objects, first check type mutability and then inspect object
+            // if undecidable
+            let type_mutability = self.get_type_mutability(&obj_type);
+            if type_mutability == Mutability::Undecidable {
+                // If type mutability is undecidable, inspect the object
+                match self.map.get(&(&obj_type).into()) {
+                    None => Ok(Mutability::Undecidable),
+                    Some(spec) => match spec {
+                        MutabilitySpec::Mutable => Ok(Mutability::Mutable),
+                        MutabilitySpec::Immutable => Ok(Mutability::Immutable),
+                        MutabilitySpec::Inspect(callable) => {
+                            let call_result = callable.call1(py, (obj,))?;
+                            let call_result_bound = call_result.bind(py);
+                            call_result_bound.extract::<bool>().map(
+                                |b| if b { Mutability::Mutable } else { Mutability::Immutable }
+                            ).map_err(|_| {
+                                let obj_type_name = obj_type
+                                    .getattr("__name__")
+                                    .and_then(|n| n.extract::<String>())
+                                    .unwrap_or_else(|_| "<unknown>".to_string());
+                                let result_type = call_result_bound.get_type();
+                                let result_type_name = result_type
+                                    .getattr("__name__")
+                                    .and_then(|n| n.extract::<String>())
+                                    .unwrap_or_else(|_| "<unknown>".to_string());
+                                PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                    format!(
+                                        "Mutability callable for type {} did not return a bool, but returned {}",
+                                        obj_type_name, result_type_name
+                                    )
+                                )
+                            })
+                        }
+                    },
                 }
-            },
+            } else {
+                Ok(type_mutability)
+            }
         }
     }
 }

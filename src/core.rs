@@ -14,7 +14,7 @@ use pyo3::{
 
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
-use crate::validators::types::Mutability;
+use crate::utils::Mutability;
 
 // FIXME reduce memory footprint
 // See for initializing allocated memory https://docs.rs/init_array/latest/src/init_array/stable.rs.html#71-95
@@ -153,45 +153,6 @@ pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>)
     Ok(())
 }
 
-/// Check if an object can contain mutable values.
-/// For Ators objects: returns Immutable if frozen, otherwise checks the class mutability.
-/// For other objects: uses is_type_mutable and inspects the object if undecidable.
-pub(crate) fn is_object_mutable<'py>(
-    py: Python<'py>,
-    obj: &Bound<'py, PyAny>,
-) -> PyResult<Mutability> {
-    let obj_type = obj.get_type();
-    let ators_base_type = py.get_type::<AtorsBase>();
-
-    if obj_type.is_subclass(&ators_base_type)? {
-        // For Ators objects, check if frozen
-        let ators_obj = obj.cast::<AtorsBase>()?;
-        if ators_obj.borrow().is_frozen() {
-            Ok(Mutability::Immutable)
-        } else {
-            Ok(Mutability::Mutable)
-        }
-    } else {
-        // For other objects, first check type mutability and then inspect object
-        // if undecidable
-        let type_mutability = crate::validators::types::is_type_mutable(&obj_type);
-        if type_mutability == Mutability::Undecidable {
-            // If type mutability is undecidable, inspect the object
-            let mut_map = get_type_mutability_map(py);
-            mut_map.borrow().get_object_mutability(obj).map(|opt| {
-                match opt {
-                    // If there is no custom logic for the type err on the side of mutability
-                    None => Mutability::Mutable,
-                    Some(true) => Mutability::Mutable,
-                    Some(false) => Mutability::Immutable,
-                }
-            })
-        } else {
-            Ok(type_mutability)
-        }
-    }
-}
-
 #[pyfunction]
 pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
@@ -226,7 +187,9 @@ pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
                         // Get the slot index and retrieve the value
                         if let Some(slot_value) = get_slot(&obj, member_obj.borrow().index(), py) {
                             let attr_bound = slot_value.bind(py);
-                            let attr_mutability = is_object_mutable(py, attr_bound)?;
+                            let attr_mutability = get_type_mutability_map(py)
+                                .borrow()
+                                .get_object_mutability(attr_bound)?;
                             match attr_mutability {
                                 Mutability::Mutable | Mutability::Undecidable => {
                                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
