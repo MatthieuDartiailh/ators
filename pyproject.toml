@@ -11,6 +11,20 @@
   ]
   dynamic = ["version"]
 
+[dependency-groups]
+  test = ["pytest-cov", "pytest", "pytest-benchmark"]
+  docs = [
+    "pydata-sphinx-theme",
+    "sphinx-autoapi",
+    "sphinx",
+  ]
+  lint = ["mypy", "ruff"]
+  dev = [
+    { include-group = "docs" },
+    { include-group = "lint" },
+    { include-group = "test" },
+  ]
+
 [build-system]
   requires      = ["maturin>=1.8,<2.0"]
   build-backend = "maturin"
