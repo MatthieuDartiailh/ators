@@ -387,7 +387,7 @@ pub fn create_ators_subclass<'py>(
 
     let new_members = member_builders
         .into_iter()
-        .map(|(k, v)| v.clone().build(&name).map(|v| (k, v)))
+        .map(|(k, v)| v.build(&name).map(|v| (k, v)))
         .collect::<PyResult<Vec<(String, Member)>>>()?
         .into_py_dict(py)?;
     let all_members = members.into_py_dict(py)?;
