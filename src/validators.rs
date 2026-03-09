@@ -8,7 +8,7 @@
 
 ///
 use pyo3::{
-    Bound, Py, PyAny, PyResult, pyclass, pymethods,
+    Bound, Py, PyAny, PyResult, Python, pyclass, pymethods,
     types::{PyDict, PyTuple},
 };
 
@@ -149,6 +149,17 @@ impl Validator {
             vv.validate_value(member_name, object, &v)?;
         }
         Ok(v)
+    }
+}
+
+impl Validator {
+    pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
+        Self {
+            type_validator: self.type_validator.with_owner(py, owner),
+            value_validators: self.value_validators.clone(),
+            coercer: self.coercer.clone(),
+            init_coercer: self.init_coercer.clone(),
+        }
     }
 }
 

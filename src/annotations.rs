@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 ///
 use pyo3::{
-    Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern,
+    Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
@@ -25,6 +25,20 @@ use crate::{
         types::{BoxedValidator, LateResolvedValidator},
     },
 };
+
+/// Information extracted while building a validator from an annotation.
+#[pyclass(module = "ators._ators", frozen, get_all)]
+#[derive(Clone, Debug, Default)]
+pub struct ValidatorBuildInfo {
+    /// Whether the validator contains a ForwardValidator that requires an owner
+    requires_owner: bool,
+}
+
+impl ValidatorBuildInfo {
+    pub fn requires_owner(&self) -> bool {
+        self.requires_owner
+    }
+}
 
 ///
 pub(crate) struct PyTypes<'py> {
@@ -127,25 +141,30 @@ pub fn build_validator_from_annotation<'py>(
     type_containers: i64, // not sure this is worth keeping it
     tools: &TypeTools<'py>,
     ctx_provider: Option<&Bound<'py, PyAny>>,
-) -> PyResult<Validator> {
+) -> PyResult<(Validator, ValidatorBuildInfo)> {
     if ann.is_instance_of::<PyString>() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Str annotations ({}) are not supported in ators classes, use ForwardRef instead",
             ann.repr()?
         )));
     } else if ann.is_instance(&tools.types.forward_ref)? {
-        return Ok(Validator::new(
-            TypeValidator::ForwardValidator {
-                late_validator: LateResolvedValidator::new(
-                    ann,
-                    ctx_provider,
-                    type_containers,
-                    name,
-                ),
+        return Ok((
+            Validator::new(
+                TypeValidator::ForwardValidator {
+                    late_validator: LateResolvedValidator::new(
+                        ann,
+                        ctx_provider,
+                        type_containers,
+                        name,
+                    ),
+                },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo {
+                requires_owner: true,
             },
-            None,
-            None,
-            None,
         ));
     } else if ann.is_instance(&tools.types.type_alias)? {
         return build_validator_from_annotation(
@@ -173,143 +192,168 @@ pub fn build_validator_from_annotation<'py>(
         // to cover list, dict, Numpy.NDArray etc
         let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
         if origin.is(&tools.types.literal) {
-            Ok(Validator::new(
-                TypeValidator::Any {},
-                Some(vec![ValueValidator::Values {
-                    values: ValidValues(
-                        PyFrozenSet::type_object(py)
-                            .call1((args,))?
-                            .cast_into()?
-                            .unbind(),
-                    ),
-                }]),
-                None,
-                None,
+            Ok((
+                Validator::new(
+                    TypeValidator::Any {},
+                    Some(vec![ValueValidator::Values {
+                        values: ValidValues(
+                            PyFrozenSet::type_object(py)
+                                .call1((args,))?
+                                .cast_into()?
+                                .unbind(),
+                        ),
+                    }]),
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: false,
+                },
             ))
         } else if origin.is(py.get_type::<PyTuple>()) {
             if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
                 // VarTuple
-                let item_validator = build_validator_from_annotation(
+                let (item_validator, item_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-item")).cast()?,
                     &args.get_item(0).expect("Known 2-tuple"),
                     type_containers,
                     tools,
                     ctx_provider,
                 )?;
-                Ok(Validator::new(
-                    TypeValidator::VarTuple {
-                        item: Some(BoxedValidator::from(item_validator)),
+                Ok((
+                    Validator::new(
+                        TypeValidator::VarTuple {
+                            item: Some(BoxedValidator::from(item_validator)),
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: item_info.requires_owner,
                     },
-                    None,
-                    None,
-                    None,
                 ))
             } else {
                 // Fixed length tuple
                 let mut items = Vec::new();
+                let mut requires_owner = false;
                 for item in args.iter() {
-                    let item_validator = build_validator_from_annotation(
+                    let (item_validator, item_info) = build_validator_from_annotation(
                         PyString::new(py, &format!("{name}-item")).cast()?,
                         &item,
                         type_containers,
                         tools,
                         ctx_provider,
                     )?;
+                    requires_owner = requires_owner || item_info.requires_owner;
                     items.push(item_validator);
                 }
-                Ok(Validator::new(
-                    TypeValidator::Tuple { items },
-                    None,
-                    None,
-                    None,
+                Ok((
+                    Validator::new(TypeValidator::Tuple { items }, None, None, None),
+                    ValidatorBuildInfo { requires_owner },
                 ))
             }
         } else if origin.is(py.get_type::<PyFrozenSet>()) {
-            let item_val = if let Ok(item_arg) = args.get_item(0) {
-                Some(BoxedValidator::from(build_validator_from_annotation(
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-item")).cast()?,
                     &item_arg,
                     type_containers,
                     tools,
                     ctx_provider,
-                )?))
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
             } else {
-                None
+                (None, false)
             };
-            Ok(Validator::new(
-                TypeValidator::FrozenSet { item: item_val },
-                None,
-                None,
-                None,
+            Ok((
+                Validator::new(
+                    TypeValidator::FrozenSet { item: item_val },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<PySet>()) {
-            let item_val = if let Ok(item_arg) = args.get_item(0) {
-                Some(BoxedValidator::from(build_validator_from_annotation(
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-item")).cast()?,
                     &item_arg,
                     type_containers,
                     tools,
                     ctx_provider,
-                )?))
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
             } else {
-                None
+                (None, false)
             };
-            Ok(Validator::new(
-                TypeValidator::Set { item: item_val },
-                None,
-                None,
-                None,
+            Ok((
+                Validator::new(TypeValidator::Set { item: item_val }, None, None, None),
+                ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<PyDict>()) {
-            let items_validator = if let Ok((key_arg, val_arg)) = args.extract() {
-                Some((
-                    BoxedValidator::from(build_validator_from_annotation(
-                        PyString::new(py, &format!("{name}-key")).cast()?,
-                        &key_arg,
-                        type_containers,
-                        tools,
-                        ctx_provider,
-                    )?),
-                    BoxedValidator::from(build_validator_from_annotation(
-                        PyString::new(py, &format!("{name}-value")).cast()?,
-                        &val_arg,
-                        type_containers,
-                        tools,
-                        ctx_provider,
-                    )?),
-                ))
+            let (items_validator, requires_owner) = if let Ok((key_arg, val_arg)) = args.extract() {
+                let (key_validator, key_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-key")).cast()?,
+                    &key_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?;
+                let (val_validator, val_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-value")).cast()?,
+                    &val_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?;
+                (
+                    Some((
+                        BoxedValidator::from(key_validator),
+                        BoxedValidator::from(val_validator),
+                    )),
+                    key_info.requires_owner || val_info.requires_owner,
+                )
             } else {
-                None
+                (None, false)
             };
-            Ok(Validator::new(
-                TypeValidator::Dict {
-                    items: items_validator,
-                },
-                None,
-                None,
-                None,
+            Ok((
+                Validator::new(
+                    TypeValidator::Dict {
+                        items: items_validator,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant
-            Ok(Validator::new(
-                TypeValidator::Union {
-                    members: args
-                        .iter()
-                        .map(|member| {
-                            build_validator_from_annotation(
-                                name,
-                                &member,
-                                type_containers,
-                                tools,
-                                ctx_provider,
-                            )
-                        })
-                        .collect::<PyResult<Vec<Validator>>>()?,
-                },
-                None,
-                None,
-                None,
+            let mut members = Vec::new();
+            let mut requires_owner = false;
+            for member_ann in args.iter() {
+                let (validator, info) = build_validator_from_annotation(
+                    name,
+                    &member_ann,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?;
+                requires_owner = requires_owner || info.requires_owner;
+                members.push(validator);
+            }
+            Ok((
+                Validator::new(TypeValidator::Union { members }, None, None, None),
+                ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
@@ -317,27 +361,32 @@ pub fn build_validator_from_annotation<'py>(
             let generic_attrs = get_generic_attributes_map(py);
             if let Some(attr_list) = generic_attrs.get_item(&origin)? {
                 let mut attributes = Vec::new();
+                let mut requires_owner = false;
                 for (attr_name, attr_type) in
                     attr_list.cast_into::<PyTuple>()?.iter().zip(args.iter())
                 {
                     let attr_name_str = attr_name.extract::<String>()?;
-                    let attr_validator = build_validator_from_annotation(
+                    let (attr_validator, attr_info) = build_validator_from_annotation(
                         PyString::new(py, &format!("{name}-{attr_name_str}")).cast()?,
                         &attr_type,
                         type_containers,
                         tools,
                         ctx_provider,
                     )?;
+                    requires_owner = requires_owner || attr_info.requires_owner;
                     attributes.push((attr_name_str, attr_validator));
                 }
-                Ok(Validator::new(
-                    TypeValidator::GenericAttributes {
-                        type_: origin.cast_into::<PyType>()?.unbind(),
-                        attributes,
-                    },
-                    None,
-                    None,
-                    None,
+                Ok((
+                    Validator::new(
+                        TypeValidator::GenericAttributes {
+                            type_: origin.cast_into::<PyType>()?.unbind(),
+                            attributes,
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo { requires_owner },
                 ))
             } else {
                 let origin_name = origin.get_type().name()?;
@@ -351,13 +400,18 @@ pub fn build_validator_from_annotation<'py>(
                     .as_c_str(),
                     0,
                 )?;
-                Ok(Validator::new(
-                    TypeValidator::Typed {
-                        type_: origin.cast_into::<PyType>()?.unbind(),
+                Ok((
+                    Validator::new(
+                        TypeValidator::Typed {
+                            type_: origin.cast_into::<PyType>()?.unbind(),
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
                     },
-                    None,
-                    None,
-                    None,
                 ))
             }
         }
@@ -374,33 +428,73 @@ pub fn build_validator_from_annotation<'py>(
             ctx_provider,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
-        Ok(Validator::default())
+        Ok((
+            Validator::default(),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyBool>()) {
-        Ok(Validator::new(TypeValidator::Bool {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Bool {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyInt>()) {
-        Ok(Validator::new(TypeValidator::Int {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Int {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyFloat>()) {
-        Ok(Validator::new(TypeValidator::Float {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Float {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyComplex>()) {
-        Ok(Validator::new(TypeValidator::Complex {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Complex {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyBytes>()) {
-        Ok(Validator::new(TypeValidator::Bytes {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Bytes {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyString>()) {
-        Ok(Validator::new(TypeValidator::Str {}, None, None, None))
+        Ok((
+            Validator::new(TypeValidator::Str {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyTuple>()) {
-        Ok(Validator::new(
-            TypeValidator::VarTuple { item: None },
-            None,
-            None,
-            None,
+        Ok((
+            Validator::new(TypeValidator::VarTuple { item: None }, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
         ))
     } else {
         let ty = ann.clone().cast_into::<PyType>()?;
-        Ok(Validator::new(
-            TypeValidator::Typed { type_: ty.unbind() },
-            None,
-            None,
-            None,
+        Ok((
+            Validator::new(
+                TypeValidator::Typed { type_: ty.unbind() },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
         ))
     }
 }
@@ -461,7 +555,7 @@ fn configure_member_builder_from_annotation<'py>(
 
     // Next analyze the annotation to build the validators (Final is not
     // permitted within container or generic).
-    let new = match build_validator_from_annotation(
+    let (new, build_info) = match build_validator_from_annotation(
         name,
         ann,
         type_containers,
@@ -483,7 +577,11 @@ fn configure_member_builder_from_annotation<'py>(
     }?;
 
     // Set the type validator
-    builder.set_type_validator(new.type_validator);
+    builder.set_type_validator(new.type_validator.clone());
+
+    // Store the validator build info in the builder for later use when building
+    // the member
+    builder.require_owner = build_info.requires_owner();
 
     // Append the user specified value validators to the ones inferred from type
     // annotation.

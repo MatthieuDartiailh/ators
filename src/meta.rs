@@ -160,6 +160,18 @@ pub fn create_ators_subclass<'py>(
     let mut member_builders =
         generate_member_builders_from_cls_namespace(&name, &dct, type_containers)?;
 
+    // Collect the new members defined in this class that require the owning
+    // class to be set to resolve ForwardRef
+    let members_requiring_owner = member_builders
+        .values()
+        .filter(|mb| mb.require_owner)
+        .map(|mb| {
+            mb.name
+                .clone()
+                .expect("Member builders should have their name set")
+        })
+        .collect::<Vec<String>>();
+
     // Gather the name of the methods defined on the base classes.
     // For subclasses of AtorsBase we grab the names from the special class
     // attribute __ators__methods__, for other types we scan the type dictionary
@@ -467,12 +479,32 @@ pub fn create_ators_subclass<'py>(
     for (member_name, member_obj) in members_dict.iter() {
         let member = member_obj.cast::<Member>()?;
 
+        // Set the owner if the validator contains a ForwardValidator requiring
+        // a owner to resolve it.
+        let requires_owner = members_requiring_owner.contains(&member_name.extract::<String>()?);
+        let new_member = if requires_owner {
+            Bound::new(py, member.borrow().with_owner(py, &cls))?
+        } else {
+            member_obj.clone().cast_into()?
+        };
+        members_dict.set_item(&member_name, Bound::clone(&new_member))?;
+        cls.setattr(&member_name.extract::<String>()?, Bound::clone(&new_member))?;
+
         // Get the validator from the member using the accessor method
-        let member_borrow = member.borrow();
+        let member_borrow = new_member.borrow();
         let validator = member_borrow.validator();
 
-        // Get the type validator from the validator
-        let mutability = validator.type_validator.is_type_mutable(py);
+        // Examine the mutability of the member and update the class mutability
+        // accordingly. For validation involving forward references we do not
+        // have enough information to determine mutability (since the class has
+        // not yet been added to the module dict), so we mark it as Undecidable
+        // and keep track of the member name to later set the class mutability
+        // to InspectValues if needed.
+        let mutability = if requires_owner {
+            Mutability::Undecidable
+        } else {
+            validator.type_validator.is_type_mutable(py)
+        };
         match mutability {
             Mutability::Mutable => {
                 class_mutability = ClassMutability::Mutable {};

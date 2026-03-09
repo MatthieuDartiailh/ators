@@ -7,6 +7,7 @@
 |----------------------------------------------------------------------------*/
 ///
 use crate::{
+    annotations::ValidatorBuildInfo,
     core::{AtorsBase, get_slot, set_slot},
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
@@ -116,6 +117,21 @@ impl Member {
 
     pub fn validator(&self) -> &Validator {
         &self.validator
+    }
+
+    pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
+        Member {
+            name: self.name.clone(),
+            slot_index: self.slot_index,
+            pre_getattr: self.pre_getattr.clone(),
+            post_getattr: self.post_getattr.clone(),
+            pre_setattr: self.pre_setattr.clone(),
+            post_setattr: self.post_setattr.clone(),
+            delattr: self.delattr.clone(),
+            default: self.default.clone(),
+            validator: self.validator.with_owner(py, owner),
+            metadata: clone_metadata(&self.metadata),
+        }
     }
 }
 
@@ -364,6 +380,10 @@ pub struct MemberBuilder {
     forward_ref_environment_factory: Option<Py<PyAny>>,
     pickle: bool,
     inherit: bool,
+    // Only required when building a new member in the metaclass since the owner
+    // should be scoped to the original class definition itself and not altered
+    // in subclasses.
+    pub require_owner: bool,
     multiple_settings: HashMap<String, u8>,
 }
 
@@ -975,6 +995,7 @@ impl Clone for MemberBuilder {
                 }
             },
             inherit: self.inherit,
+            require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
         }

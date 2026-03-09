@@ -8,18 +8,19 @@
 use super::Validator;
 use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
-use crate::utils::Mutability;
+use crate::utils::{Mutability, err_with_cause};
+use pyo3::types::PyStringMethods;
 ///
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    pyclass, pymethods,
+    intern, pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods,
-        PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods, PyString,
+        PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{
@@ -137,6 +138,7 @@ pub struct LateResolvedValidator {
     ctx_provider: Option<Py<PyAny>>,
     type_containers: i64,
     name: Py<PyString>,
+    owner: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -154,6 +156,7 @@ impl LateResolvedValidator {
             ctx_provider: ctx_provider.map(|cp| cp.clone().unbind()),
             type_containers,
             name: name.clone().unbind(),
+            owner: None,
         }
     }
 
@@ -164,22 +167,47 @@ impl LateResolvedValidator {
             let evaluate_forward_ref = typing.getattr("evaluate_forward_ref")?;
             let forward_ref = self.forward_ref.bind(py);
             let resolved;
+
+            let kwargs = PyDict::new(py);
             if let Some(cp) = &self.ctx_provider {
                 let ctx_provider = cp.bind(py);
-                let kwargs = [("locals", ctx_provider.call0()?)].into_py_dict(py)?;
-                resolved = evaluate_forward_ref.call((forward_ref,), Some(&kwargs))?;
-            } else {
-                resolved = evaluate_forward_ref.call1((forward_ref,))?;
+                kwargs.set_item("locals", ctx_provider.call0()?)?;
             }
+            if let Some(owner) = &self.owner {
+                let owner_bound = owner.bind(py);
+                kwargs.set_item("owner", owner_bound)?;
+            }
+
+            if !kwargs.is_empty() {
+                resolved = evaluate_forward_ref.call((forward_ref,), Some(&kwargs));
+            } else {
+                resolved = evaluate_forward_ref.call1((forward_ref,));
+            }
+
             Py::new(
                 py,
                 build_validator_from_annotation(
                     self.name.bind(py),
-                    &resolved,
+                    &resolved.map_err(|err| {
+                        err_with_cause(
+                            py,
+                            pyo3::PyErr::from_type(
+                                err.get_type(py),
+                                format!(
+                                    "Failed to resolve forward reference for {}: {}\n{}",
+                                    self.name.bind(py).to_str().unwrap_or("<invalid name>"),
+                                    forward_ref,
+                                    err
+                                ),
+                            ),
+                            err,
+                        )
+                    })?,
                     self.type_containers,
                     &get_type_tools(py)?,
                     None,
                 )?
+                .0
                 .type_validator,
             )
         });
@@ -189,11 +217,27 @@ impl LateResolvedValidator {
         }
     }
 
+    // NOTE this cannot be done right after class creation since the class has
+    // not yet been stored in the module dict and thus cannot be resolved by
+    // the forward reference, but
     ///
     pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
         match self.get_validator(py) {
             Ok(validator) => validator.get().is_type_mutable(py),
             Err(_) => Mutability::Undecidable,
+        }
+    }
+}
+
+impl LateResolvedValidator {
+    pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
+        Self {
+            validator_cell: OnceLock::new(),
+            forward_ref: self.forward_ref.clone_ref(py),
+            ctx_provider: self.ctx_provider.as_ref().map(|cp| cp.clone_ref(py)),
+            type_containers: self.type_containers,
+            name: self.name.clone_ref(py),
+            owner: Some(owner.clone().unbind()),
         }
     }
 }
@@ -206,6 +250,7 @@ impl Clone for LateResolvedValidator {
             ctx_provider: self.ctx_provider.as_ref().map(|cp| cp.clone_ref(py)),
             type_containers: self.type_containers,
             name: self.name.clone_ref(py),
+            owner: self.owner.as_ref().map(|o| o.clone_ref(py)),
         })
     }
 }
@@ -297,6 +342,51 @@ macro_rules! validation_error {
 }
 
 impl TypeValidator {
+    pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
+        match self {
+            Self::Tuple { items } => Self::Tuple {
+                items: items.iter().map(|v| v.with_owner(py, owner)).collect(),
+            },
+            Self::VarTuple { item } => Self::VarTuple {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Union { members } => Self::Union {
+                members: members.iter().map(|v| v.with_owner(py, owner)).collect(),
+            },
+            Self::GenericAttributes { type_, attributes } => Self::GenericAttributes {
+                type_: type_.clone_ref(py),
+                attributes: attributes
+                    .iter()
+                    .map(|(n, v)| (n.clone(), v.with_owner(py, owner)))
+                    .collect(),
+            },
+            Self::ForwardValidator { late_validator } => Self::ForwardValidator {
+                late_validator: late_validator.with_owner(py, owner),
+            },
+            Self::FrozenSet { item } => Self::FrozenSet {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Set { item } => Self::Set {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Dict { items } => Self::Dict {
+                items: items.as_ref().map(|(k, v)| {
+                    (
+                        BoxedValidator::from(k.with_owner(py, owner)),
+                        BoxedValidator::from(v.with_owner(py, owner)),
+                    )
+                }),
+            },
+            _ => self.clone(),
+        }
+    }
+
     ///
     pub fn validate_type<'py>(
         &self,
@@ -630,7 +720,6 @@ impl TypeValidator {
             } => {
                 // FIXME add a fast path for AtorsDict with matching object and memeber
                 if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
-                    let py = value.py();
                     let mut validated_items: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
                         Vec::with_capacity(dict.len());
                     for (tk, tv) in dict.iter() {

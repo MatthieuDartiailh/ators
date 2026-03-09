@@ -106,16 +106,74 @@ def test_type_validators(ann, goods, bads):
             a.a = bad
 
 
-def test_forward_ref_support_self_reference():
-    class A(Ators):
-        a: A = member()
+class SelfRefA(Ators):
+    a: SelfRefA = member()
 
-    a1 = A()
-    a2 = A()
+
+def test_forward_ref_support_self_reference():
+
+    a1 = SelfRefA()
+    a2 = SelfRefA()
     a1.a = a2
     assert a1.a is a2
     with pytest.raises(TypeError):
         a1.a = 5
+
+
+class OutOfOrderA(Ators):
+    a: OutOfOrderB
+    b: tuple[OutOfOrderB, ...]
+
+
+class OutOfOrderB(Ators):
+    pass
+
+
+@pytest.mark.parametrize(
+    "attr, good, bad", [("a", OutOfOrderB(), 5), ("b", (OutOfOrderB(),), (5,))]
+)
+def test_forward_ref_support_out_of_order(attr, good, bad):
+
+    a1 = OutOfOrderA()
+    setattr(a1, attr, good)
+    assert getattr(a1, attr) is good
+    with pytest.raises(TypeError):
+        setattr(a1, attr, bad)
+
+
+def test_forward_ref_preserve_owner_in_subclasses():
+    class NSRA(SelfRefA):
+        pass
+
+    class NOOA(OutOfOrderA):
+        pass
+
+    a1 = NSRA()
+    a2 = NSRA()
+    a1.a = a2
+    assert a1.a is a2
+    with pytest.raises(TypeError):
+        a1.a = 5
+
+    a1 = NOOA()
+    b1 = OutOfOrderB()
+    a1.a = b1
+    assert a1.a is b1
+    with pytest.raises(TypeError):
+        a1.a = 5
+
+
+def test_forward_ref_failed_to_resolve():
+    class A(Ators):
+        a: NonExistent = member()
+
+    a1 = A()
+    with pytest.raises(NameError) as e:
+        a1.a = 5
+    assert (
+        "Failed to resolve forward reference for a: ForwardRef('NonExistent')"
+        in str(e.value.__cause__)
+    )
 
 
 @pytest.mark.parametrize(

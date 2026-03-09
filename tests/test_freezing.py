@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 from ators import Ators, freeze, is_frozen, member
 
+# XXX add test for freezing classes containing forward refs
+
 
 @pytest.mark.parametrize(
     "frozen,should_work",
@@ -50,6 +52,41 @@ def test_freezing(frozen, should_work):
         a.a = 1
     assert "Cannot modify" in e.exconly()
 
+class ForwardFrozenA(Ators, frozen=True):
+    a: LateFrozenB
+
+class LateFrozenB(Ators, frozen=True):
+    b: int
+
+def test_freezing_with_forward_ref_to_frozen():
+    """Test that freezing works with forward references"""
+
+
+    b = LateFrozenB(b=42)
+    a = ForwardFrozenA(a=b)
+
+    assert a.a is b
+    assert a.a.b == 42
+
+class ForwardMutableA(Ators):
+    a: LateMutableB
+
+class LateMutableB(Ators):
+    b: int
+
+def test_freezing_with_forward_ref_to_mutable():
+    """Test that freezing fails when forward reference points to mutable type"""
+
+
+    b = LateMutableB(b=42)
+    a = ForwardMutableA(a=b)
+
+    assert a.a is b
+    assert a.a.b == 42
+
+    with pytest.raises(TypeError, match=".*Cannot freeze.*") as e:
+        freeze(a)
+
 
 def test_frozen_inheritance():
     class A(Ators, frozen=True):
@@ -58,12 +95,10 @@ def test_frozen_inheritance():
     class B(A, frozen=True):
         b: int
 
-    with pytest.raises(TypeError) as e:
+    with pytest.raises(TypeError, match=".*not frozen but inherit.*") as e:
 
         class C(A):
             c: int
-
-    assert "not frozen but inherit" in e.exconly()
 
 
 def test_cannot_freeze_mutable_list():
@@ -76,9 +111,8 @@ def test_cannot_freeze_mutable_list():
     a.items = [1, 2, 3]
 
     # Attempting to freeze should raise an error
-    with pytest.raises(TypeError) as e:
+    with pytest.raises(TypeError, match=".*Cannot freeze.*") as e:
         freeze(a)
-    assert "Cannot freeze" in e.exconly()
 
 
 @pytest.mark.parametrize(
@@ -222,7 +256,7 @@ def test_freeze_any_type_with_complex_objects(create_obj, should_freeze):
 
 def test_custom_mutability_callable():
     """Test registering and using a custom mutability callable in TypeMutabilityMap"""
-    from ators._ators import add_type_mutability
+    from ators._ators import register_type_mutability_info
 
     class CustomClass:
         """Custom class with explicit mutable/immutable tracking"""
@@ -240,7 +274,7 @@ def test_custom_mutability_callable():
         return True  # Default to mutable if not CustomClass
 
     # Register the custom callable
-    add_type_mutability(CustomClass, check_mutability)
+    register_type_mutability_info(CustomClass, check_mutability)
 
     # Test with immutable custom object - should succeed
     immutable_obj = CustomClass(is_mutable=False)
