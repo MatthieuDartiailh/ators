@@ -174,6 +174,9 @@ impl Member {
         _obtype: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = object.py();
+        if object.is_none() {
+            return self_.into_bound_py_any(py);
+        }
         let object = object.cast::<crate::core::AtorsBase>()?;
 
         // Run pre getattr behavior

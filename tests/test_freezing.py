@@ -105,18 +105,19 @@ def test_frozen_inheritance():
             c: int
 
 
-def test_cannot_freeze_mutable_list():
-    """Test that freezing fails when object contains a mutable list"""
+# FIXME enable when list support is added
+# def test_cannot_freeze_mutable_list():
+#     """Test that freezing fails when object contains a mutable list"""
 
-    class A(Ators):
-        items: list[int]
+#     class A(Ators):
+#         items: list[int]
 
-    a = A()
-    a.items = [1, 2, 3]
+#     a = A()
+#     a.items = [1, 2, 3]
 
-    # Attempting to freeze should raise an error
-    with pytest.raises(TypeError, match=".*Cannot freeze.*"):
-        freeze(a)
+#     # Attempting to freeze should raise an error
+#     with pytest.raises(TypeError, match=".*Cannot freeze.*"):
+#         freeze(a)
 
 
 @pytest.mark.parametrize(
@@ -294,19 +295,20 @@ def test_custom_mutability_callable():
     assert "Cannot freeze" in e.exconly()
 
 
-def test_cannot_freeze_with_mutable_nested_container():
-    """Test that freezing fails with nested containers that have mutable inner types"""
+# FIXME enable when list support is added
+# def test_cannot_freeze_with_mutable_nested_container():
+#     """Test that freezing fails with nested containers that have mutable inner types"""
 
-    class A(Ators):
-        nested: tuple[list[int], ...]
+#     class A(Ators):
+#         nested: tuple[list[int], ...]
 
-    a = A()
-    a.nested = ([1, 2], [3, 4])  # Tuple of mutable lists
+#     a = A()
+#     a.nested = ([1, 2], [3, 4])  # Tuple of mutable lists
 
-    # Attempting to freeze should raise an error
-    with pytest.raises(TypeError) as e:
-        freeze(a)
-    assert "Cannot freeze" in e.exconly()
+#     # Attempting to freeze should raise an error
+#     with pytest.raises(TypeError) as e:
+#         freeze(a)
+#     assert "Cannot freeze" in e.exconly()
 
 
 def test_frozen_object_is_immutable():

@@ -55,46 +55,65 @@ type MyInt = int
 
 # FIXME validate error messages
 @pytest.mark.parametrize(
-    "ann, goods, bads",
+    "ann, goods, bads, warn",
     [
-        (object, [1, object()], []),
-        (Any, [1, object()], []),
-        (bool, [False, True], [""]),
-        (int, [0, 1, -1], [1.0, ""]),
-        (MyInt, [0, 1, -1], [1.0, ""]),
-        (float, [0.0, 0.1], [1, ""]),
-        (complex, [0.0 + 0j, 0.1j], [1, 1.0, ""]),
-        (str, ["a"], [1]),
-        (bytes, [b"a"], [""]),
-        (OB, [OB()], [""]),
-        (tuple, [()], [1, ""]),
-        (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)]),
-        (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")]),
-        (frozenset, [frozenset(), frozenset((1,)), frozenset({1, "a"})], [1, ()]),
-        (frozenset[int], [frozenset(), frozenset((1,))], [1, (), frozenset({1, "a"})]),
-        (set, [set(), {1}, {1, "a"}], [1, ()]),
-        (set[int], [set(), {1}], [1, (), {1, "a"}]),
-        (dict, [{}, {1: 1}, {1: "a"}], [1, ()]),
-        (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}]),
+        (object, [1, object()], [], False),
+        (Any, [1, object()], [], False),
+        (bool, [False, True], [""], False),
+        (int, [0, 1, -1], [1.0, ""], False),
+        (MyInt, [0, 1, -1], [1.0, ""], False),
+        (float, [0.0, 0.1], [1, ""], False),
+        (complex, [0.0 + 0j, 0.1j], [1, 1.0, ""], False),
+        (str, ["a"], [1], False),
+        (bytes, [b"a"], [""], False),
+        (OB, [OB()], [""], False),
+        (tuple, [()], [1, ""], False),
+        (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)], False),
+        (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")], False),
+        (
+            frozenset,
+            [frozenset(), frozenset((1,)), frozenset({1, "a"})],
+            [1, ()],
+            False,
+        ),
+        (
+            frozenset[int],
+            [frozenset(), frozenset((1,))],
+            [1, (), frozenset({1, "a"})],
+            False,
+        ),
+        (set, [set(), {1}, {1, "a"}], [1, ()], False),
+        (set[int], [set(), {1}], [1, (), {1, "a"}], False),
+        (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
+        (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
         # NOTE Not a type validation
-        (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"]),
-        (CustomBase, [CustomObj()], ["", 1, object()]),
-        (int | str, [1, "a"], [1.0, object()]),
-        (int | str | None, [1, "a", None], [1.0, object()]),
-        (int | tuple[int, int], [1, (1, 2)], [1.0, (1, 2, 3), "c", object()]),
-        (int | Literal["a", "b"], [1, "a", "b"], [1.0, "c", object()]),
-        (MyGen[int], [MyGen(1)], [MyGen("a"), MyGen(object()), 1, object()]),
+        (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
+        (CustomBase, [CustomObj()], ["", 1, object()], False),
+        (int | str, [1, "a"], [1.0, object()], False),
+        (int | str | None, [1, "a", None], [1.0, object()], False),
+        (int | tuple[int, int], [1, (1, 2)], [1.0, (1, 2, 3), "c", object()], False),
+        (int | Literal["a", "b"], [1, "a", "b"], [1.0, "c", object()], False),
+        (MyGen[int], [MyGen(1)], [MyGen("a"), MyGen(object()), 1, object()], False),
         # Should warn about unknown generic type
         (
             UnknownGen[int],
             [UnknownGen(1), UnknownGen("a"), UnknownGen(object())],
             [1, object()],
+            True,
         ),
     ],
 )
-def test_type_validators(ann, goods, bads):
-    class A(Ators):
-        a: ann = member()
+def test_type_validators(ann, goods, bads, warn):
+
+    if warn:
+        with pytest.warns(UserWarning, match="No specific validation strategy"):
+
+            class A(Ators):
+                a: ann = member()
+    else:
+
+        class A(Ators):
+            a: ann = member()
 
     a = A()
     for good in goods:

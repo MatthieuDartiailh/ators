@@ -22,7 +22,7 @@ def test_constant_preset():
     a = A()
     assert a.a == 1
     with pytest.raises(TypeError) as e:
-        a.a = 1
+        a.a = 1  # type: ignore[invalid-assignment]
 
     assert "constant" in e.exconly()
 
@@ -43,17 +43,17 @@ def test_read_only_preset():
     a = A()
     assert a.a == 1
     with pytest.raises(TypeError) as e:
-        a.a = 1
+        a.a = 1  # type: ignore[invalid-assignment]
 
-    assert "read only" in e.exconly()
+    assert "read only" in e.value.__cause__.args[0]
 
     a = A()
     a.a = 2
     assert a.a == 2
     with pytest.raises(TypeError) as e:
-        a.a = 1
+        a.a = 1  # type: ignore[invalid-assignment]
 
-    assert "read only" in e.exconly()
+    assert "read only" in e.value.__cause__.args[0]
 
 
 def test_read_only_preset_bad_annotation():
@@ -80,7 +80,7 @@ def test_call_name_object_value_preset():
         return 5
 
     class A(Ators):
-        a: int = member().preset(PreSetAttr.CallNameObjectValue(pre_set))
+        a: int = member().preset(PreSetAttr.CallMemberObjectValue(pre_set))
 
     a = A()
     a.a = 2
@@ -146,7 +146,7 @@ def test_inherited_preset_behavior():
         i += 1
 
     class A(Ators):
-        a: int = member().preset(PreSetAttr.CallNameObjectValue(pre_set))
+        a: int = member().preset(PreSetAttr.CallMemberObjectValue(pre_set))
 
     class B(A):
         a = member().inherit()
@@ -158,7 +158,7 @@ def test_inherited_preset_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(PreSetAttr.CallNameObjectValue, lambda: 1, 3, 0)],
+    [(PreSetAttr.CallMemberObjectValue, lambda: 1, 3, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -201,7 +201,7 @@ def test_bad_signature_of_method():
         class A(Ators):
             m = member()
 
-            @preset(m)
+            @preset(m)  # type: ignore[invalid-argument]
             def f(self):
                 pass
 
@@ -214,6 +214,6 @@ def test_warn_on_multiple_setting_of_postget():
         class A(Ators):
             a: int = (
                 member()
-                .preset(PreSetAttr.CallNameObjectValue(lambda m, o, c: 1))
+                .preset(PreSetAttr.CallMemberObjectValue(lambda m, o, c: 1))
                 .preset(PreSetAttr.NoOp())
             )

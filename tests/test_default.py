@@ -9,7 +9,7 @@
 
 import pytest
 
-from ators import Ators, member
+from ators import Ators, member, Member
 from ators.behaviors import Default, default
 
 
@@ -17,11 +17,11 @@ def test_no_default():
     class A(Ators):
         a: int
 
-    a = A()
+    a = A()  # type: ignore[missing-argument]
     with pytest.raises(TypeError) as e:
         a.a
 
-    assert "value is unset and has no default" in e.exconly()
+    assert "value is unset and has no default" in e.value.__cause__.args[0]
 
 
 def test_static_default():
@@ -105,7 +105,7 @@ def test_call_name_object_default():
         return 5
 
     class A(Ators):
-        a: int = member().default(Default.CallNameObject(make_default))
+        a: int = member().default(Default.CallMemberObject(make_default))
 
     a = A()
     assert a.a == 5
@@ -133,7 +133,7 @@ def test_method_default():
     a = A()
     assert a.a == 8
     assert i == 1
-    assert isinstance(me, str)
+    assert isinstance(me, Member)
     assert a.a == 8
     assert i == 1
 
@@ -157,7 +157,7 @@ def test_inherited_default_behavior():
 
 @pytest.mark.parametrize(
     "behavior, callable, expected, got",
-    [(Default.Call, lambda x: 1, 0, 1), (Default.CallNameObject, lambda: 1, 2, 0)],
+    [(Default.Call, lambda x: 1, 0, 1), (Default.CallMemberObject, lambda: 1, 2, 0)],
 )
 def test_bad_signature(behavior, callable, expected, got):
     with pytest.raises(ValueError) as e:
@@ -200,7 +200,7 @@ def test_bad_signature_of_method():
         class A(Ators):
             m = member()
 
-            @default(m)
+            @default(m)  # type: ignore[invalid-argument-type]
             def f(self):
                 pass
 

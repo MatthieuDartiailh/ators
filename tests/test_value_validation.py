@@ -32,7 +32,7 @@ def test_enumerated_value_validation():
 
     with pytest.raises(ValueError) as e:
         a.a = -1
-    assert "not in" in e.exconly()
+    assert "not in" in e.value.__cause__.args[0]
 
 
 def test_multiple_value_validators():
