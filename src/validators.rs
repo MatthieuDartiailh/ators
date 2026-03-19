@@ -5,8 +5,8 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-
-///
+/// Validator structs managing type and value validation and performing
+/// coercion if necessary
 use pyo3::{
     Bound, Py, PyAny, PyResult, Python, pyclass, pymethods,
     types::{PyDict, PyTuple},
@@ -86,20 +86,19 @@ impl Validator {
 }
 
 impl Validator {
-    ///
+    /// Validate the value against the type and value validators, with coercion
+    /// if validation fails and a coercer is defined
     pub fn validate<'py>(
         &self,
         name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // NOTE not sure how to avoid cloning somewhere in the call chain if not here
-        // We are only cloning a reference so the cost should be minimal
-        match self.strict_validate(name, object, Bound::clone(&value)) {
+        match self.strict_validate(name, object, value) {
             Ok(v) => Ok(v),
             Err(err) => {
                 if let Some(c) = &self.coercer {
-                    c.coerce_value(false, &self.type_validator, name, object, &value)
+                    c.coerce_value(false, &self.type_validator, name, object, value)
                 } else {
                     Err(err)
                 }
@@ -107,7 +106,7 @@ impl Validator {
         }
     }
 
-    ///
+    /// Create a default value using the type validator
     pub fn create_default<'py>(
         &self,
         args: &Bound<'py, PyTuple>,
@@ -116,7 +115,7 @@ impl Validator {
         self.type_validator.create_default(args, kwargs)
     }
 
-    ///
+    /// Coerce the value if a coercer is defined, otherwise return an error
     pub fn coerce_value<'py>(
         &self,
         is_init: bool,
@@ -135,12 +134,12 @@ impl Validator {
         }
     }
 
-    ///
+    /// Validate the value against the type and value validators, without coercion
     fn strict_validate<'py>(
         &self,
         member_name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let v = self
             .type_validator
@@ -153,6 +152,7 @@ impl Validator {
 }
 
 impl Validator {
+    /// Clone and set the owner of the type validator which is used for ForwardRef resolution
     pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         Self {
             type_validator: self.type_validator.with_owner(py, owner),

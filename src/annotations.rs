@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Tools to manipulate and extract information from type annotations.
 use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
     types::{
@@ -40,7 +40,7 @@ impl ValidatorBuildInfo {
     }
 }
 
-///
+/// Types requiring special treatment when encountered in type annotations.
 pub(crate) struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
@@ -57,7 +57,7 @@ pub(crate) struct PyTypes<'py> {
     // FIXME defaultdict
 }
 
-///
+/// Tools to manipulate and extract information from type annotations.
 pub(crate) struct TypeTools<'py> {
     get_origin: Bound<'py, PyAny>,
     get_args: Bound<'py, PyAny>,
@@ -105,36 +105,10 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     })
 }
 
-// NOTE bad idea for ators since I need to look into generic when building validators
-// NOTE in ators I will never get a tuple of types only Unions !!! so much simpler
-// This should map to _extract_types
-// pub fn extract_types<'py>(
-//     kind: Bound<'py, PyAny>,
-//     tools: &TypeTools,
-// ) -> PyResult<Vec<Bound<'py, PyType>>> {
-//     let mut types = Vec::new();
-
-//     if kind.is_instance_of::<PyString>() || kind.is_instance(&tools.types.forward_ref)? {
-//         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-//             "Str and ForwardRef annotations ({}) are not supported in ators classes",
-//             kind.repr()?
-//         )));
-//     }
-
-//     let to_inspect = Vec::new();
-//     if kind.is_instance(&tools.types.generic_alias) {
-//         let origin = tools.get_origin.call1((kind,))?;
-//         if origin.is_instance(ty)
-
-//     }
-
-//     Ok(types)
-// }
-
-// NOTE I should not need is_optional since I won't rely on it for instance
-// validation
-
-///
+/// Build a validator from a type annotation, extracting as much information as
+/// possible to optimize validation and behavior definition. The returned
+/// ValidatorBuildInfo contains information about the built validator that may
+/// be useful to configure the member builder or the behaviors.
 pub fn build_validator_from_annotation<'py>(
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,

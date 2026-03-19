@@ -107,13 +107,13 @@ mod _ators {
     /// # Example
     ///
     /// ```python
-    /// from ators import add_type_mutability
+    /// from ators import register_type_mutability_info
     ///
     /// # Register that list is always mutable
-    /// add_type_mutability(list, True)
+    /// register_type_mutability_info(list, True)
     ///
     /// # Register that tuple is always immutable
-    /// add_type_mutability(tuple, False)
+    /// register_type_mutability_info(tuple, False)
     ///
     /// # Register custom mutability check
     /// class MyClass:
@@ -123,7 +123,7 @@ mod _ators {
     /// def check_mutability(obj):
     ///     return obj.is_mutable
     ///
-    /// add_type_mutability(MyClass, check_mutability)
+    /// register_type_mutability_info(MyClass, check_mutability)
     /// ```
     pub(crate) fn register_type_mutability_info<'py>(
         py: Python<'py>,

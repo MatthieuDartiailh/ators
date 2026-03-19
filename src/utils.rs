@@ -5,15 +5,17 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Utility functions and structures used across the codebase, not specific to any
+/// particular aspect of the library.
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
+    sync::with_critical_section,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
 
-///
+/// Helper function to set the cause of a PyErr and return it in one step.
 pub(crate) fn err_with_cause<'py>(py: Python<'py>, err: PyErr, cause: PyErr) -> PyErr {
     err.set_cause(py, Some(cause));
     err
@@ -50,21 +52,23 @@ impl_signed_integer!(i64);
 impl_signed_integer!(i128);
 impl_signed_integer!(isize);
 
-///
+/// Helper macro to create a struct that validates that a Python object is a
+/// callable with a specific signature.
 macro_rules! create_behavior_callable_checker {
     ($mod: ident, $behavior:ident, $variant:ident, $n:literal) => {
         mod $mod {
             use pyo3::{
-                Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python, intern,
-                types::PyAnyMethods,
+                Borrowed, Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
+                intern, types::PyAnyMethods,
             };
             use std::convert::Infallible;
 
             #[derive(Debug)]
             pub struct Callable(pub Py<PyAny>);
 
-            impl FromPyObject<'_> for Callable {
-                fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+            impl FromPyObject<'_, '_> for Callable {
+                type Error = PyErr;
+                fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
                     let py = ob.py();
                     let sig = py
                         .import(intern!(py, "inspect"))?
@@ -79,11 +83,11 @@ macro_rules! create_behavior_callable_checker {
                             stringify!($behavior),
                             stringify!($variant),
                             $n,
-                            ob,
+                            ob.repr()?,
                             ob_sig_len
                         )))
                     } else {
-                        Ok(Callable(ob.clone().unbind()))
+                        Ok(Callable(ob.to_owned().unbind()))
                     }
                 }
             }
@@ -211,8 +215,9 @@ impl TypeMutabilityMap {
             }
         } else {
             // Validate it's a callable with the appropriate signature
-            let validated =
-                <mutability_callable_check::Callable as FromPyObject>::extract_bound(value)?;
+            let validated = <mutability_callable_check::Callable as FromPyObject>::extract(
+                value.as_borrowed(),
+            )?;
             MutabilitySpec::Inspect(validated.0)
         };
 
@@ -259,11 +264,13 @@ impl TypeMutabilityMap {
         if obj_type.is_subclass(&ators_base_type)? {
             // For Ators objects, check if frozen
             let ators_obj = obj.cast::<AtorsBase>()?;
-            if ators_obj.borrow().is_frozen() {
-                Ok(Mutability::Immutable)
-            } else {
-                Ok(Mutability::Mutable)
-            }
+            with_critical_section(ators_obj.as_any(), || {
+                if ators_obj.borrow().is_frozen() {
+                    Ok(Mutability::Immutable)
+                } else {
+                    Ok(Mutability::Mutable)
+                }
+            })
         } else {
             // For other objects, first check type mutability and then inspect object
             // if undecidable

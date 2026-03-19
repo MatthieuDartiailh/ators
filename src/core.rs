@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Core Ators object and related utilities.
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
     sync::with_critical_section,
@@ -27,7 +27,7 @@ pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
 #[pyclass(module = "ators._ators", subclass)]
 pub struct AtorsBase {
     frozen: bool,
-    notification_enabled: bool,
+    // notification_enabled: bool,  FIXME re-enable once notifications are implemented
     slots: Box<[Option<Py<PyAny>>]>,
 }
 
@@ -63,7 +63,7 @@ impl AtorsBase {
         let slots = (0..=slots_count).map(|_| None).collect();
         Ok(Self {
             frozen: false,
-            notification_enabled: false,
+            // notification_enabled: false, FIXME re-enable once notifications are implemented
             slots,
         })
     }
@@ -92,27 +92,26 @@ impl AtorsBase {
 
 #[inline]
 /// Get a clone (ref) of the value stored in the slot at index if any
-/// A critical section is used only if the object is not frozen.
+/// A critical section is always used to guarantee the object can be safely borrowed.
 pub(crate) fn get_slot<'py>(
     object: &Bound<'py, AtorsBase>,
     index: u8,
     py: Python<'py>,
-) -> Option<Py<PyAny>> {
-    let oref = object.borrow();
-    if oref.is_frozen() {
-        oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
-    } else {
-        with_critical_section(object, || {
-            oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py))
-        })
-    }
+) -> (Option<Py<PyAny>>, bool) {
+    with_critical_section(object.as_any(), || {
+        let oref = object.borrow();
+        (
+            oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py)),
+            oref.is_frozen(),
+        )
+    })
 }
 
 #[inline]
 /// Set the slot at index to the specified value
-pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: Bound<'py, PyAny>) {
+pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();
-    with_critical_section(object, || {
+    with_critical_section(object.as_any(), || {
         object.borrow_mut().slots[index as usize].replace(
             value
                 .into_py_any(py)
@@ -124,14 +123,14 @@ pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: Bo
 #[inline]
 /// Del the slot value at index
 pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
-    with_critical_section(object, || {
+    with_critical_section(object.as_any(), || {
         object.borrow_mut().slots[index as usize] = None;
     })
 }
 
 // FIXME move once #[init] has landed
 #[pyfunction]
-pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>) -> PyResult<()> {
+pub fn init_ators<'py>(self_: &Bound<'py, AtorsBase>, kwargs: &Bound<'py, PyDict>) -> PyResult<()> {
     let members = self_.getattr(ATORS_MEMBERS)?;
     for (k, v) in kwargs.cast::<PyDict>()?.iter() {
         let key = k.cast::<PyString>()?;
@@ -140,7 +139,7 @@ pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>)
                 Ok(_) => Ok(()),
                 Err(err) => {
                     let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
-                    if let Some(r) = member_coerce_init(&m, &self_, v) {
+                    if let Some(r) = member_coerce_init(&m, self_, &v) {
                         let coerced_v = r?;
                         self_.setattr(key, coerced_v).map(|_| ())
                     } else {
@@ -154,7 +153,7 @@ pub fn init_ators<'py>(self_: Bound<'py, AtorsBase>, kwargs: Bound<'py, PyDict>)
 }
 
 #[pyfunction]
-pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
+pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
 
     // Check class mutability to determine if freezing is allowed
@@ -165,7 +164,7 @@ pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
             match mutability_enum {
                 ClassMutability::Immutable {} => {
                     // All members are immutable, allow freezing
-                    with_critical_section(&obj, || {
+                    with_critical_section(obj.as_any(), || {
                         obj.borrow_mut().frozen = true;
                     });
                     Ok(())
@@ -179,17 +178,19 @@ pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
                 ClassMutability::InspectValues { values } => {
                     // Inspect each attribute and check if it's mutable
                     let members_dict = class_type.getattr(ATORS_MEMBERS)?;
+                    let ty_mutability_map = get_type_mutability_map(py);
 
                     for attr_name in &values {
                         let member_obj = PyAnyMethods::get_item(&members_dict, attr_name)?
                             .cast_into::<Member>()?;
 
                         // Get the slot index and retrieve the value
-                        if let Some(slot_value) = get_slot(&obj, member_obj.borrow().index(), py) {
+                        if let (Some(slot_value), _) = get_slot(obj, member_obj.get().index(), py) {
                             let attr_bound = slot_value.bind(py);
-                            let attr_mutability = get_type_mutability_map(py)
-                                .borrow()
-                                .get_object_mutability(attr_bound)?;
+                            let attr_mutability =
+                                with_critical_section(ty_mutability_map.as_any(), || {
+                                    ty_mutability_map.borrow().get_object_mutability(attr_bound)
+                                })?;
                             match attr_mutability {
                                 Mutability::Mutable | Mutability::Undecidable => {
                                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -203,7 +204,7 @@ pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
                     }
 
                     // All inspected attributes are immutable, allow freezing
-                    with_critical_section(&obj, || {
+                    with_critical_section(obj.as_any(), || {
                         obj.borrow_mut().frozen = true;
                     });
                     Ok(())
@@ -219,8 +220,8 @@ pub fn freeze<'py>(obj: Bound<'py, AtorsBase>) -> PyResult<()> {
 }
 
 #[pyfunction]
-pub fn is_frozen<'py>(obj: Bound<'py, AtorsBase>) -> bool {
-    with_critical_section(&obj, || {
+pub fn is_frozen<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
+    with_critical_section(obj.as_any(), || {
         return obj.borrow().frozen;
     })
 }
@@ -239,14 +240,14 @@ pub fn get_member<'py>(
 
 /// Retrieve all members from an Ators objetc.
 #[pyfunction]
-pub fn get_members<'py>(obj: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.copy()
 }
 
 /// Retrieve all members with a specific metadata key and the value associated with it.
 #[pyfunction]
 pub fn get_members_by_tag<'py>(
-    obj: Bound<'py, PyAny>,
+    obj: &Bound<'py, PyAny>,
     tag: String,
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
@@ -264,9 +265,9 @@ pub fn get_members_by_tag<'py>(
 /// Retrieve all members with a specific metadata key and value.
 #[pyfunction]
 pub fn get_members_by_tag_and_value<'py>(
-    obj: Bound<'py, PyAny>,
+    obj: &Bound<'py, PyAny>,
     tag: String,
-    value: Bound<'py, PyAny>,
+    value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
     for (k, member) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
@@ -284,7 +285,7 @@ pub fn get_members_by_tag_and_value<'py>(
 /// Retrieve the member customization tool from a class.
 #[pyfunction]
 pub fn get_member_customization_tool<'py>(
-    cls: Bound<'py, PyAny>,
+    cls: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, MemberCustomizationTool>> {
     let attr = cls.getattr(ATORS_MEMBER_CUSTOMIZER)?;
     if attr.is_none() {
@@ -299,22 +300,22 @@ pub fn get_member_customization_tool<'py>(
 
 // FIXME re-enable once notification are implemented
 // #[pyfunction]
-// pub fn enable_notification<'py>(obj: Bound<'py, AtorsBase>) {
-//     with_critical_section(&obj, || {
+// pub fn enable_notification<'py>(obj: &Bound<'py, AtorsBase>) {
+//     with_critical_section(obj.as_any(), || {
 //         obj.borrow_mut().notification_enabled = true;
 //     });
 // }
 
 // #[pyfunction]
-// pub fn disable_notification<'py>(obj: Bound<'py, AtorsBase>) {
-//     with_critical_section(&obj, || {
+// pub fn disable_notification<'py>(obj: &Bound<'py, AtorsBase>) {
+//     with_critical_section(obj.as_any(), || {
 //         obj.borrow_mut().notification_enabled = false;
 //     });
 // }
 
 // #[pyfunction]
-// pub fn is_notification_enabled<'py>(obj: Bound<'py, AtorsBase>) -> bool {
-//     with_critical_section(&obj, || {
+// pub fn is_notification_enabled<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
+//     with_critical_section(obj.as_any(), || {
 //         return obj.borrow().notification_enabled;
 //     })
 // }

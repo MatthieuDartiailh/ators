@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Member pre and post getattr behavior definitions and related utilities.
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
     Bound, Py, PyRef, PyResult, Python, pyclass,
@@ -15,7 +15,7 @@ use pyo3::{
 
 create_behavior_callable_checker!(preg_callmo, PreGetattrBehavior, CallNameObject, 2);
 
-///
+/// Pre-getattr behavior definitions and related utilities.
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum PreGetattrBehavior {
@@ -28,7 +28,7 @@ pub enum PreGetattrBehavior {
 }
 
 impl PreGetattrBehavior {
-    ///
+    /// Behavior to execute before getting a member value.
     // new is unvalidated at this stage
     pub(crate) fn pre_get<'py>(
         &self,
@@ -77,7 +77,7 @@ pub enum PostGetattrBehavior {
 }
 
 impl PostGetattrBehavior {
-    ///
+    /// Behavior to execute after getting a member value. The value cannot be modified.
     // Value cannot be modified this is a design choice
     pub(crate) fn post_get<'py>(
         &self,

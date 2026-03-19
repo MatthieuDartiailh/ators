@@ -5,9 +5,8 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    annotations::ValidatorBuildInfo,
     core::{AtorsBase, get_slot, set_slot},
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
@@ -30,7 +29,10 @@ pub use delattr::DelattrBehavior;
 pub use getattr::{PostGetattrBehavior, PreGetattrBehavior};
 pub use setattr::{PostSetattrBehavior, PreSetattrBehavior};
 
-///
+/// Helper function to clone the metadata dictionary of a member when cloning
+/// the member itself. This is necessary to ensure that the metadata is properly
+/// cloned when a member is cloned, since the metadata can contain arbitrary
+/// Python objects that need to be cloned as well.
 fn clone_metadata(
     metadata: &Option<HashMap<String, Py<PyAny>>>,
 ) -> Option<HashMap<String, Py<PyAny>>> {
@@ -135,31 +137,32 @@ impl Member {
     }
 }
 
-pub fn member_set_unpickled_value<'py>(
-    member: &Bound<'py, Member>,
-    object: &Bound<'py, AtorsBase>,
-    value: Bound<'py, PyAny>,
-) -> PyResult<()> {
-    // XXX special case our own containers only
-    // to restore valid member and object references
-    set_slot(object, member.borrow().slot_index, value);
-    Ok(())
-}
+// FIXME determine pertinence when implementing pickling support
+// pub fn member_set_unpickled_value<'py>(
+//     member: &Bound<'py, Member>,
+//     object: &Bound<'py, AtorsBase>,
+//     value: &Bound<'py, PyAny>,
+// ) -> PyResult<()> {
+//     // XXX special case our own containers only
+//     // to restore valid member and object references
+//     set_slot(object, member.get().slot_index, value);
+//     Ok(())
+// }
 
-///
+/// Helper function to apply the initial value coercer for a member if it exists.
 pub fn member_coerce_init<'py>(
     member: &Bound<'py, Member>,
     object: &Bound<'py, AtorsBase>,
-    value: Bound<'py, PyAny>,
+    value: &Bound<'py, PyAny>,
 ) -> Option<PyResult<Bound<'py, PyAny>>> {
-    let mb = member.borrow();
+    let mb = member.get();
     mb.validator.init_coercer.as_ref().map(|c| {
         c.coerce_value(
             true,
             &mb.validator.type_validator,
             Some(mb.name()),
             Some(object),
-            &value,
+            value,
         )
     })
 }
@@ -168,113 +171,107 @@ pub fn member_coerce_init<'py>(
 impl Member {
     pub fn __get__<'py>(
         self_: PyRef<'py, Self>,
-        object: Bound<'py, PyAny>,
-        _obtype: Bound<'py, PyAny>,
+        object: &Bound<'py, PyAny>,
+        _obtype: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let py = self_.py();
-        // We access the descriptor through the class so we return the descriptor itself
-        if object.is_none() {
-            Ok(self_.into_py_any(py)?.into_bound(py))
-        // We access the descriptor through an instance so we return the value
-        } else {
-            let object = object.cast::<crate::core::AtorsBase>()?;
+        let py = object.py();
+        let object = object.cast::<crate::core::AtorsBase>()?;
 
-            // Run pre getattr behavior
-            if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
-                return Err(err_with_cause(
-                    py,
-                    pyo3::PyErr::from_type(
-                        e.get_type(py),
-                        format!(
-                            "pre-get failed for member '{}' of {}",
-                            self_.name,
-                            object.repr()?,
-                        ),
+        // Run pre getattr behavior
+        if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
+            return Err(err_with_cause(
+                py,
+                pyo3::PyErr::from_type(
+                    e.get_type(py),
+                    format!(
+                        "pre-get failed for member '{}' of {}",
+                        self_.name,
+                        object.repr()?,
                     ),
-                    e,
-                ));
-            };
+                ),
+                e,
+            ));
+        };
 
-            // Get the value from the slot and build a default value if needed
-            let slot_value = { get_slot(object, self_.slot_index, object.py()) };
-            let value = match slot_value {
-                Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
-                None => {
-                    // Attempt to create a default value
-                    let default = match self_.default.default(&self_, object) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Err(err_with_cause(
-                                py,
-                                pyo3::PyErr::from_type(
-                                    e.get_type(py),
-                                    format!(
-                                        "Failed to get default value for member '{}' of {}",
-                                        self_.name,
-                                        object.repr()?,
-                                    ),
+        // Get the value from the slot and build a default value if needed
+        let (slot_value, _) = get_slot(object, self_.slot_index, py);
+        let value = match slot_value {
+            Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
+            None => {
+                print!("Default path");
+                // Attempt to create a default value
+                let default = match self_.default.default(&self_, object) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(err_with_cause(
+                            py,
+                            pyo3::PyErr::from_type(
+                                e.get_type(py),
+                                format!(
+                                    "Failed to get default value for member '{}' of {}",
+                                    self_.name,
+                                    object.repr()?,
                                 ),
-                                e,
-                            ));
-                        }
-                    };
-                    // Validate and set the default value
-                    let new = match self_.validator.validate(
-                        Some(&self_.name),
-                        Some(object),
-                        default,
-                    ) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Err(err_with_cause(
-                                py,
-                                pyo3::PyErr::from_type(
-                                    e.get_type(py),
-                                    format!(
-                                        "Failed to validate default value for member '{}' of {}",
-                                        self_.name,
-                                        object.repr()?,
-                                    ),
+                            ),
+                            e,
+                        ));
+                    }
+                };
+                // Validate and set the default value
+                let new = match self_
+                    .validator
+                    .validate(Some(&self_.name), Some(object), &default)
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(err_with_cause(
+                            py,
+                            pyo3::PyErr::from_type(
+                                e.get_type(py),
+                                format!(
+                                    "Failed to validate default value for member '{}' of {}",
+                                    self_.name,
+                                    object.repr()?,
                                 ),
-                                e,
-                            ));
-                        }
-                    };
-                    set_slot(object, self_.slot_index, new.clone());
-                    new
-                }
-            };
+                            ),
+                            e,
+                        ));
+                    }
+                };
+                set_slot(object, self_.slot_index, &new);
+                new
+            }
+        };
 
-            // Run post getattr behavior
-            if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
-                return Err(err_with_cause(
-                    py,
-                    pyo3::PyErr::from_type(
-                        e.get_type(py),
-                        format!(
-                            "post-get failed for member '{}' of {}",
-                            self_.name,
-                            object.repr()?,
-                        ),
+        // Run post getattr behavior
+        if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
+            return Err(err_with_cause(
+                py,
+                pyo3::PyErr::from_type(
+                    e.get_type(py),
+                    format!(
+                        "post-get failed for member '{}' of {}",
+                        self_.name,
+                        object.repr()?,
                     ),
-                    e,
-                ));
-            };
-            Ok(value)
-        }
+                ),
+                e,
+            ));
+        };
+        Ok(value)
     }
 
     pub fn __set__<'py>(
         self_: PyRef<'py, Self>,
-        object: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
+        object: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
         let object = object.cast::<crate::core::AtorsBase>()?;
-        let current = get_slot(object, self_.slot_index, py);
+        let (current, frozen) = get_slot(object, self_.slot_index, py);
 
         // Check the frozen bit of the object
-        if object.borrow().is_frozen() {
+        if frozen {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot modify {} which is frozen.",
                 object.repr()?
@@ -318,7 +315,7 @@ impl Member {
                 ));
             }
         };
-        set_slot(object, self_.slot_index, new.clone());
+        set_slot(object, self_.slot_index, &new);
 
         if let Err(e) = self_.post_setattr.post_set(&self_, object, &current, &new) {
             return Err(err_with_cause(
@@ -362,6 +359,8 @@ impl Member {
 
 #[pyclass(module = "ators._ators", name = "member")]
 #[derive(Debug, Default)]
+/// Builder class for Member that allows for ergonomic specification of member
+/// behavior in the class definition body.
 pub struct MemberBuilder {
     // `name` and `slot_index` are public for direct Rust-level access
     pub name: Option<String>,
@@ -400,7 +399,7 @@ impl MemberBuilder {
         Ok(self_)
     }
 
-    ///
+    /// Attach arbitrary metadata to this member which can be accessed at runtime.
     #[pyo3(signature = (**tags))]
     pub fn tag<'py>(
         mut self_: PyRefMut<'py, Self>,
@@ -423,7 +422,7 @@ impl MemberBuilder {
         Ok(self_)
     }
 
-    ///
+    /// Specify a default value or default value factory for this member.
     #[pyo3(name = "default")]
     pub fn py_default<'py>(
         mut self_: PyRefMut<'py, Self>,
@@ -453,7 +452,8 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
-    ///
+    /// Specify a coercer to be applied to values assigned to this member if
+    /// type validation fails.
     #[pyo3( signature= ( coercer = None))]
     pub fn coerce<'py>(
         mut self_: PyRefMut<'py, Self>,
@@ -480,7 +480,8 @@ impl MemberBuilder {
         self_.into_bound_py_any(py)
     }
 
-    ///
+    /// Specify a coercer to be applied to the initial value of the member
+    /// during instance creation.
     #[pyo3( signature= ( coercer = None))]
     pub fn coerce_init<'py>(
         mut self_: PyRefMut<'py, Self>,
@@ -1041,7 +1042,7 @@ impl MemberCustomizationTool {
 
 #[pymethods]
 impl MemberCustomizationTool {
-    ///
+    /// Access a member builder for the given member name.
     pub fn __getitem__<'py>(
         mut self_: PyRefMut<'py, Self>,
         name: &str,

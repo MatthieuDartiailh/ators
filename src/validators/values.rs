@@ -5,9 +5,9 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Value validation related struct and enum definitions.
 use pyo3::{
-    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python, pyclass,
+    Borrowed, Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python, pyclass,
     types::{
         PyAnyMethods, PyFrozenSet, PyFrozenSetMethods, PySet, PySetMethods, PyString, PyTypeMethods,
     },
@@ -22,11 +22,12 @@ create_behavior_callable_checker!(vv_callmov, ValueValidator, CallNameObjectValu
 #[derive(Debug)]
 pub(crate) struct ValidValues(pub Py<PyFrozenSet>);
 
-impl FromPyObject<'_> for ValidValues {
-    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl FromPyObject<'_, '_> for ValidValues {
+    type Error = PyErr;
+    fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let py = ob.py();
         if let Ok(fs) = ob.cast::<PyFrozenSet>() {
-            Ok(ValidValues(fs.clone().unbind()))
+            Ok(ValidValues(fs.to_owned().unbind()))
         } else if let Ok(s) = ob.cast::<PySet>() {
             Ok(ValidValues(PyFrozenSet::new(py, s.iter())?.unbind()))
         } else {

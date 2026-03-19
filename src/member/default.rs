@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Default value behavior definitions and related utilities.
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
     Bound, Py, PyAny, PyRef, PyResult, Python, pyclass,
@@ -16,9 +16,9 @@ create_behavior_callable_checker!(db_call, DefaultBehavior, Call, 0);
 
 create_behavior_callable_checker!(db_callmo, DefaultBehavior, CallNameObject, 2);
 
-///
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
+/// Default value behaviors.
 pub enum DefaultBehavior {
     #[pyo3(constructor = ())]
     NoDefault {},
@@ -38,7 +38,7 @@ pub enum DefaultBehavior {
 }
 
 impl DefaultBehavior {
-    ///
+    /// Behavior to execute to get a default value for a member.
     pub(crate) fn default<'py>(
         &self,
         member: &PyRef<'py, super::Member>,

@@ -5,10 +5,10 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Member delattr behavior definitions and related utilities.
 use pyo3::{Bound, PyRef, PyResult, pyclass, types::PyAnyMethods};
 
-///
+/// Member delattr behavior definitions and related utilities.
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Clone, Debug)]
 pub enum DelattrBehavior {
@@ -19,7 +19,7 @@ pub enum DelattrBehavior {
 }
 
 impl DelattrBehavior {
-    ///
+    /// Behavior to execute when deleting a member value.
     pub(crate) fn del<'py>(
         &self,
         member: &PyRef<'py, super::Member>,

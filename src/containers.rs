@@ -5,15 +5,16 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Container types with validation and related utilities.
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyRefMut, PyResult, Python, ffi, intern, pyclass, pymethods,
+    sync::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PySet, PySetMethods},
 };
 
 use crate::{core::AtorsBase, validators::Validator};
 
-// #[pyclass(extends=PyList)]  Possible in PyO3 0.28 to be released soon
+// #[pyclass(extends=PyList)]  Possible in PyO3 0.27.2
 // struct AtorsList;
 
 // XXX not pickable ...
@@ -61,7 +62,7 @@ impl AtorsSet {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
         for item in value.try_iter()? {
-            let valid = self.validator.validate(m, o, item?)?;
+            let valid = self.validator.validate(m, o, &item?)?;
             validated_items.push(valid);
         }
         PySet::new(py, validated_items)
@@ -79,7 +80,7 @@ impl AtorsSet {
         let valid = self_.validator.validate(
             self_.member_name.as_deref(),
             self_.object.as_ref().map(|o| o.bind(py)),
-            value,
+            &value,
         )?;
         // Use direct PySet C API to avoid converting into bound to cast to PySet
         crate::utils::error_on_minusone(py, unsafe {
@@ -89,7 +90,8 @@ impl AtorsSet {
 
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.borrow().validate_set(py, value)?;
+        let valid =
+            with_critical_section(self_.as_any(), || self_.borrow().validate_set(py, value))?;
 
         self_
             .py_super()?
@@ -103,7 +105,8 @@ impl AtorsSet {
 
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.borrow().validate_set(py, value)?;
+        let valid =
+            with_critical_section(self_.as_any(), || self_.borrow().validate_set(py, value))?;
 
         self_
             .py_super()?
@@ -175,7 +178,7 @@ impl AtorsDict {
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
-        self.key_validator.validate(m, o, key)
+        self.key_validator.validate(m, o, &key)
     }
 
     /// Validate a value for insertion into the dict
@@ -186,7 +189,7 @@ impl AtorsDict {
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
-        self.value_validator.validate(m, o, value)
+        self.value_validator.validate(m, o, &value)
     }
 
     /// Validate both key and value for insertion into the dict
@@ -198,8 +201,8 @@ impl AtorsDict {
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
-        let valid_key = self.key_validator.validate(m, o, key)?;
-        let valid_value = self.value_validator.validate(m, o, value)?;
+        let valid_key = self.key_validator.validate(m, o, &key)?;
+        let valid_value = self.value_validator.validate(m, o, &value)?;
         Ok((valid_key, valid_value))
     }
 }

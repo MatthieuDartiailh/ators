@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
+    sync::with_critical_section,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
         PyFunction, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
@@ -236,7 +237,7 @@ pub fn create_ators_subclass<'py>(
     let mut occupied = HashSet::new();
     let mut conflict = Vec::new();
     for member in members.values() {
-        let i = member.borrow().index();
+        let i = member.get().index();
         if occupied.contains(&i) {
             conflict.push(member);
         } else {
@@ -251,10 +252,10 @@ pub fn create_ators_subclass<'py>(
         next_index: 0,
     };
     for cm in conflict.iter() {
-        let name = { cm.borrow().name().to_owned() };
+        let name = { cm.get().name().to_owned() };
         let new = Bound::new(
             py,
-            cm.borrow()
+            cm.get()
                 .clone_with_index(index_factory.next_index().map_err(|_| {
                     pyo3::exceptions::PyTypeError::new_err(format!(
                         "Class {name} has more than 255 members"
@@ -285,7 +286,9 @@ pub fn create_ators_subclass<'py>(
             let name: String = k.extract()?;
             unannotated_member_builder_ids.insert(mb_id, name.clone());
             {
-                mb.borrow_mut().name = Some(name.clone());
+                with_critical_section(mb.as_any(), || {
+                    mb.borrow_mut().name = Some(name.clone());
+                });
             }
             member_builders.insert(name, mb.extract()?);
         }
@@ -299,9 +302,9 @@ pub fn create_ators_subclass<'py>(
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
-            mb.slot_index = Some(m.borrow().index());
+            mb.slot_index = Some(m.get().index());
             if mb.should_inherit() {
-                mb.get_inherited_behavior_from_member(&m.borrow());
+                mb.get_inherited_behavior_from_member(m.get());
             }
         } else {
             mb.slot_index = Some(index_factory.next_index().map_err(|_| {
@@ -438,10 +441,11 @@ pub fn create_ators_subclass<'py>(
     let mut new_specific_members = None;
     for (mname, mut mb) in tool.get_builders(py) {
         // Create the new member inheriting behaviors from the existing ones.
-        let existing = cls.getattr(&mname)?.cast::<Member>()?.borrow();
-        mb.name = Some(existing.name().to_owned());
-        mb.slot_index = Some(existing.index());
-        mb.get_inherited_behavior_from_member(&existing);
+        let existing_member = cls.getattr(&mname)?.cast_into::<Member>()?;
+        let em = existing_member.get();
+        mb.name = Some(em.name().to_owned());
+        mb.slot_index = Some(em.index());
+        mb.get_inherited_behavior_from_member(em);
         let new_member = Bound::new(py, mb.build(&name)?)?;
 
         // Replace the exiting member references by references by the new member
@@ -460,7 +464,7 @@ pub fn create_ators_subclass<'py>(
             )?);
         }
         let spec_members = new_specific_members.as_ref().expect("Initialized");
-        spec_members.discard(existing)?;
+        spec_members.discard(existing_member)?;
         spec_members.add(new_member)?;
     }
     if let Some(sm) = new_specific_members {
@@ -483,7 +487,7 @@ pub fn create_ators_subclass<'py>(
         // a owner to resolve it.
         let requires_owner = members_requiring_owner.contains(&member_name.extract::<String>()?);
         let new_member = if requires_owner {
-            Bound::new(py, member.borrow().with_owner(py, &cls))?
+            Bound::new(py, member.get().with_owner(py, &cls))?
         } else {
             member_obj.clone().cast_into()?
         };
@@ -491,7 +495,7 @@ pub fn create_ators_subclass<'py>(
         cls.setattr(&member_name.extract::<String>()?, Bound::clone(&new_member))?;
 
         // Get the validator from the member using the accessor method
-        let member_borrow = new_member.borrow();
+        let member_borrow = new_member.get();
         let validator = member_borrow.validator();
 
         // Examine the mutability of the member and update the class mutability

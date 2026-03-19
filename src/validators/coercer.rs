@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Structures used to manage coercion behaviors for validators.
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
     types::{
@@ -21,7 +21,8 @@ use crate::utils::{create_behavior_callable_checker, err_with_cause};
 create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallNameObjectValueInit, 4);
 
-///
+/// Enum managing coercion behaviors for validators, used to coerce values to
+/// the right type.
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum Coercer {
@@ -37,7 +38,7 @@ pub enum Coercer {
 }
 
 impl Coercer {
-    ///
+    /// Coerce the value using the coercer and return the coerced value
     pub(crate) fn coerce_value<'py>(
         &self,
         is_init_coercion: bool,

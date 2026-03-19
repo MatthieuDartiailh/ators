@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-///
+/// Pre and post setattr behavior definitions and related utilities.
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
     Bound, Py, PyRef, PyResult, Python, pyclass,
@@ -14,7 +14,7 @@ use pyo3::{
 
 create_behavior_callable_checker!(pres_callmov, PreSetattrBehavior, CallNameObjectValue, 3);
 
-///
+/// Pre-setattr behavior definitions and related utilities.
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum PreSetattrBehavior {
@@ -31,7 +31,8 @@ pub enum PreSetattrBehavior {
 }
 
 impl PreSetattrBehavior {
-    ///
+    /// Execute the pre-setattr behavior, returning an error if the behavior
+    /// does not allow the setattr to proceed.
     pub(crate) fn pre_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
@@ -104,7 +105,7 @@ pub enum PostSetattrBehavior {
 }
 
 impl PostSetattrBehavior {
-    ///
+    /// Behavior to execute after setting a member value.
     pub(crate) fn post_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,

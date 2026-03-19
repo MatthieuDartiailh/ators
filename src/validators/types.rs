@@ -5,18 +5,20 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+/// Structures used to manage type validation.
 use super::Validator;
 use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
 use crate::utils::{Mutability, err_with_cause};
+use pyo3::Borrowed;
+use pyo3::sync::with_critical_section;
 use pyo3::types::PyStringMethods;
-///
 use pyo3::{
-    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyResult, Python,
+    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    intern, pyclass, pymethods,
+    pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods, PyString,
@@ -32,6 +34,9 @@ use std::{
 /// A newtype wrapper around `Box<Validator>` that implements PyO3 conversion traits.
 /// This allows using heap-allocated validators in TypeValidator variants without
 /// requiring GIL-bound storage (Py<Validator>).
+/// The risk of creating reference cycles exist but is low and since validators
+///  exists only on types that are expected to be long-lived, it is unlikely to
+/// create any real world issues.
 #[derive(Debug, Clone)]
 pub struct BoxedValidator(pub Box<Validator>);
 
@@ -54,8 +59,10 @@ impl From<Validator> for BoxedValidator {
     }
 }
 
-impl FromPyObject<'_> for BoxedValidator {
-    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl FromPyObject<'_, '_> for BoxedValidator {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let validator: Validator = ob.extract()?;
         Ok(BoxedValidator(Box::new(validator)))
     }
@@ -82,16 +89,18 @@ impl<'py> IntoPyObject<'py> for &BoxedValidator {
 }
 
 #[derive(Debug)]
+/// Struct storing a tuple of types for the TypeValidator::Instance variant
 pub(crate) struct TypesTuple(Py<PyTuple>);
 
 impl TypesTuple {
-    ///
+    /// Coerce the value to the first type in the tuple
     pub fn coerce<'py>(&self, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();
         let type_ = self.0.bind(py).get_item(0)?;
         type_.call1((value,))
     }
 
+    /// Iterate over the types in the tuple
     pub fn iter<'py>(&self, py: Python<'py>) -> impl Iterator<Item = Bound<'py, PyType>> {
         self.0
             .bind(py)
@@ -100,8 +109,10 @@ impl TypesTuple {
     }
 }
 
-impl FromPyObject<'_> for TypesTuple {
-    fn extract_bound<'py>(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl FromPyObject<'_, '_> for TypesTuple {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let py = ob.py();
         if let Ok(ty) = ob.cast::<PyType>() {
             Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
@@ -109,7 +120,7 @@ impl FromPyObject<'_> for TypesTuple {
             && s.len() > 0
             && s.iter().all(|item| item.is_instance_of::<PyType>())
         {
-            Ok(TypesTuple(s.clone().unbind()))
+            Ok(TypesTuple(s.to_owned().unbind()))
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Expected a 'type' or 'tuple[type, ...]' for a TypeValidator.Instance, got {}",
@@ -128,7 +139,7 @@ impl<'py> IntoPyObject<'py> for &TypesTuple {
     }
 }
 
-///
+/// Validator struct used to resolve forward references in TypeValidator::ForwardValidator
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 
@@ -160,7 +171,7 @@ impl LateResolvedValidator {
         }
     }
 
-    ///
+    /// Get the validator by resolving the forward reference
     pub fn get_validator<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, TypeValidator>> {
         let validator = self.validator_cell.get_or_init_py_attached(py, || {
             let typing = py.import("typing")?;
@@ -220,7 +231,8 @@ impl LateResolvedValidator {
     // NOTE this cannot be done right after class creation since the class has
     // not yet been stored in the module dict and thus cannot be resolved by
     // the forward reference, but
-    ///
+    /// Determine if the type is mutable by resolving the forward reference and
+    /// checking the mutability of the resolved type
     pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
         match self.get_validator(py) {
             Ok(validator) => validator.get().is_type_mutable(py),
@@ -255,11 +267,7 @@ impl Clone for LateResolvedValidator {
     }
 }
 
-// XXX Impl GC methods, it may make sense to use Py<> inside vector since
-// otherwise traversal will be weird, but not having a Py was a nice way to
-// avoid a performance cost.
-// Should ask on PyO3 issue tracker about best practices here.
-///
+/// Type validation struct managing type validation
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum TypeValidator {
@@ -387,60 +395,63 @@ impl TypeValidator {
         }
     }
 
-    ///
+    /// Validate the type of the value, for container a new container may be
+    /// returned (e.g. a new tuple with validated items), but the value itself
+    /// is not coerced (e.g. a str is not converted to int even if the type
+    /// validator is Int)
     pub fn validate_type<'py>(
         &self,
         name: Option<&str>,
         object: Option<&Bound<'py, crate::core::AtorsBase>>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
-            Self::Any {} => Ok(value),
+            Self::Any {} => Ok(value.clone()),
             Self::None {} => {
                 if value.is_none() {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("None", name, object, value)
                 }
             }
             Self::Bool {} => {
                 if unsafe { PyBool_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("bool", name, object, value)
                 }
             }
             Self::Int {} => {
                 if unsafe { PyLong_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("int", name, object, value)
                 }
             }
             Self::Float {} => {
                 if unsafe { PyFloat_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("float", name, object, value)
                 }
             }
             Self::Complex {} => {
                 if unsafe { PyComplex_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("complex", name, object, value)
                 }
             }
             Self::Str {} => {
                 if unsafe { PyUnicode_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("str", name, object, value)
                 }
             }
             Self::Bytes {} => {
                 if unsafe { PyBytes_Check(value.as_ptr()) } != 0 {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("bytes", name, object, value)
                 }
@@ -472,7 +483,7 @@ impl TypeValidator {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, (item, validator)) in tuple.iter().zip(items).enumerate() {
                         // FIXME the loop body logic could be extracted into a helper function
-                        match validator.validate(name, object, item.clone()) {
+                        match validator.validate(name, object, &item) {
                             Ok(v) => {
                                 if !v.is(item) {
                                     match &mut validated_items {
@@ -521,7 +532,7 @@ impl TypeValidator {
                     Ok(if let Some(vi) = validated_items {
                         pyo3::types::PyTuple::new(value.py(), vi)?.into_any()
                     } else {
-                        value
+                        value.clone()
                     })
                 } else {
                     validation_error!("tuple", name, object, value)
@@ -531,7 +542,7 @@ impl TypeValidator {
                 if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, titem) in tuple.iter().enumerate() {
-                        match item.validate(name, object, titem.clone()) {
+                        match item.validate(name, object, &titem) {
                             Ok(v) => {
                                 if !v.is(&titem) {
                                     match &mut validated_items {
@@ -580,7 +591,7 @@ impl TypeValidator {
                     Ok(if let Some(vi) = validated_items {
                         pyo3::types::PyTuple::new(value.py(), vi)?.into_any()
                     } else {
-                        value
+                        value.clone()
                     })
                 } else {
                     validation_error!("tuple", name, object, value)
@@ -588,7 +599,7 @@ impl TypeValidator {
             }
             Self::VarTuple { item: None } => {
                 if value.cast_exact::<pyo3::types::PyTuple>().is_ok() {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("tuple", name, object, value)
                 }
@@ -597,7 +608,7 @@ impl TypeValidator {
                 if let Ok(fset) = value.cast_exact::<pyo3::types::PyFrozenSet>() {
                     let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
                     for (index, titem) in fset.iter().enumerate() {
-                        match item.validate(name, object, titem.clone()) {
+                        match item.validate(name, object, &titem) {
                             Ok(v) => {
                                 if !v.is(&titem) {
                                     match &mut validated_items {
@@ -646,7 +657,7 @@ impl TypeValidator {
                     Ok(if let Some(vi) = validated_items {
                         pyo3::types::PyFrozenSet::new(value.py(), vi)?.into_any()
                     } else {
-                        value
+                        value.clone()
                     })
                 } else {
                     validation_error!("frozenset", name, object, value)
@@ -654,7 +665,7 @@ impl TypeValidator {
             }
             Self::FrozenSet { item: None } => {
                 if value.cast_exact::<pyo3::types::PyFrozenSet>().is_ok() {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!("frozenset", name, object, value)
                 }
@@ -665,7 +676,7 @@ impl TypeValidator {
                     let py = value.py();
                     let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
                     for (index, titem) in set.iter().enumerate() {
-                        match item.validate(name, object, titem.clone()) {
+                        match item.validate(name, object, &titem) {
                             Ok(v) => validated_items.push(v),
                             Err(cause) => {
                                 if let Some(m) = name
@@ -724,8 +735,8 @@ impl TypeValidator {
                         Vec::with_capacity(dict.len());
                     for (tk, tv) in dict.iter() {
                         match (
-                            key_v.validate(name, object, tk.clone()),
-                            val_v.validate(name, object, tv.clone()),
+                            key_v.validate(name, object, &tk),
+                            val_v.validate(name, object, &tv),
                         ) {
                             (Ok(k), Ok(v)) => validated_items.push((k, v)),
                             (Err(err), __ior__) => {
@@ -809,7 +820,7 @@ impl TypeValidator {
             Self::Typed { type_ } => {
                 let t = type_.bind(value.py());
                 if value.is_instance(t)? {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!(t.repr()?, name, object, value)
                 }
@@ -817,7 +828,7 @@ impl TypeValidator {
             Self::Instance { types } => {
                 let t = types.0.bind(value.py());
                 if value.is_instance(t)? {
-                    Ok(value)
+                    Ok(value.clone())
                 } else {
                     validation_error!(t.repr()?, name, object, value)
                 }
@@ -825,7 +836,7 @@ impl TypeValidator {
             Self::Union { members } => {
                 let mut err = Vec::with_capacity(members.len());
                 for v in members.iter() {
-                    match v.validate(name, object, Bound::clone(&value)) {
+                    match v.validate(name, object, value) {
                         Ok(validated) => return Ok(validated),
                         Err(e) => err.push(e),
                     }
@@ -850,7 +861,7 @@ impl TypeValidator {
                     let attr_value = value.getattr(attr_name.as_str())?;
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
-                    match validator.strict_validate(name, object, attr_value) {
+                    match validator.strict_validate(name, object, &attr_value) {
                         Ok(_) => {}
                         Err(cause) => {
                             if let Some(m) = name
@@ -881,7 +892,7 @@ impl TypeValidator {
                         }
                     }
                 }
-                Ok(value)
+                Ok(value.clone())
             }
             Self::ForwardValidator { late_validator } => {
                 let py = value.py();
@@ -950,16 +961,22 @@ impl TypeValidator {
             }
             Self::Set { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
-            Self::Typed { type_ } => get_type_mutability_map(py)
-                .borrow()
-                .get_type_mutability(type_.bind(py)),
+            Self::Typed { type_ } => {
+                let mm = get_type_mutability_map(py);
+                with_critical_section(mm.as_any(), || {
+                    mm.borrow().get_type_mutability(type_.bind(py))
+                })
+            }
             Self::Instance { types } => {
                 types
                     .iter(py)
                     .fold(Mutability::Immutable, |acc: Mutability, e| {
+                        let mm = get_type_mutability_map(py);
                         match (
                             acc,
-                            get_type_mutability_map(py).borrow().get_type_mutability(&e),
+                            with_critical_section(mm.as_any(), || {
+                                mm.borrow().get_type_mutability(&e)
+                            }),
                         ) {
                             // If one item is mutable the tuple is seen as mutable
                             (Mutability::Mutable, _) => Mutability::Mutable,
@@ -982,9 +999,12 @@ impl TypeValidator {
             Self::GenericAttributes {
                 type_,
                 attributes: _,
-            } => get_type_mutability_map(py)
-                .borrow()
-                .get_type_mutability(type_.bind(py)),
+            } => {
+                let mm = get_type_mutability_map(py);
+                with_critical_section(mm.as_any(), || {
+                    mm.borrow().get_type_mutability(type_.bind(py))
+                })
+            }
             Self::Union { members } => {
                 members
                     .iter()
