@@ -6,14 +6,12 @@ This module benchmarks attribute read performance across different frameworks:
 - Ators (with Any annotation)
 """
 
+import importlib.util
+
 import pytest
 
-try:
-    from atom.api import Atom
 
-    ATOM_AVAILABLE = True
-except ImportError:
-    ATOM_AVAILABLE = False
+ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
 
 
 # ============================================================================
@@ -21,7 +19,7 @@ except ImportError:
 # ============================================================================
 
 
-@pytest.mark.benchmark(group="get_untyped")
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
 def test_benchmark_get_py_slotted(benchmark, py_slotted_untyped):
     """Benchmark Python slotted __get__ performance."""
 
@@ -31,7 +29,7 @@ def test_benchmark_get_py_slotted(benchmark, py_slotted_untyped):
     benchmark(get_ops)
 
 
-@pytest.mark.benchmark(group="get_untyped")
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
 def test_benchmark_get_py_plain(benchmark, py_plain_untyped):
     """Benchmark Python plain class __get__ performance (no __slots__)."""
 
@@ -41,18 +39,17 @@ def test_benchmark_get_py_plain(benchmark, py_plain_untyped):
     benchmark(get_ops)
 
 
-@pytest.mark.benchmark(group="get_untyped")
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
 def test_benchmark_get_ators(benchmark, ators_untyped):
     """Benchmark Ators __get__ performance with Any annotation."""
 
     def get_ops():
         _ = ators_untyped.field
 
-
     benchmark(get_ops)
 
 
-@pytest.mark.benchmark(group="get_untyped")
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
 def test_benchmark_get_ators_frozen(benchmark, ators_frozen_untyped):
     """Benchmark frozen Ators __get__ performance with Any annotation."""
 
@@ -63,11 +60,21 @@ def test_benchmark_get_ators_frozen(benchmark, ators_frozen_untyped):
 
 
 @pytest.mark.skipif(not ATOM_AVAILABLE, reason="Atom not available")
-@pytest.mark.benchmark(group="get_untyped")
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
 def test_benchmark_get_atom(benchmark, atom_untyped):
     """Benchmark Atom __get__ performance with Value descriptor."""
 
     def get_ops():
         _ = atom_untyped.field
+
+    benchmark(get_ops)
+
+
+@pytest.mark.benchmark(group="get_untyped", disable_gc=True, min_rounds=100000)
+def test_benchmark_get_property(benchmark, property_untyped):
+    """Benchmark property __get__ performance (no validation)."""
+
+    def get_ops():
+        _ = property_untyped.field
 
     benchmark(get_ops)

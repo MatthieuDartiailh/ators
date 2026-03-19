@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 
-from ators import Ators, member, Member
+from ators import Ators, member
 from ators.behaviors import PreSetAttr, preset
 
 

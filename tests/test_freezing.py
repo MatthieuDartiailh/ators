@@ -52,15 +52,17 @@ def test_freezing(frozen, should_work):
         a.a = 1
     assert "Cannot modify" in e.exconly()
 
+
 class ForwardFrozenA(Ators, frozen=True):
     a: LateFrozenB
+
 
 class LateFrozenB(Ators, frozen=True):
     b: int
 
+
 def test_freezing_with_forward_ref_to_frozen():
     """Test that freezing works with forward references"""
-
 
     b = LateFrozenB(b=42)
     a = ForwardFrozenA(a=b)
@@ -68,15 +70,17 @@ def test_freezing_with_forward_ref_to_frozen():
     assert a.a is b
     assert a.a.b == 42
 
+
 class ForwardMutableA(Ators):
     a: LateMutableB
+
 
 class LateMutableB(Ators):
     b: int
 
+
 def test_freezing_with_forward_ref_to_mutable():
     """Test that freezing fails when forward reference points to mutable type"""
-
 
     b = LateMutableB(b=42)
     a = ForwardMutableA(a=b)
@@ -84,7 +88,7 @@ def test_freezing_with_forward_ref_to_mutable():
     assert a.a is b
     assert a.a.b == 42
 
-    with pytest.raises(TypeError, match=".*Cannot freeze.*") as e:
+    with pytest.raises(TypeError, match=".*Cannot freeze.*"):
         freeze(a)
 
 
@@ -95,9 +99,9 @@ def test_frozen_inheritance():
     class B(A, frozen=True):
         b: int
 
-    with pytest.raises(TypeError, match=".*not frozen but inherit.*") as e:
+    with pytest.raises(TypeError, match=".*not frozen but inherit.*"):
 
-        class C(A):
+        class C(A):  # noqua
             c: int
 
 
@@ -111,7 +115,7 @@ def test_cannot_freeze_mutable_list():
     a.items = [1, 2, 3]
 
     # Attempting to freeze should raise an error
-    with pytest.raises(TypeError, match=".*Cannot freeze.*") as e:
+    with pytest.raises(TypeError, match=".*Cannot freeze.*"):
         freeze(a)
 
 

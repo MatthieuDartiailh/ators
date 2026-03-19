@@ -165,7 +165,7 @@ def test_forward_ref_preserve_owner_in_subclasses():
 
 def test_forward_ref_failed_to_resolve():
     class A(Ators):
-        a: NonExistent = member()
+        a: NonExistent = member()  # noqa : F821
 
     a1 = A()
     with pytest.raises(NameError) as e:

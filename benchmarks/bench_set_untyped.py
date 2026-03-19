@@ -1,3 +1,10 @@
+# --------------------------------------------------------------------------------------
+# Copyright (c) 2025-2026, Ators contributors, see git history for details
+#
+# Distributed under the terms of the Modified BSD License.
+#
+# The full license is in the file LICENSE, distributed with this software.
+# --------------------------------------------------------------------------------------
 """Benchmark __set__ performance with untyped fields.
 
 This module benchmarks attribute write performance across different frameworks:
@@ -8,14 +15,12 @@ This module benchmarks attribute write performance across different frameworks:
 No validation is performed here, only the write operation.
 """
 
+import importlib.util
+
 import pytest
 
-try:
-    from atom.api import Atom
 
-    ATOM_AVAILABLE = True
-except ImportError:
-    ATOM_AVAILABLE = False
+ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
 
 
 # ============================================================================
@@ -60,5 +65,15 @@ def test_benchmark_set_atom(benchmark, atom_untyped):
 
     def set_ops():
         atom_untyped.field = 42
+
+    benchmark(set_ops)
+
+
+@pytest.mark.benchmark(group="set_untyped", disable_gc=True, min_rounds=100000)
+def test_benchmark_set_property(benchmark, property_untyped):
+    """Benchmark property __set__ performance (no validation)."""
+
+    def set_ops():
+        property_untyped.field = 42
 
     benchmark(set_ops)

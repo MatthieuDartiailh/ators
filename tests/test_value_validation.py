@@ -9,7 +9,7 @@
 
 import pytest
 
-from ators import Ators, member, Member
+from ators import Ators, member
 from ators.behaviors import ValueValidator, append_value_validator
 
 
