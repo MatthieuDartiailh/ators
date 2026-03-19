@@ -22,7 +22,6 @@ use crate::utils::err_with_cause;
 mod default;
 mod delattr;
 mod getattr;
-mod pickle;
 mod setattr;
 pub use default::DefaultBehavior;
 pub use delattr::DelattrBehavior;
