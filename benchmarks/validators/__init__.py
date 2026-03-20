@@ -1,0 +1,8 @@
+# --------------------------------------------------------------------------------------
+# Copyright (c) 2025-2026, Ators contributors, see git history for details
+#
+# Distributed under the terms of the Modified BSD License.
+#
+# The full license is in the file LICENSE, distributed with this software.
+# --------------------------------------------------------------------------------------
+"""Benchmark tests for validator performance."""

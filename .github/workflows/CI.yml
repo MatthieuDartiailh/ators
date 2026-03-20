@@ -74,8 +74,6 @@ jobs:
           enable-cache: true
       - name: Set up Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          components: rustfmt clippy
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
