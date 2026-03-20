@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
-    sync::with_critical_section,
+    sync::critical_section::with_critical_section,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
         PyFunction, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,

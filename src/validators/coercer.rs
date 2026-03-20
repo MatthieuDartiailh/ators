@@ -23,7 +23,7 @@ create_behavior_callable_checker!(co_callmovi, Coercer, CallNameObjectValueInit,
 
 /// Enum managing coercion behaviors for validators, used to coerce values to
 /// the right type.
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
 pub enum Coercer {
     #[pyo3(constructor = ())]

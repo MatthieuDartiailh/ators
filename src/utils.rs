@@ -10,7 +10,7 @@
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
-    sync::with_critical_section,
+    sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
@@ -152,7 +152,7 @@ use crate::core::AtorsBase;
 use crate::meta::ATORS_FROZEN;
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
-#[pyclass(module = "ators._ators", eq, frozen)]
+#[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mutability {
     /// The type is mutable

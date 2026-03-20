@@ -8,7 +8,7 @@
 /// Container types with validation and related utilities.
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyRefMut, PyResult, Python, ffi, intern, pyclass, pymethods,
-    sync::with_critical_section,
+    sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PySet, PySetMethods},
 };
 
