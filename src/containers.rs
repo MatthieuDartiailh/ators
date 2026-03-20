@@ -50,17 +50,17 @@ impl AtorsList {
     fn validate_item<'py>(
         &self,
         py: Python<'py>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
-        self.validator.validate(m, o, &value)
+        self.validator.validate(m, o, value)
     }
 
     fn validate_iterable<'py>(
         &self,
         py: Python<'py>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyList>> {
         let m = self.member_name.as_deref();
         let o = self.object.as_ref().map(|o| o.bind(py));
@@ -79,7 +79,7 @@ impl AtorsList {
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
-    pub fn append<'py>(self_: PyRefMut<'py, AtorsList>, value: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn append<'py>(self_: PyRefMut<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.validate_item(py, value)?;
         // Use direct PyList C API to avoid converting into bound to cast to PyList
@@ -91,7 +91,7 @@ impl AtorsList {
     pub fn insert<'py>(
         self_: PyRefMut<'py, AtorsList>,
         index: isize,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = value.py();
         let valid = self_.validate_item(py, value)?;
@@ -103,8 +103,8 @@ impl AtorsList {
 
     pub fn __setitem__<'py>(
         self_: &Bound<'py, AtorsList>,
-        index: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
+        index: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = index.py();
         let valid = if index.is_instance_of::<PySlice>() {
@@ -125,7 +125,7 @@ impl AtorsList {
             .map(|_| ())
     }
 
-    pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = other.py();
         let valid = with_critical_section(self_.as_any(), || {
             self_.borrow().validate_iterable(py, other)
@@ -136,13 +136,13 @@ impl AtorsList {
             .map(|_| ())
     }
 
-    pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         AtorsList::extend(self_, value)
     }
 
     pub fn __delitem__<'py>(
         self_: &Bound<'py, AtorsList>,
-        index: Bound<'py, PyAny>,
+        index: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = index.py();
         self_

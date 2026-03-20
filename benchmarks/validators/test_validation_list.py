@@ -42,3 +42,14 @@ def test_benchmark_validation_list_property(benchmark, property_typed):
         property_typed.list_field = [1, 2, 3]
 
     benchmark(set_list_ops)
+
+
+@pytest.mark.skipif(not ATOM_AVAILABLE, reason="Atom not available")
+@pytest.mark.benchmark(group="validation_list")
+def test_benchmark_validation_list_atom(benchmark, atom_typed):
+    """Benchmark Atom list[int] field validation overhead."""
+
+    def set_list_ops():
+        atom_typed.list_field = [1, 2, 3]
+
+    benchmark(set_list_ops)
