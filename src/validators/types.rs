@@ -21,8 +21,8 @@ use pyo3::{
     pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PySet, PySetMethods, PyString,
-        PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
+        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{
@@ -313,6 +313,8 @@ pub enum TypeValidator {
     FrozenSet { item: Option<BoxedValidator> },
     #[pyo3(constructor = (item))]
     Set { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (item))]
+    List { item: Option<BoxedValidator> },
     #[pyo3(constructor = (items))]
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
@@ -379,6 +381,11 @@ impl TypeValidator {
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
             },
             Self::Set { item } => Self::Set {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::List { item } => Self::List {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
@@ -726,6 +733,63 @@ impl TypeValidator {
                     validation_error!("set", name, object, value)
                 }
             }
+            Self::List { item: Some(item) } => {
+                // FIXME add a fast path for AtorsList with matching object and member
+                if let Ok(list) = value.cast::<pyo3::types::PyList>() {
+                    let py = value.py();
+                    let mut validated_items: Vec<Bound<'_, PyAny>> =
+                        Vec::with_capacity(list.len());
+                    for (index, titem) in list.iter().enumerate() {
+                        match item.validate(name, object, &titem) {
+                            Ok(v) => validated_items.push(v),
+                            Err(cause) => {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        cause,
+                                    ));
+                                } else {
+                                    return Err(crate::utils::err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Ok({
+                        crate::containers::AtorsList::new(
+                            py,
+                            (*item.0).clone(),
+                            name,
+                            object.map(|m| m.clone().unbind()),
+                            validated_items,
+                        )?
+                        .into_any()
+                    })
+                } else {
+                    validation_error!("list", name, object, value)
+                }
+            }
+            Self::List { item: None } => {
+                if let Ok(v) = value.cast::<pyo3::types::PyList>() {
+                    // Preserve the copy on assignment semantic
+                    PyList::new(v.py(), v.iter()).map(|l| l.into_any())
+                } else {
+                    validation_error!("list", name, object, value)
+                }
+            }
             Self::Dict {
                 items: Some((key_v, val_v)),
             } => {
@@ -960,6 +1024,7 @@ impl TypeValidator {
                     })
             }
             Self::Set { item: _ } => Mutability::Mutable,
+            Self::List { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
@@ -1048,6 +1113,7 @@ impl Clone for TypeValidator {
             Self::VarTuple { item } => Self::VarTuple { item: item.clone() },
             Self::FrozenSet { item } => Self::FrozenSet { item: item.clone() },
             Self::Set { item } => Self::Set { item: item.clone() },
+            Self::List { item } => Self::List { item: item.clone() },
             Self::Dict { items } => Self::Dict {
                 items: items.clone(),
             },

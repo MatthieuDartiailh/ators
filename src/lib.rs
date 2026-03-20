@@ -70,7 +70,7 @@ mod _ators {
 
     // Exported only to enable pickling
     #[pymodule_export]
-    use self::containers::{AtorsDict, AtorsSet};
+    use self::containers::{AtorsDict, AtorsList, AtorsSet};
 
     #[pyfunction]
     pub(crate) fn add_generic_type_attributes<'py>(

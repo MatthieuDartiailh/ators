@@ -10,7 +10,7 @@ use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -270,6 +270,26 @@ pub fn build_validator_from_annotation<'py>(
             };
             Ok((
                 Validator::new(TypeValidator::Set { item: item_val }, None, None, None),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(py.get_type::<PyList>()) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(TypeValidator::List { item: item_val }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<PyDict>()) {
