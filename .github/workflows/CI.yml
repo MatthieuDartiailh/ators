@@ -112,3 +112,4 @@ jobs:
         with:
           files: coverage.lcov,coverage.xml
           name: ${{ matrix.os }}
+          token: ${{ secrets.CODECOV_TOKEN }}
