@@ -9,8 +9,9 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/ci.yml
-      - "atom/**"
+      - .github/workflows/CI.yml
+      - "python/**"
+      - "src/**"
       - "tests/**"
       - pyproject.toml
   workflow_dispatch:
