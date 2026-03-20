@@ -16,7 +16,7 @@ use pyo3::{
 create_behavior_callable_checker!(preg_callmo, PreGetattrBehavior, CallMemberObject, 2);
 
 /// Pre-getattr behavior definitions and related utilities.
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
 pub enum PreGetattrBehavior {
     #[pyo3(constructor = ())]
@@ -65,7 +65,7 @@ impl Clone for PreGetattrBehavior {
 
 create_behavior_callable_checker!(postg_callmov, PreGetattrBehavior, CallMemberObjectValue, 3);
 
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
 pub enum PostGetattrBehavior {
     #[pyo3(constructor = ())]

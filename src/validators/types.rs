@@ -11,7 +11,7 @@ use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
 use crate::utils::{Mutability, err_with_cause};
 use pyo3::Borrowed;
-use pyo3::sync::with_critical_section;
+use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::PyStringMethods;
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
@@ -140,7 +140,7 @@ impl<'py> IntoPyObject<'py> for &TypesTuple {
 }
 
 /// Validator struct used to resolve forward references in TypeValidator::ForwardValidator
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
 
 pub struct LateResolvedValidator {
@@ -268,7 +268,7 @@ impl Clone for LateResolvedValidator {
 }
 
 /// Type validation struct managing type validation
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
 pub enum TypeValidator {
     #[pyo3(constructor = ())]

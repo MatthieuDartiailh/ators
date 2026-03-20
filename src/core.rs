@@ -8,7 +8,7 @@
 /// Core Ators object and related utilities.
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
-    sync::with_critical_section,
+    sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
 
@@ -31,7 +31,7 @@ pub struct AtorsBase {
     slots: Box<[Option<Py<PyAny>>]>,
 }
 
-#[pyclass(module = "ators._ators", frozen)]
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug, Clone)]
 pub enum ClassMutability {
     #[pyo3(constructor = ())]

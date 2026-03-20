@@ -359,7 +359,7 @@ impl Member {
     // __clear__
 }
 
-#[pyclass(module = "ators._ators", name = "member")]
+#[pyclass(module = "ators._ators", name = "member", from_py_object)]
 #[derive(Debug, Default)]
 /// Builder class for Member that allows for ergonomic specification of member
 /// behavior in the class definition body.
