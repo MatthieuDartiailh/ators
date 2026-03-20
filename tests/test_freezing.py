@@ -7,8 +7,9 @@
 # --------------------------------------------------------------------------------------
 """Test freezing ators object"""
 
-import pytest
 from dataclasses import dataclass
+
+import pytest
 
 from ators import Ators, freeze, is_frozen, member
 
@@ -88,7 +89,7 @@ def test_freezing_with_forward_ref_to_mutable():
     assert a.a is b
     assert a.a.b == 42
 
-    with pytest.raises(TypeError, match=".*Cannot freeze.*"):
+    with pytest.raises(TypeError, match=r".*Cannot freeze.*"):
         freeze(a)
 
 
@@ -99,7 +100,7 @@ def test_frozen_inheritance():
     class B(A, frozen=True):
         b: int
 
-    with pytest.raises(TypeError, match=".*not frozen but inherit.*"):
+    with pytest.raises(TypeError, match=r".*not frozen but inherit.*"):
 
         class C(A):  # noqua
             c: int

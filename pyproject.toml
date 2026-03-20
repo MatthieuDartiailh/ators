@@ -7,12 +7,12 @@
   classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
   ]
   dynamic = ["version"]
 
 [dependency-groups]
-  test = ["pytest-cov", "pytest", "pytest-benchmark"]
+  test = ["pytest", "pytest-cov"]
+  bench = ["pytest", "pytest-benchmark"]
   docs = [
     "pydata-sphinx-theme",
     "sphinx-autoapi",
@@ -20,6 +20,8 @@
   ]
   lint = ["mypy", "ruff"]
   dev = [
+    # Added to allow direct installation of the package in editable mode
+    "maturin",
     { include-group = "docs" },
     { include-group = "lint" },
     { include-group = "test" },
@@ -33,3 +35,46 @@
   module-name   = "ators._ators"
   python-source = "python"
   features      = ["pyo3/extension-module"]
+
+[tool.ruff]
+  src         = ["python"]
+  line-length = 88
+
+  [tool.ruff.lint]
+    select        = ["C", "E", "F", "W", "I", "C90", "RUF"]
+    extend-ignore = ["E501", "RUF012"]
+
+    [tool.ruff.lint.isort]
+      combine-as-imports = true
+      known-first-party  = ["ators"]
+
+    [tool.ruff.lint.mccabe]
+      max-complexity = 20
+
+[tool.pytest.ini_options]
+  minversion = "6.0"
+
+[tool.coverage]
+  [tool.coverage.run]
+    branch = true
+    source = ["ators"]
+
+  [tool.coverage.report]
+    # Regexes for lines to exclude from consideration
+    exclude_lines = [
+      # Have to re-enable the standard pragma
+      "pragma: no cover",
+
+      # Don't complain if tests don't hit defensive assertion code:
+      "raise NotImplementedError",
+      "pass",
+
+      # Don't complain about abstract methods, they aren't run:
+      "@(abc\\.)?abstractmethod",
+
+      # Don't complain about type checking
+      "if TYPE_CHECKING:",
+
+      # Don't complain about ellipsis in overload
+      "\\.\\.\\.",
+    ]

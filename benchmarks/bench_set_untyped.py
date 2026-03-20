@@ -19,7 +19,6 @@ import importlib.util
 
 import pytest
 
-
 ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
 
 

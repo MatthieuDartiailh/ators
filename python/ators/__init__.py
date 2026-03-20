@@ -9,21 +9,20 @@
 
 from ._ators import (
     AtorsBase as _Base,
-    add_generic_type_attributes,
-    init_ators as _init_ators,
-    freeze,
-    is_frozen,
-    member,
     Member,
-    register_type_mutability_info,
+    add_generic_type_attributes,
+    freeze,
     get_member,
+    get_member_customization_tool,
     get_members,
     get_members_by_tag,
     get_members_by_tag_and_value,
-    get_member_customization_tool,
+    init_ators as _init_ators,
+    is_frozen,
+    member,
+    register_type_mutability_info,
 )
 from ._meta import AtorsMeta as _Meta
-
 
 # Register generic type attributes for numpy ndarray if numpy is available
 try:
@@ -82,15 +81,15 @@ class Ators(_Base, metaclass=_Meta):
 
 __all__ = [
     "Ators",
+    "Member",
     "add_generic_type_attributes",
     "freeze",
-    "is_frozen",
-    "member",
-    "Member",
     "get_member",
+    "get_member_customization_tool",
     "get_members",
     "get_members_by_tag",
     "get_members_by_tag_and_value",
-    "get_member_customization_tool",
+    "is_frozen",
+    "member",
     "register_type_mutability_info",
 ]

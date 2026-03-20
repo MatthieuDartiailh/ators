@@ -7,7 +7,6 @@
 # --------------------------------------------------------------------------------------
 """"""
 
-from ators._ators import TypeValidator, ValueValidator, Coercer
+from ators._ators import Coercer, TypeValidator, ValueValidator
 
-
-__all__ = ["TypeValidator", "ValueValidator", "Coercer"]
+__all__ = ["Coercer", "TypeValidator", "ValueValidator"]

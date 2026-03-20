@@ -8,11 +8,11 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from typing import Any, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
-from ators import Ators, member, add_generic_type_attributes
+from ators import Ators, add_generic_type_attributes, member
 
 if TYPE_CHECKING:
     from logging import Logger

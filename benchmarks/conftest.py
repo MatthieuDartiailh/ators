@@ -7,26 +7,28 @@
 # --------------------------------------------------------------------------------------
 """Shared fixtures and base classes for benchmarks."""
 
+from typing import Any, Literal, Optional
+
 import pytest
-from typing import Optional, Literal, Any
-from ators import Ators, member, freeze
+
+from ators import Ators, freeze, member
 from ators.behaviors import ValueValidator
 
 try:
     from atom.api import (
         Atom,
-        Int,
-        Float,
-        Str,
         Bool,
-        Set,
-        Dict,
-        Value,
         Bytes,
-        Tuple,
-        FixedTuple,
+        Dict,
         Enum,
+        FixedTuple,
+        Float,
+        Int,
+        Set,
+        Str,
+        Tuple,
         Typed,
+        Value,
     )
 
     ATOM_AVAILABLE = True

@@ -11,14 +11,14 @@ import pytest
 
 from ators import (
     Ators,
-    member,
     get_member,
+    get_member_customization_tool,
     get_members,
     get_members_by_tag,
     get_members_by_tag_and_value,
-    get_member_customization_tool,
+    member,
 )
-from ators.behaviors import PreSetAttr, DelAttr
+from ators.behaviors import DelAttr, PreSetAttr
 
 
 def test_member_slot_do_not_overlap():
@@ -75,7 +75,7 @@ def test_member_access_fucntions():
 
     for obj in (A, A()):
         assert get_member(obj, "d").name == "d"
-        assert list(sorted(get_members(obj))) == ["a", "b", "c", "d"]
+        assert sorted(get_members(obj)) == ["a", "b", "c", "d"]
         for k, (m, v) in get_members_by_tag(obj, "t").items():
             assert m.name == k
             assert v == {"a": 1, "b": 2}[k]
