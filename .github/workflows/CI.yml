@@ -93,6 +93,20 @@ jobs:
           uv run -- maturin develop --uv
           uv run -- pytest tests --cov --cov-report xml
           cargo llvm-cov report --lcov --output-path coverage.lcov
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+      - name: Run coverage
+        run: |
+          cargo llvm-cov show-env --cmd > env.bat
+          call env.bat
+          env
+          export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+          export CARGO_INCREMENTAL=1
+          cargo llvm-cov clean --workspace
+          uv run -- maturin develop --uv
+          uv run -- pytest tests --cov --cov-report xml
+          cargo llvm-cov report --lcov --output-path coverage.lcov
+        shell: cmd
+        if: startsWith(matrix.os, 'windows')
       - uses: codecov/codecov-action@v5
         with:
           files: coverage.lcov,coverage.xml
