@@ -125,13 +125,11 @@ impl AtorsList {
             .map(|_| ())
     }
 
-    pub fn extend<'py>(
-        self_: &Bound<'py, AtorsList>,
-        other: Bound<'py, PyAny>,
-    ) -> PyResult<()> {
+    pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: Bound<'py, PyAny>) -> PyResult<()> {
         let py = other.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.borrow().validate_iterable(py, other))?;
+        let valid = with_critical_section(self_.as_any(), || {
+            self_.borrow().validate_iterable(py, other)
+        })?;
         self_
             .py_super()?
             .call_method1(intern!(py, "extend"), (valid,))

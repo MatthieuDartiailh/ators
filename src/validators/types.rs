@@ -737,8 +737,7 @@ impl TypeValidator {
                 // FIXME add a fast path for AtorsList with matching object and member
                 if let Ok(list) = value.cast::<pyo3::types::PyList>() {
                     let py = value.py();
-                    let mut validated_items: Vec<Bound<'_, PyAny>> =
-                        Vec::with_capacity(list.len());
+                    let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(list.len());
                     for (index, titem) in list.iter().enumerate() {
                         match item.validate(name, object, &titem) {
                             Ok(v) => validated_items.push(v),
