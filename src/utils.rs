@@ -265,7 +265,8 @@ impl TypeMutabilityMap {
             // For Ators objects, check if frozen
             let ators_obj = obj.cast::<AtorsBase>()?;
             with_critical_section(ators_obj.as_any(), || {
-                if ators_obj.borrow().is_frozen() {
+                // Safety: we hold the critical section lock on this object.
+                if ators_obj.get().is_frozen() {
                     Ok(Mutability::Immutable)
                 } else {
                     Ok(Mutability::Mutable)
