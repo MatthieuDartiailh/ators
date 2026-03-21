@@ -10,7 +10,6 @@
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
-    sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
@@ -262,16 +261,13 @@ impl TypeMutabilityMap {
         let ators_base_type = py.get_type::<AtorsBase>();
 
         if obj_type.is_subclass(&ators_base_type)? {
-            // For Ators objects, check if frozen
+            // For Ators objects, check if frozen via the is_frozen pyfunction
             let ators_obj = obj.cast::<AtorsBase>()?;
-            with_critical_section(ators_obj.as_any(), || {
-                // Safety: we hold the critical section lock on this object.
-                if ators_obj.get().is_frozen() {
-                    Ok(Mutability::Immutable)
-                } else {
-                    Ok(Mutability::Mutable)
-                }
-            })
+            if crate::core::is_frozen(ators_obj) {
+                Ok(Mutability::Immutable)
+            } else {
+                Ok(Mutability::Mutable)
+            }
         } else {
             // For other objects, first check type mutability and then inspect object
             // if undecidable

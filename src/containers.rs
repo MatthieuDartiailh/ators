@@ -27,7 +27,9 @@ pub struct AtorsList {
 }
 
 // Safety: validator and member_name are immutable after construction; object is only
-// modified during __clear__ which is called by Python's GC with the GIL held.
+// modified during __clear__, which Python's GC calls only once all references to this
+// object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
 unsafe impl Sync for AtorsList {}
 
 impl AtorsList {
@@ -59,8 +61,10 @@ impl AtorsList {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
-        // Safety: object is only modified during GC __clear__ (GIL held); here we also
-        // hold the GIL, so no concurrent modification is possible.
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         self.validator.validate(m, o, value)
     }
@@ -163,7 +167,8 @@ impl AtorsList {
     // The traverse method of the parent class (PyList) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        // Safety: __traverse__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
@@ -173,7 +178,8 @@ impl AtorsList {
     // The clear method of the parent class (PyList) is called automatically and
     // so we only need to visit our own references.
     pub fn __clear__(&self) {
-        // Safety: __clear__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
     }
 }
@@ -188,7 +194,9 @@ pub struct AtorsSet {
 }
 
 // Safety: validator and member_name are immutable after construction; object is only
-// modified during __clear__ which is called by Python's GC with the GIL held.
+// modified during __clear__, which Python's GC calls only once all references to this
+// object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
 unsafe impl Sync for AtorsSet {}
 
 impl AtorsSet {
@@ -226,8 +234,10 @@ impl AtorsSet {
         }
         let mut validated_items = Vec::with_capacity(value.len()?);
         let m = self.member_name.as_deref();
-        // Safety: object is only modified during GC __clear__ (GIL held); here we also
-        // hold the GIL, so no concurrent modification is possible.
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, &item?)?;
@@ -245,8 +255,10 @@ impl AtorsSet {
 impl AtorsSet {
     pub fn add<'py>(self_: PyRef<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        // Safety: object is only modified during GC __clear__ (GIL held); here we also
-        // hold the GIL, so no concurrent modification is possible.
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
         let valid = self_.validator.validate(
             self_.member_name.as_deref(),
             unsafe { &*self_.object.get() }.as_ref().map(|o| o.bind(py)),
@@ -294,7 +306,8 @@ impl AtorsSet {
     // The traverse method of the parent class (PySet) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        // Safety: __traverse__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
@@ -304,7 +317,8 @@ impl AtorsSet {
     // The clear method of the parent class (PySet) is called automatically and
     // so we only need to visit our own references.
     pub fn __clear__(&self) {
-        // Safety: __clear__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
     }
 }
@@ -319,7 +333,9 @@ pub struct AtorsDict {
 }
 
 // Safety: key_validator, value_validator, and member_name are immutable after construction;
-// object is only modified during __clear__ which is called by Python's GC with the GIL held.
+// object is only modified during __clear__, which Python's GC calls only once all references
+// to this object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
 unsafe impl Sync for AtorsDict {}
 
 impl AtorsDict {
@@ -354,8 +370,10 @@ impl AtorsDict {
         key: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
-        // Safety: object is only modified during GC __clear__ (GIL held); here we also
-        // hold the GIL, so no concurrent modification is possible.
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         self.key_validator.validate(m, o, &key)
     }
@@ -507,7 +525,8 @@ impl AtorsDict {
     // The traverse method of the parent class (PyDict) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        // Safety: __traverse__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
@@ -517,7 +536,8 @@ impl AtorsDict {
     // The clear method of the parent class (PyDict) is called automatically and
     // so we only need to clear our own references.
     pub fn __clear__(&self) {
-        // Safety: __clear__ is called by Python's GC with the GIL held.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
     }
 

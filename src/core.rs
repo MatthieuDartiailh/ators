@@ -36,7 +36,8 @@ pub struct AtorsBase {
 
 // Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
 // sections, which guarantee mutual exclusion. GC methods (__traverse__, __clear__) are
-// called with the GIL held, also ensuring exclusive access.
+// called with Python GC guarantees that ensure exclusive access regardless of whether
+// the GIL is enabled (holds for both GIL and free-threaded builds).
 unsafe impl Sync for AtorsBase {}
 
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
@@ -79,8 +80,8 @@ impl AtorsBase {
     }
 
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        // Safety: __traverse__ is called by Python's GC with the GIL held, providing
-        // exclusive access to this object's state.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
         let inner = unsafe { &*self.inner.get() };
         for slot in inner.slots.iter().flatten() {
             visit.call(slot)?;
@@ -89,22 +90,12 @@ impl AtorsBase {
     }
 
     pub fn __clear__(&self) {
-        // Safety: __clear__ is called by Python's GC with the GIL held, providing
-        // exclusive access to this object's state.
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
         let inner = unsafe { &mut *self.inner.get() };
         for o in inner.slots.iter_mut() {
-            o.take();
+            *o = None;
         }
-    }
-}
-
-impl AtorsBase {
-    /// Check if a Ators instance is frozen.
-    /// Safety: must only be called within a Python critical section protecting this object.
-    #[inline]
-    pub(crate) fn is_frozen(&self) -> bool {
-        // Safety: caller must hold a critical section on this object.
-        unsafe { (*self.inner.get()).frozen }
     }
 }
 
@@ -131,13 +122,15 @@ pub(crate) fn get_slot<'py>(
 pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();
     with_critical_section(object.as_any(), || {
-        // Safety: we hold the critical section lock on this object.
-        let inner = unsafe { &mut *object.get().inner.get() };
-        inner.slots[index as usize].replace(
-            value
-                .into_py_any(py)
-                .expect("Unfaillible conversion to Py<PyAny>"),
-        );
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe {
+            (*object.get().inner.get()).slots[index as usize].replace(
+                value
+                    .into_py_any(py)
+                    .expect("Unfaillible conversion to Py<PyAny>"),
+            );
+        }
     })
 }
 
@@ -145,9 +138,11 @@ pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &B
 /// Del the slot value at index
 pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
     with_critical_section(object.as_any(), || {
-        // Safety: we hold the critical section lock on this object.
-        let inner = unsafe { &mut *object.get().inner.get() };
-        inner.slots[index as usize] = None;
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe {
+            (*object.get().inner.get()).slots[index as usize] = None;
+        }
     })
 }
 
@@ -175,6 +170,15 @@ pub fn init_ators<'py>(self_: &Bound<'py, AtorsBase>, kwargs: &Bound<'py, PyDict
     Ok(())
 }
 
+/// Private helper: set the frozen bit on an AtorsBase object inside a critical section.
+fn do_freeze(obj: &Bound<'_, AtorsBase>) {
+    with_critical_section(obj.as_any(), || {
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe { (*obj.get().inner.get()).frozen = true };
+    });
+}
+
 #[pyfunction]
 pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
@@ -187,10 +191,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
             match mutability_enum {
                 ClassMutability::Immutable {} => {
                     // All members are immutable, allow freezing
-                    with_critical_section(obj.as_any(), || {
-                        // Safety: we hold the critical section lock on this object.
-                        unsafe { (*obj.get().inner.get()).frozen = true };
-                    });
+                    do_freeze(obj);
                     Ok(())
                 }
                 ClassMutability::Mutable {} => {
@@ -228,10 +229,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
                     }
 
                     // All inspected attributes are immutable, allow freezing
-                    with_critical_section(obj.as_any(), || {
-                        // Safety: we hold the critical section lock on this object.
-                        unsafe { (*obj.get().inner.get()).frozen = true };
-                    });
+                    do_freeze(obj);
                     Ok(())
                 }
             }
