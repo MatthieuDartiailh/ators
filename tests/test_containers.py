@@ -14,6 +14,47 @@ import pytest
 
 
 @pytest.fixture()
+def ators_list_object():
+    from ators import Ators
+
+    class A(Ators):
+        a: list[int]
+
+    return A(a=[1, 2, 3])
+
+
+@pytest.mark.parametrize(
+    "operation, args, expected, exception",
+    [
+        ("append", (4,), [1, 2, 3, 4], None),
+        ("append", ("e",), [1, 2, 3], TypeError),
+        ("insert", (0, 0), [0, 1, 2, 3], None),
+        ("insert", (0, "e"), [1, 2, 3], TypeError),
+        ("__setitem__", (0, 10), [10, 2, 3], None),
+        ("__setitem__", (0, "e"), [1, 2, 3], TypeError),
+        ("__setitem__", (slice(0, 2), [10, 20]), [10, 20, 3], None),
+        ("__setitem__", (slice(0, 2), [10, "e"]), [1, 2, 3], TypeError),
+        ("extend", ([4, 5],), [1, 2, 3, 4, 5], None),
+        ("extend", ([4, "5"],), [1, 2, 3], TypeError),
+        ("__iadd__", ([4, 5],), [1, 2, 3, 4, 5], None),
+        ("__iadd__", ([4, "5"],), [1, 2, 3], TypeError),
+        # Operations that don't add items don't need validation
+        ("pop", (), [1, 2], None),
+        ("remove", (1,), [2, 3], None),
+        ("__delitem__", (0,), [2, 3], None),
+        ("reverse", (), [3, 2, 1], None),
+        ("sort", (), [1, 2, 3], None),
+    ],
+)
+def test_list_container_validation(
+    ators_list_object, operation, args, expected, exception
+):
+    with pytest.raises(exception) if exception else nullcontext():
+        getattr(ators_list_object.a, operation)(*args)
+    assert list(ators_list_object.a) == expected
+
+
+@pytest.fixture()
 def ators_set_object():
     from ators import Ators
 

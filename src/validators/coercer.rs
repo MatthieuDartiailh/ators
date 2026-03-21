@@ -10,8 +10,8 @@ use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySequenceMethods, PySet,
-        PyString, PyTuple,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySequenceMethods,
+        PySet, PyString, PyTuple,
     },
 };
 
@@ -127,6 +127,26 @@ impl Coercer {
                     // FIXME create the right container upfront so that we can use
                     // a fast validation path
                     PySet::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::List { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    // FIXME create the right container upfront so that we can use
+                    // a fast validation path
+                    PyList::new(
                         py,
                         temp
                         .try_iter()?

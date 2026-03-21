@@ -9,13 +9,163 @@
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyRefMut, PyResult, Python, ffi, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PySet, PySetMethods},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
+    },
 };
 
 use crate::{core::AtorsBase, validators::Validator};
 
-// #[pyclass(extends=PyList)]  Possible in PyO3 0.27.2
-// struct AtorsList;
+// XXX not pickable ...
+#[pyclass(module = "ators._ators", extends=PyList)]
+pub struct AtorsList {
+    validator: Validator,
+    member_name: Option<String>,
+    object: Option<Py<AtorsBase>>, // WeakRef?
+}
+
+impl AtorsList {
+    pub(crate) fn new<'py>(
+        py: Python<'py>,
+        validator: Validator,
+        member_name: Option<&str>,
+        object: Option<Py<AtorsBase>>,
+        values: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, AtorsList>> {
+        let n = Bound::new(
+            py,
+            AtorsList {
+                validator,
+                member_name: member_name.map(|m| m.to_string()),
+                object,
+            },
+        )?
+        .cast_into::<PyList>()?;
+        for v in values.into_iter() {
+            n.append(v)?;
+        }
+        Ok(n.cast_into::<AtorsList>()?)
+    }
+
+    fn validate_item<'py>(
+        &self,
+        py: Python<'py>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let m = self.member_name.as_deref();
+        let o = self.object.as_ref().map(|o| o.bind(py));
+        self.validator.validate(m, o, value)
+    }
+
+    fn validate_iterable<'py>(
+        &self,
+        py: Python<'py>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let m = self.member_name.as_deref();
+        let o = self.object.as_ref().map(|o| o.bind(py));
+        let mut validated_items = Vec::new();
+        for item in value.try_iter()? {
+            let valid = self.validator.validate(m, o, &item?)?;
+            validated_items.push(valid);
+        }
+        PyList::new(py, validated_items)
+    }
+}
+
+// __delitem__, remove, pop, clear, sort, reverse and __imul__ do not need
+// item validation since they only remove or rearrange existing items.
+// append, insert, __setitem__, extend and __iadd__ need item validation
+// since they can add new items.
+#[pymethods]
+impl AtorsList {
+    pub fn append<'py>(self_: PyRefMut<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
+        let py = value.py();
+        let valid = self_.validate_item(py, value)?;
+        // Use direct PyList C API to avoid converting into bound to cast to PyList
+        crate::utils::error_on_minusone(py, unsafe {
+            ffi::PyList_Append(self_.as_ptr(), valid.as_ptr())
+        })
+    }
+
+    pub fn insert<'py>(
+        self_: PyRefMut<'py, AtorsList>,
+        index: isize,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let py = value.py();
+        let valid = self_.validate_item(py, value)?;
+        // Use direct PyList C API to avoid converting into bound to cast to PyList
+        crate::utils::error_on_minusone(py, unsafe {
+            ffi::PyList_Insert(self_.as_ptr(), index, valid.as_ptr())
+        })
+    }
+
+    pub fn __setitem__<'py>(
+        self_: &Bound<'py, AtorsList>,
+        index: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let py = index.py();
+        let valid = if index.is_instance_of::<PySlice>() {
+            // For slice assignment, value is an iterable of items to validate
+            with_critical_section(self_.as_any(), || {
+                self_.borrow().validate_iterable(py, value)
+            })?
+            .into_any()
+        } else {
+            // For single-index assignment, validate the single value
+            with_critical_section(self_.as_any(), || self_.borrow().validate_item(py, value))?
+        };
+        // Use py_super() to call the parent list's __setitem__ to avoid re-dispatching
+        // through our own override (which would cause infinite recursion with PyObject_SetItem)
+        self_
+            .py_super()?
+            .call_method1(intern!(py, "__setitem__"), (index, valid))
+            .map(|_| ())
+    }
+
+    pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
+        let py = other.py();
+        let valid = with_critical_section(self_.as_any(), || {
+            self_.borrow().validate_iterable(py, other)
+        })?;
+        self_
+            .py_super()?
+            .call_method1(intern!(py, "extend"), (valid,))
+            .map(|_| ())
+    }
+
+    pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
+        AtorsList::extend(self_, value)
+    }
+
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, AtorsList>,
+        index: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let py = index.py();
+        self_
+            .py_super()?
+            .call_method1(intern!(py, "__delitem__"), (index,))
+            .map(|_| ())
+    }
+
+    // The traverse method of the parent class (PyList) is called automatically and
+    // the type is also traversed so we only need to visit our own references.
+    pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
+        if let Some(o) = &self.object {
+            visit.call(o)?;
+        }
+        Ok(())
+    }
+
+    // The clear method of the parent class (PyList) is called automatically and
+    // so we only need to visit our own references.
+    pub fn __clear__(&mut self) {
+        self.object = None;
+    }
+}
 
 // XXX not pickable ...
 #[pyclass(module = "ators._ators", extends=PySet)]

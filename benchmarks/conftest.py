@@ -99,6 +99,7 @@ class AtorsValidatedClass(Ators):
     # Container validators (typed)
     set_field: set[int] = member()
     dict_field: dict[str, int] = member()
+    list_field: list[int] = member()
     tuple_field: tuple[int, ...] = member()
     fixed_tuple_field: tuple[int, int, str] = member()
     frozen_set_field: frozenset[int] = member()
@@ -249,6 +250,7 @@ def ators_typed():
         bytes_field=b"",
         set_field=set(),
         dict_field={},
+        list_field=[],
         tuple_field=(),
         fixed_tuple_field=(0, 0, ""),
         frozen_set_field=frozenset(),
@@ -311,6 +313,7 @@ class PropertyValidatedClass:
         self._complex_field = 0j
         self._bytes_field = b""
         self._set_field = set()
+        self._list_field = []
         self._dict_field = {}
         self._tuple_field = ()
         self._fixed_tuple_field = (0, 0, "")
@@ -391,6 +394,18 @@ class PropertyValidatedClass:
         if not all(isinstance(item, int) for item in value):
             raise TypeError("All set items must be int")
         self._set_field = value
+
+    @property
+    def list_field(self):
+        return self._list_field
+
+    @list_field.setter
+    def list_field(self, value):
+        if not isinstance(value, list):
+            raise TypeError(f"Expected list, got {type(value)}")
+        if not all(isinstance(item, int) for item in value):
+            raise TypeError("All list items must be int")
+        self._list_field = value
 
     @property
     def dict_field(self):
