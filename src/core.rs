@@ -102,18 +102,14 @@ impl AtorsBase {
 #[inline]
 /// Get a clone (ref) of the value stored in the slot at index if any
 /// A critical section is always used to guarantee safe concurrent access.
-pub(crate) fn get_slot<'py>(
-    object: &Bound<'py, AtorsBase>,
+pub(crate) fn get_slot<'a, 'py>(
+    object: &'a Bound<'py, AtorsBase>,
     index: u8,
-    py: Python<'py>,
-) -> (Option<Py<PyAny>>, bool) {
+) -> (Option<&'a Py<PyAny>>, bool) {
     with_critical_section(object.as_any(), || {
         // Safety: we hold the critical section lock on this object.
         let inner = unsafe { &*object.get().inner.get() };
-        (
-            inner.slots[index as usize].as_ref().map(|v| v.clone_ref(py)),
-            inner.frozen,
-        )
+        (inner.slots[index as usize].as_ref(), inner.frozen)
     })
 }
 
@@ -210,7 +206,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
                             .cast_into::<Member>()?;
 
                         // Get the slot index and retrieve the value
-                        if let (Some(slot_value), _) = get_slot(obj, member_obj.get().index(), py) {
+                        if let (Some(slot_value), _) = get_slot(obj, member_obj.get().index()) {
                             let attr_bound = slot_value.bind(py);
                             let attr_mutability =
                                 with_critical_section(ty_mutability_map.as_any(), || {
