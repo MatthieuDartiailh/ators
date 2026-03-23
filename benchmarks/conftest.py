@@ -24,6 +24,7 @@ try:
         FixedTuple,
         Float,
         Int,
+        List,
         Set,
         Str,
         Tuple,
@@ -163,6 +164,7 @@ if ATOM_AVAILABLE:
         bytes_field = Bytes()
 
         # Container validators (typed)
+        list_field = List(Int())
         set_field = Set(Int())
         dict_field = Dict(Str(), Int())
         tuple_field = Tuple(Int())
