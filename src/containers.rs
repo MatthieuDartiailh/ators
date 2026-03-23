@@ -122,10 +122,8 @@ impl AtorsList {
         let py = index.py();
         let valid = if index.is_instance_of::<PySlice>() {
             // For slice assignment, value is an iterable of items to validate
-            with_critical_section(self_.as_any(), || {
-                self_.get().validate_iterable(py, value)
-            })?
-            .into_any()
+            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, value))?
+                .into_any()
         } else {
             // For single-index assignment, validate the single value
             with_critical_section(self_.as_any(), || self_.get().validate_item(py, value))?
@@ -140,9 +138,8 @@ impl AtorsList {
 
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = other.py();
-        let valid = with_critical_section(self_.as_any(), || {
-            self_.get().validate_iterable(py, other)
-        })?;
+        let valid =
+            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, other))?;
         self_
             .py_super()?
             .call_method1(intern!(py, "extend"), (valid,))
@@ -272,8 +269,7 @@ impl AtorsSet {
 
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
+        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
 
         self_
             .py_super()?
@@ -287,8 +283,7 @@ impl AtorsSet {
 
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
+        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
 
         self_
             .py_super()?
