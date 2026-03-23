@@ -196,7 +196,7 @@ impl Member {
         };
 
         // Get the value from the slot and build a default value if needed
-        let (slot_value, _) = get_slot(object, self_.slot_index, py);
+        let (slot_value, _) = get_slot(object, self_.slot_index);
         let value = match slot_value {
             Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
             None => {
@@ -270,7 +270,7 @@ impl Member {
     ) -> PyResult<()> {
         let py = self_.py();
         let object = object.cast::<crate::core::AtorsBase>()?;
-        let (current, frozen) = get_slot(object, self_.slot_index, py);
+        let (current, frozen) = get_slot(object, self_.slot_index);
 
         // Check the frozen bit of the object
         if frozen {

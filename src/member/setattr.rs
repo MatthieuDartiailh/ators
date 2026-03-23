@@ -37,7 +37,7 @@ impl PreSetattrBehavior {
         &self,
         member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        current: &Option<Py<PyAny>>,
+        current: &Option<&Py<PyAny>>,
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
@@ -63,7 +63,7 @@ impl PreSetattrBehavior {
                     .call1((
                         &member.name,
                         object,
-                        current.as_ref().unwrap_or(&py.None()).bind(py),
+                        current.map_or(&py.None(), |v| v).bind(py),
                     ))
                     .map(|_| ())
             }
@@ -110,7 +110,7 @@ impl PostSetattrBehavior {
         &self,
         member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        old: &Option<Py<PyAny>>,
+        old: &Option<&Py<PyAny>>,
         new: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {

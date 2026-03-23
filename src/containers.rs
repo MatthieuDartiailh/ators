@@ -7,22 +7,30 @@
 |----------------------------------------------------------------------------*/
 /// Container types with validation and related utilities.
 use pyo3::{
-    Bound, Py, PyAny, PyErr, PyRefMut, PyResult, Python, ffi, intern, pyclass, pymethods,
+    Bound, Py, PyAny, PyErr, PyRef, PyResult, Python, ffi, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
     },
 };
+use std::cell::UnsafeCell;
 
 use crate::{core::AtorsBase, validators::Validator};
 
 // XXX not pickable ...
-#[pyclass(module = "ators._ators", extends=PyList)]
+#[pyclass(module = "ators._ators", extends=PyList, frozen)]
 pub struct AtorsList {
     validator: Validator,
     member_name: Option<String>,
-    object: Option<Py<AtorsBase>>, // WeakRef?
+    // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
+    object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
+
+// Safety: validator and member_name are immutable after construction; object is only
+// modified during __clear__, which Python's GC calls only once all references to this
+// object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
+unsafe impl Sync for AtorsList {}
 
 impl AtorsList {
     pub(crate) fn new<'py>(
@@ -37,7 +45,7 @@ impl AtorsList {
             AtorsList {
                 validator,
                 member_name: member_name.map(|m| m.to_string()),
-                object,
+                object: UnsafeCell::new(object),
             },
         )?
         .cast_into::<PyList>()?;
@@ -53,7 +61,11 @@ impl AtorsList {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         self.validator.validate(m, o, value)
     }
 
@@ -63,7 +75,8 @@ impl AtorsList {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyList>> {
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: same as validate_item.
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         let mut validated_items = Vec::new();
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, &item?)?;
@@ -79,7 +92,7 @@ impl AtorsList {
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
-    pub fn append<'py>(self_: PyRefMut<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn append<'py>(self_: PyRef<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.validate_item(py, value)?;
         // Use direct PyList C API to avoid converting into bound to cast to PyList
@@ -89,7 +102,7 @@ impl AtorsList {
     }
 
     pub fn insert<'py>(
-        self_: PyRefMut<'py, AtorsList>,
+        self_: PyRef<'py, AtorsList>,
         index: isize,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
@@ -109,13 +122,11 @@ impl AtorsList {
         let py = index.py();
         let valid = if index.is_instance_of::<PySlice>() {
             // For slice assignment, value is an iterable of items to validate
-            with_critical_section(self_.as_any(), || {
-                self_.borrow().validate_iterable(py, value)
-            })?
-            .into_any()
+            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, value))?
+                .into_any()
         } else {
             // For single-index assignment, validate the single value
-            with_critical_section(self_.as_any(), || self_.borrow().validate_item(py, value))?
+            with_critical_section(self_.as_any(), || self_.get().validate_item(py, value))?
         };
         // Use py_super() to call the parent list's __setitem__ to avoid re-dispatching
         // through our own override (which would cause infinite recursion with PyObject_SetItem)
@@ -127,9 +138,8 @@ impl AtorsList {
 
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = other.py();
-        let valid = with_critical_section(self_.as_any(), || {
-            self_.borrow().validate_iterable(py, other)
-        })?;
+        let valid =
+            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, other))?;
         self_
             .py_super()?
             .call_method1(intern!(py, "extend"), (valid,))
@@ -154,7 +164,9 @@ impl AtorsList {
     // The traverse method of the parent class (PyList) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        if let Some(o) = &self.object {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
         Ok(())
@@ -162,18 +174,27 @@ impl AtorsList {
 
     // The clear method of the parent class (PyList) is called automatically and
     // so we only need to visit our own references.
-    pub fn __clear__(&mut self) {
-        self.object = None;
+    pub fn __clear__(&self) {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        unsafe { *self.object.get() = None };
     }
 }
 
 // XXX not pickable ...
-#[pyclass(module = "ators._ators", extends=PySet)]
+#[pyclass(module = "ators._ators", extends=PySet, frozen)]
 pub struct AtorsSet {
     validator: Validator,
     member_name: Option<String>,
-    object: Option<Py<AtorsBase>>, // WeakRef?
+    // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
+    object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
+
+// Safety: validator and member_name are immutable after construction; object is only
+// modified during __clear__, which Python's GC calls only once all references to this
+// object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
+unsafe impl Sync for AtorsSet {}
 
 impl AtorsSet {
     pub(crate) fn new<'py>(
@@ -188,7 +209,7 @@ impl AtorsSet {
             AtorsSet {
                 validator,
                 member_name: member_name.map(|m| m.to_string()),
-                object,
+                object: UnsafeCell::new(object),
             },
         )?
         .cast_into::<PySet>()?;
@@ -210,7 +231,11 @@ impl AtorsSet {
         }
         let mut validated_items = Vec::with_capacity(value.len()?);
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, &item?)?;
             validated_items.push(valid);
@@ -225,11 +250,15 @@ impl AtorsSet {
 // item validation since they can add items
 #[pymethods]
 impl AtorsSet {
-    pub fn add<'py>(self_: PyRefMut<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn add<'py>(self_: PyRef<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
         let valid = self_.validator.validate(
             self_.member_name.as_deref(),
-            self_.object.as_ref().map(|o| o.bind(py)),
+            unsafe { &*self_.object.get() }.as_ref().map(|o| o.bind(py)),
             &value,
         )?;
         // Use direct PySet C API to avoid converting into bound to cast to PySet
@@ -240,8 +269,7 @@ impl AtorsSet {
 
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.borrow().validate_set(py, value))?;
+        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
 
         self_
             .py_super()?
@@ -255,8 +283,7 @@ impl AtorsSet {
 
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.borrow().validate_set(py, value))?;
+        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
 
         self_
             .py_super()?
@@ -274,7 +301,9 @@ impl AtorsSet {
     // The traverse method of the parent class (PySet) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        if let Some(o) = &self.object {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
         Ok(())
@@ -282,18 +311,27 @@ impl AtorsSet {
 
     // The clear method of the parent class (PySet) is called automatically and
     // so we only need to visit our own references.
-    pub fn __clear__(&mut self) {
-        self.object = None;
+    pub fn __clear__(&self) {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        unsafe { *self.object.get() = None };
     }
 }
 
-#[pyclass(module = "ators._ators", extends=PyDict)]
+#[pyclass(module = "ators._ators", extends=PyDict, frozen)]
 pub struct AtorsDict {
     key_validator: Validator,
     value_validator: Validator,
     member_name: Option<String>,
-    object: Option<Py<AtorsBase>>,
+    // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
+    object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
+
+// Safety: key_validator, value_validator, and member_name are immutable after construction;
+// object is only modified during __clear__, which Python's GC calls only once all references
+// to this object have been dropped — ensuring no concurrent access (holds for both GIL and
+// free-threaded builds).
+unsafe impl Sync for AtorsDict {}
 
 impl AtorsDict {
     pub(crate) fn new<'py>(
@@ -310,7 +348,7 @@ impl AtorsDict {
                 key_validator,
                 value_validator,
                 member_name: member_name.map(|m| m.to_string()),
-                object,
+                object: UnsafeCell::new(object),
             },
         )?
         .cast_into::<PyDict>()?;
@@ -327,7 +365,11 @@ impl AtorsDict {
         key: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         self.key_validator.validate(m, o, &key)
     }
 
@@ -338,7 +380,8 @@ impl AtorsDict {
         value: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: same as validate_key.
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         self.value_validator.validate(m, o, &value)
     }
 
@@ -350,7 +393,8 @@ impl AtorsDict {
         value: Bound<'py, PyAny>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let m = self.member_name.as_deref();
-        let o = self.object.as_ref().map(|o| o.bind(py));
+        // Safety: same as validate_key.
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
         let valid_key = self.key_validator.validate(m, o, &key)?;
         let valid_value = self.value_validator.validate(m, o, &value)?;
         Ok((valid_key, valid_value))
@@ -372,7 +416,7 @@ fn dict_set_item<'py>(
 #[pymethods]
 impl AtorsDict {
     pub fn __setitem__<'py>(
-        self_: PyRefMut<'py, AtorsDict>,
+        self_: PyRef<'py, AtorsDict>,
         key: Bound<'py, PyAny>,
         value: Bound<'py, PyAny>,
     ) -> PyResult<()> {
@@ -384,7 +428,7 @@ impl AtorsDict {
 
     #[pyo3(signature = (other=None, **kwargs))]
     pub fn update<'py>(
-        self_: PyRefMut<'py, AtorsDict>,
+        self_: PyRef<'py, AtorsDict>,
         other: Option<&Bound<'py, PyAny>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
@@ -431,7 +475,7 @@ impl AtorsDict {
     }
 
     pub fn setdefault<'py>(
-        self_: PyRefMut<'py, AtorsDict>,
+        self_: PyRef<'py, AtorsDict>,
         key: Bound<'py, PyAny>,
         default: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -469,14 +513,16 @@ impl AtorsDict {
         Ok(valid_value)
     }
 
-    pub fn __ior__<'py>(self_: PyRefMut<'py, AtorsDict>, other: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn __ior__<'py>(self_: PyRef<'py, AtorsDict>, other: Bound<'py, PyAny>) -> PyResult<()> {
         AtorsDict::update(self_, Some(&other), None)
     }
 
     // The traverse method of the parent class (PyDict) is called automatically and
     // the type is also traversed so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        if let Some(o) = &self.object {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        if let Some(o) = unsafe { &*self.object.get() } {
             visit.call(o)?;
         }
         Ok(())
@@ -484,8 +530,10 @@ impl AtorsDict {
 
     // The clear method of the parent class (PyDict) is called automatically and
     // so we only need to clear our own references.
-    pub fn __clear__(&mut self) {
-        self.object = None;
+    pub fn __clear__(&self) {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        unsafe { *self.object.get() = None };
     }
 
     // XXX can simply implement __getstate__ and __setstate__ without dealing with items
