@@ -13,6 +13,7 @@
 [dependency-groups]
   test = ["pytest", "pytest-cov"]
   bench = ["pytest", "pytest-benchmark"]
+  ci-bench = ["pytest", "pytest-codspeed", "atom"]
   docs = [
     "pydata-sphinx-theme",
     "sphinx-autoapi",
