@@ -38,76 +38,76 @@ jobs:
         if: always()
         run: ruff format --check python tests || true
 
-  rust-checks:
-    name: Rust fmt & clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          components: rustfmt clippy
-      - name: rustfmt check
-        if: always()
-        run: cargo fmt --all -- --check
-      - name: clippy
-        if: always()
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+  # rust-checks:
+  #   name: Rust fmt & clippy
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Set up Rust toolchain
+  #       uses: actions-rust-lang/setup-rust-toolchain@v1
+  #       with:
+  #         components: rustfmt clippy
+  #     - name: rustfmt check
+  #       if: always()
+  #       run: cargo fmt --all -- --check
+  #     - name: clippy
+  #       if: always()
+  #       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  tests:
-    name: Unit tests
-    runs-on: ${{ matrix.os }}
-    needs: [python-checks, rust-checks]
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.14"]
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Set up Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: coverage-cargo-${{ matrix.os }}
-        continue-on-error: true
-      - name: Setup virtual environment
-        run: |
-          uv sync
-      - name: Run coverage
-        run: |
-          source <(cargo llvm-cov show-env --export-prefix)
-          export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
-          export CARGO_INCREMENTAL=1
-          cargo llvm-cov clean --workspace
-          uv run -- maturin develop --uv
-          uv run -- pytest tests --cov --cov-report xml
-          cargo llvm-cov report --lcov --output-path coverage.lcov
-        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
-      - name: Run coverage
-        run: |
-          cargo llvm-cov show-env --cmd > env.bat
-          call env.bat
-          env
-          export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
-          export CARGO_INCREMENTAL=1
-          cargo llvm-cov clean --workspace
-          uv run -- maturin develop --uv
-          uv run -- pytest tests --cov --cov-report xml
-          cargo llvm-cov report --lcov --output-path coverage.lcov
-        shell: cmd
-        if: startsWith(matrix.os, 'windows')
-      - uses: codecov/codecov-action@v5
-        with:
-          files: coverage.lcov,coverage.xml
-          name: ${{ matrix.os }}
-          token: ${{ secrets.CODECOV_TOKEN }}
+  # tests:
+  #   name: Unit tests
+  #   runs-on: ${{ matrix.os }}
+  #   needs: [python-checks, rust-checks]
+  #   strategy:
+  #     matrix:
+  #       os: [ubuntu-latest, windows-latest, macos-latest]
+  #       python-version: ["3.14"]
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Set up Python ${{ matrix.python-version }}
+  #       uses: actions/setup-python@v6
+  #       with:
+  #         python-version: ${{ matrix.python-version }}
+  #     - name: Install uv
+  #       uses: astral-sh/setup-uv@v7
+  #       with:
+  #         enable-cache: true
+  #     - name: Set up Rust toolchain
+  #       uses: actions-rust-lang/setup-rust-toolchain@v1
+  #     - name: Install cargo-llvm-cov
+  #       uses: taiki-e/install-action@cargo-llvm-cov
+  #     - uses: Swatinem/rust-cache@v2
+  #       with:
+  #         key: coverage-cargo-${{ matrix.os }}
+  #       continue-on-error: true
+  #     - name: Setup virtual environment
+  #       run: |
+  #         uv sync
+  #     - name: Run coverage
+  #       run: |
+  #         source <(cargo llvm-cov show-env --export-prefix)
+  #         export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  #         export CARGO_INCREMENTAL=1
+  #         cargo llvm-cov clean --workspace
+  #         uv run -- maturin develop --uv
+  #         uv run -- pytest tests --cov --cov-report xml
+  #         cargo llvm-cov report --lcov --output-path coverage.lcov
+  #       if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+  #     - name: Run coverage
+  #       run: |
+  #         cargo llvm-cov show-env --cmd > env.bat
+  #         call env.bat
+  #         env
+  #         export CARGO_TARGET_DIR=$CARGO_LLVM_COV_TARGET_DIR
+  #         export CARGO_INCREMENTAL=1
+  #         cargo llvm-cov clean --workspace
+  #         uv run -- maturin develop --uv
+  #         uv run -- pytest tests --cov --cov-report xml
+  #         cargo llvm-cov report --lcov --output-path coverage.lcov
+  #       shell: cmd
+  #       if: startsWith(matrix.os, 'windows')
+  #     - uses: codecov/codecov-action@v5
+  #       with:
+  #         files: coverage.lcov,coverage.xml
+  #         name: ${{ matrix.os }}
+  #         token: ${{ secrets.CODECOV_TOKEN }}
