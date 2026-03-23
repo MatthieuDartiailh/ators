@@ -169,172 +169,174 @@ pub fn member_coerce_init<'py>(
 #[pymethods]
 impl Member {
     pub fn __get__<'py>(
-        self_: PyRef<'py, Self>,
+        _self_: PyRef<'py, Self>,
         object: &Bound<'py, PyAny>,
         _obtype: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = object.py();
-        if object.is_none() {
-            return self_.into_bound_py_any(py);
-        }
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        Ok(py.None().into_bound(py))
+        // if object.is_none() {
+        //     return self_.into_bound_py_any(py);
+        // }
+        // let object = object.cast::<crate::core::AtorsBase>()?;
 
-        // Run pre getattr behavior
-        if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "pre-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        // // Run pre getattr behavior
+        // if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
+        //     return Err(err_with_cause(
+        //         py,
+        //         pyo3::PyErr::from_type(
+        //             e.get_type(py),
+        //             format!(
+        //                 "pre-get failed for member '{}' of {}",
+        //                 self_.name,
+        //                 object.repr()?,
+        //             ),
+        //         ),
+        //         e,
+        //     ));
+        // };
 
-        // Get the value from the slot and build a default value if needed
-        let (slot_value, _) = get_slot(object, self_.slot_index, py);
-        let value = match slot_value {
-            Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
-            None => {
-                print!("Default path");
-                // Attempt to create a default value
-                let default = match self_.default.default(&self_, object) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to get default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                // Validate and set the default value
-                let new = match self_
-                    .validator
-                    .validate(Some(&self_.name), Some(object), &default)
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to validate default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                set_slot(object, self_.slot_index, &new);
-                new
-            }
-        };
+        // // Get the value from the slot and build a default value if needed
+        // let (slot_value, _) = get_slot(object, self_.slot_index);
+        // let value = match slot_value {
+        //     Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
+        //     None => {
+        //         print!("Default path");
+        //         // Attempt to create a default value
+        //         let default = match self_.default.default(&self_, object) {
+        //             Ok(v) => v,
+        //             Err(e) => {
+        //                 return Err(err_with_cause(
+        //                     py,
+        //                     pyo3::PyErr::from_type(
+        //                         e.get_type(py),
+        //                         format!(
+        //                             "Failed to get default value for member '{}' of {}",
+        //                             self_.name,
+        //                             object.repr()?,
+        //                         ),
+        //                     ),
+        //                     e,
+        //                 ));
+        //             }
+        //         };
+        //         // Validate and set the default value
+        //         let new = match self_
+        //             .validator
+        //             .validate(Some(&self_.name), Some(object), &default)
+        //         {
+        //             Ok(v) => v,
+        //             Err(e) => {
+        //                 return Err(err_with_cause(
+        //                     py,
+        //                     pyo3::PyErr::from_type(
+        //                         e.get_type(py),
+        //                         format!(
+        //                             "Failed to validate default value for member '{}' of {}",
+        //                             self_.name,
+        //                             object.repr()?,
+        //                         ),
+        //                     ),
+        //                     e,
+        //                 ));
+        //             }
+        //         };
+        //         set_slot(object, self_.slot_index, &new);
+        //         new
+        //     }
+        // };
 
-        // Run post getattr behavior
-        if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "post-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
-        Ok(value)
+        // // Run post getattr behavior
+        // if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
+        //     return Err(err_with_cause(
+        //         py,
+        //         pyo3::PyErr::from_type(
+        //             e.get_type(py),
+        //             format!(
+        //                 "post-get failed for member '{}' of {}",
+        //                 self_.name,
+        //                 object.repr()?,
+        //             ),
+        //         ),
+        //         e,
+        //     ));
+        // };
+        // Ok(value)
     }
 
     pub fn __set__<'py>(
-        self_: PyRef<'py, Self>,
-        object: &Bound<'py, PyAny>,
-        value: &Bound<'py, PyAny>,
+        _self_: PyRef<'py, Self>,
+        _object: &Bound<'py, PyAny>,
+        _value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        let py = self_.py();
-        let object = object.cast::<crate::core::AtorsBase>()?;
-        let (current, frozen) = get_slot(object, self_.slot_index, py);
-
-        // Check the frozen bit of the object
-        if frozen {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot modify {} which is frozen.",
-                object.repr()?
-            )));
-        }
-
-        // Validate it is legitimate to attempt to set the member
-        if let Err(e) = self_.pre_setattr.pre_set(&self_, object, &current) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "pre-set failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
-
-        // Validate the new value
-        let new = match self_
-            .validator
-            .validate(Some(&self_.name), Some(object), value)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(err_with_cause(
-                    py,
-                    pyo3::PyErr::from_type(
-                        e.get_type(py),
-                        format!(
-                            "Validation failed for member '{}' of {}",
-                            self_.name,
-                            object.repr()?,
-                        ),
-                    ),
-                    e,
-                ));
-            }
-        };
-        set_slot(object, self_.slot_index, &new);
-
-        if let Err(e) = self_.post_setattr.post_set(&self_, object, &current, &new) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "post-set failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
-
         Ok(())
+        // let py = self_.py();
+        // let object = object.cast::<crate::core::AtorsBase>()?;
+        // let (current, frozen) = get_slot(object, self_.slot_index);
+
+        // // Check the frozen bit of the object
+        // if frozen {
+        //     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+        //         "Cannot modify {} which is frozen.",
+        //         object.repr()?
+        //     )));
+        // }
+
+        // // Validate it is legitimate to attempt to set the member
+        // if let Err(e) = self_.pre_setattr.pre_set(&self_, object, &current) {
+        //     return Err(err_with_cause(
+        //         py,
+        //         pyo3::PyErr::from_type(
+        //             e.get_type(py),
+        //             format!(
+        //                 "pre-set failed for member '{}' of {}",
+        //                 self_.name,
+        //                 object.repr()?,
+        //             ),
+        //         ),
+        //         e,
+        //     ));
+        // };
+
+        // // Validate the new value
+        // let new = match self_
+        //     .validator
+        //     .validate(Some(&self_.name), Some(object), value)
+        // {
+        //     Ok(v) => v,
+        //     Err(e) => {
+        //         return Err(err_with_cause(
+        //             py,
+        //             pyo3::PyErr::from_type(
+        //                 e.get_type(py),
+        //                 format!(
+        //                     "Validation failed for member '{}' of {}",
+        //                     self_.name,
+        //                     object.repr()?,
+        //                 ),
+        //             ),
+        //             e,
+        //         ));
+        //     }
+        // };
+        // set_slot(object, self_.slot_index, &new);
+
+        // if let Err(e) = self_.post_setattr.post_set(&self_, object, &current, &new) {
+        //     return Err(err_with_cause(
+        //         py,
+        //         pyo3::PyErr::from_type(
+        //             e.get_type(py),
+        //             format!(
+        //                 "post-set failed for member '{}' of {}",
+        //                 self_.name,
+        //                 object.repr()?,
+        //             ),
+        //         ),
+        //         e,
+        //     ));
+        // };
+
+        // Ok(())
     }
 
     pub fn __delete__<'py>(
