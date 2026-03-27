@@ -27,7 +27,7 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, AtorsBase, ClassMutability},
+    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, AtorsBase, ClassMutability},
     member::PreGetattrBehavior,
 };
 
@@ -122,12 +122,14 @@ fn make_unknown_method_error<'py>(
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn create_ators_subclass<'py>(
     meta: Bound<'py, PyType>,
     name: Bound<'py, PyString>,
     bases: Bound<'py, PyTuple>,
     dct: Bound<'py, PyDict>,
     frozen: bool,
+    observable: bool,
     enable_weakrefs: bool,
     type_containers: i64,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -145,6 +147,14 @@ pub fn create_ators_subclass<'py>(
 
     let ators_base_ty = py.get_type::<AtorsBase>();
     let mro = mro_from_bases(&bases)?;
+    let is_observable = observable
+        || mro.iter().any(|b| {
+            b.getattr(ATORS_OBSERVABLE)
+                .ok()
+                .and_then(|v| v.extract::<bool>().ok())
+                .unwrap_or(false)
+        });
+    dct.set_item(ATORS_OBSERVABLE, is_observable)?;
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
@@ -235,6 +245,9 @@ pub fn create_ators_subclass<'py>(
 
     // Collect the used indexes and existing conflict
     let mut occupied = HashSet::new();
+    if is_observable {
+        occupied.insert(0);
+    }
     let mut conflict = Vec::new();
     for member in members.values() {
         let i = member.get().index();

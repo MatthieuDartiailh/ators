@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{AtorsBase, get_slot, set_slot},
+    core::{AtorsBase, get_slot, notify_member_change, set_slot},
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
@@ -317,9 +317,10 @@ impl Member {
                 ));
             }
         };
+        let previous = current.map(|v| v.clone_ref(py));
         set_slot(object, self_.slot_index, &new);
 
-        if let Err(e) = self_.post_setattr.post_set(&self_, object, &current, &new) {
+        if let Err(e) = self_.post_setattr.post_set(&self_, object, &previous.as_ref(), &new) {
             return Err(err_with_cause(
                 py,
                 pyo3::PyErr::from_type(
@@ -333,6 +334,13 @@ impl Member {
                 e,
             ));
         };
+
+        notify_member_change(
+            object,
+            &self_.name,
+            previous.unwrap_or_else(|| py.None()),
+            new.unbind(),
+        )?;
 
         Ok(())
     }

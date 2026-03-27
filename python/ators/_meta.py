@@ -40,6 +40,7 @@ class AtorsMeta(type):
         bases: tuple[type, ...],
         dct: dict[str, Any],
         frozen: bool = False,
+        observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
     ):
@@ -48,7 +49,14 @@ class AtorsMeta(type):
         assert meta.mro is type.mro, "Custom MRO calculation are not supported"
 
         return _create_ators_subclass(
-            meta, name, bases, dct, frozen, enable_weakrefs, type_containers
+            meta,
+            name,
+            bases,
+            dct,
+            frozen,
+            observable,
+            enable_weakrefs,
+            type_containers,
         )
 
     def __call__(self, *args, **kwds):
