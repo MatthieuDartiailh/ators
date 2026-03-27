@@ -114,6 +114,26 @@ pub(crate) fn get_slot<'a, 'py>(
 }
 
 #[inline]
+/// Get an owned clone of the value stored in the slot at index if any.
+///
+/// This helper is intended for return-oriented paths such as Member.__get__
+/// where the caller needs an owned Python reference.
+pub(crate) fn get_slot_owned<'py>(
+    object: &Bound<'py, AtorsBase>,
+    index: u8,
+) -> (Option<Py<PyAny>>, bool) {
+    let py = object.py();
+    with_critical_section(object.as_any(), || {
+        // Safety: we hold the critical section lock on this object.
+        let inner = unsafe { &*object.get().inner.get() };
+        (
+            inner.slots[index as usize].as_ref().map(|value| value.clone_ref(py)),
+            inner.frozen,
+        )
+    })
+}
+
+#[inline]
 /// Set the slot at index to the specified value
 pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();

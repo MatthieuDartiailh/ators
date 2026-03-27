@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{AtorsBase, get_slot, set_slot},
+    core::{AtorsBase, get_slot, get_slot_owned, set_slot},
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
@@ -166,6 +166,123 @@ pub fn member_coerce_init<'py>(
     })
 }
 
+#[cold]
+fn pre_get_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "pre-get failed for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[cold]
+fn post_get_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "post-get failed for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[cold]
+fn default_get_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "Failed to get default value for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[cold]
+fn default_validate_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "Failed to validate default value for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[inline]
+fn get_or_create_value<'py>(
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = object.py();
+    match get_slot_owned(object, member.slot_index).0 {
+        Some(value) => Ok(value.into_bound(py)),
+        None => create_default_value(member, object),
+    }
+}
+
+#[cold]
+fn create_default_value<'py>(
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = object.py();
+    let default = match member.default.default(member, object) {
+        Ok(value) => value,
+        Err(err) => return Err(default_get_failed(py, member, object, err)?),
+    };
+    let new = match member
+        .validator
+        .validate(Some(&member.name), Some(object), &default)
+    {
+        Ok(value) => value,
+        Err(err) => return Err(default_validate_failed(py, member, object, err)?),
+    };
+    set_slot(object, member.slot_index, &new);
+    Ok(new)
+}
+
 #[pymethods]
 impl Member {
     pub fn __get__<'py>(
@@ -177,91 +294,31 @@ impl Member {
         if object.is_none() {
             return self_.into_bound_py_any(py);
         }
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
 
-        // Run pre getattr behavior
-        if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "pre-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        if !self_.pre_getattr.is_noop()
+            && let Err(err) = self_.pre_getattr.pre_get(&self_, object)
+        {
+            return Err(pre_get_failed(py, &self_, object, err)?);
+        }
 
-        // Get the value from the slot and build a default value if needed
-        let (slot_value, _) = get_slot(object, self_.slot_index);
-        let value = match slot_value {
-            Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
-            None => {
-                print!("Default path");
-                // Attempt to create a default value
-                let default = match self_.default.default(&self_, object) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to get default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                // Validate and set the default value
-                let new = match self_
-                    .validator
-                    .validate(Some(&self_.name), Some(object), &default)
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to validate default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                set_slot(object, self_.slot_index, &new);
-                new
-            }
-        };
+        let value = get_or_create_value(&self_, object)?;
 
-        // Run post getattr behavior
-        if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "post-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        if !self_.post_getattr.is_noop()
+            && let Err(err) = self_.post_getattr.post_get(&self_, object, &value)
+        {
+            return Err(post_get_failed(py, &self_, object, err)?);
+        }
         Ok(value)
     }
+
+    // pub fn __get__<'py>(
+    //     self_: PyRef<'py, Self>,
+    //     object: &Bound<'py, PyAny>,
+    //     _obtype: &Bound<'py, PyAny>,
+    // ) -> PyResult<Bound<'py, PyAny>> {
+    //     Self::__get_impl(self_, object)
+    // }
 
     pub fn __set__<'py>(
         self_: PyRef<'py, Self>,
@@ -358,6 +415,239 @@ impl Member {
     // create a cycle and as a consequence it is not necessary to implement
     // __clear__
 }
+
+// impl Member {
+//     #[allow(non_snake_case)]
+//     unsafe fn __pymethod___set____(
+//         py: ::pyo3::Python,
+//         _slf: *mut ::pyo3::ffi::PyObject,
+//         arg0: *mut ::pyo3::ffi::PyObject,
+//         arg1: ::std::ptr::NonNull<::pyo3::ffi::PyObject>,
+//     ) -> ::pyo3::PyResult<()> {
+//         #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+//         let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+//         let mut holder_1 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+//         let result = Member::__set__(
+//             unsafe { ::pyo3::impl_::pymethods::BoundRef::ref_from_ptr(py, &_slf) }
+//                 .cast::<Member>()
+//                 .map_err(::std::convert::Into::<::pyo3::PyErr>::into)
+//                 .and_then(
+//                     #[allow(
+//                         clippy::unnecessary_fallible_conversions,
+//                         reason = "anything implementing `TryFrom<BoundRef>` is permitted"
+//                     )]
+//                     |bound| {
+//                         ::std::convert::TryFrom::try_from(bound).map_err(::std::convert::Into::into)
+//                     },
+//                 )?,
+//             {
+//                 #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+//                 use ::pyo3::impl_::pyclass::Probe as _;
+//                 ::pyo3::impl_::extract_argument::extract_argument(
+//                     unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
+//                     &mut holder_0,
+//                     "object",
+//                 )
+//             }?,
+//             {
+//                 #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+//                 use ::pyo3::impl_::pyclass::Probe as _;
+//                 ::pyo3::impl_::extract_argument::extract_argument(
+//                     unsafe {
+//                         ::pyo3::impl_::extract_argument::cast_non_null_function_argument(py, arg1)
+//                     },
+//                     &mut holder_1,
+//                     "value",
+//                 )
+//             }?,
+//         );
+//         ::pyo3::impl_::callback::convert(py, result)
+//     }
+// }
+// impl ::pyo3::impl_::pyclass::PyClass__set__SlotFragment<Member>
+//     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
+// {
+//     #[inline]
+//     unsafe fn __set__(
+//         self,
+//         py: ::pyo3::Python,
+//         _slf: *mut ::pyo3::ffi::PyObject,
+//         arg0: *mut ::pyo3::ffi::PyObject,
+//         arg1: ::std::ptr::NonNull<::pyo3::ffi::PyObject>,
+//     ) -> ::pyo3::PyResult<()> {
+//         Member::__pymethod___set____(py, _slf, arg0, arg1)
+//     }
+// }
+// impl Member {
+//     #[allow(non_snake_case)]
+//     unsafe fn __pymethod___delete____(
+//         py: ::pyo3::Python,
+//         _slf: *mut ::pyo3::ffi::PyObject,
+//         arg0: *mut ::pyo3::ffi::PyObject,
+//     ) -> ::pyo3::PyResult<()> {
+//         #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+//         let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+//         let result = Member::__delete__(
+//             unsafe { ::pyo3::impl_::pymethods::BoundRef::ref_from_ptr(py, &_slf) }
+//                 .cast::<Member>()
+//                 .map_err(::std::convert::Into::<::pyo3::PyErr>::into)
+//                 .and_then(
+//                     #[allow(
+//                         clippy::unnecessary_fallible_conversions,
+//                         reason = "anything implementing `TryFrom<BoundRef>` is permitted"
+//                     )]
+//                     |bound| {
+//                         ::std::convert::TryFrom::try_from(bound).map_err(::std::convert::Into::into)
+//                     },
+//                 )?,
+//             {
+//                 #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+//                 use ::pyo3::impl_::pyclass::Probe as _;
+//                 ::pyo3::impl_::extract_argument::extract_argument(
+//                     unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
+//                     &mut holder_0,
+//                     "object",
+//                 )
+//             }?,
+//         );
+//         ::pyo3::impl_::callback::convert(py, result)
+//     }
+// }
+// impl ::pyo3::impl_::pyclass::PyClass__delete__SlotFragment<Member>
+//     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
+// {
+//     #[inline]
+//     unsafe fn __delete__(
+//         self,
+//         py: ::pyo3::Python,
+//         _slf: *mut ::pyo3::ffi::PyObject,
+//         arg0: *mut ::pyo3::ffi::PyObject,
+//     ) -> ::pyo3::PyResult<()> {
+//         Member::__pymethod___delete____(py, _slf, arg0)
+//     }
+// }
+// #[allow(unknown_lints, non_local_definitions)]
+// impl ::pyo3::impl_::pyclass::PyMethods<Member>
+//     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
+// {
+//     fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
+//         static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
+//             methods: &[],
+//             slots: &[
+//                 ::pyo3::ffi::PyType_Slot {
+//                     slot: ::pyo3::ffi::Py_tp_descr_get,
+//                     pfunc: {
+//                         struct Def;
+
+//                         impl
+//                             pyo3::impl_::trampoline::MethodDef<
+//                                 pyo3::impl_::trampoline::descrgetfunc::Func,
+//                             > for Def
+//                         {
+//                             const METH: pyo3::impl_::trampoline::descrgetfunc::Func =
+//                                 Member::__pymethod___get____;
+//                         }
+//                         pyo3::impl_::trampoline::descrgetfunc::<Def>
+//                     } as ::pyo3::ffi::descrgetfunc as _,
+//                 },
+//                 ::pyo3::ffi::PyType_Slot {
+//                     slot: ::pyo3::ffi::Py_tp_traverse,
+//                     pfunc: Member::__pymethod_traverse__ as ::pyo3::ffi::traverseproc as _,
+//                 },
+//                 {
+//                     unsafe fn slot_impl(
+//                         py: pyo3::Python<'_>,
+//                         _slf: *mut pyo3::ffi::PyObject,
+//                         attr: *mut pyo3::ffi::PyObject,
+//                         value: *mut pyo3::ffi::PyObject,
+//                     ) -> pyo3::PyResult<::std::ffi::c_int> {
+//                         use ::std::option::Option::*;
+//                         use pyo3::impl_::callback::IntoPyCallbackOutput;
+//                         use pyo3::impl_::pyclass::*;
+//                         let collector = PyClassImplCollector::<Member>::new();
+//                         if let Some(value) = ::std::ptr::NonNull::new(value) {
+//                             unsafe { collector.__set__(py, _slf, attr, value).convert(py) }
+//                         } else {
+//                             unsafe { collector.__delete__(py, _slf, attr).convert(py) }
+//                         }
+//                     }
+//                     pyo3::ffi::PyType_Slot {
+//                         slot: pyo3::ffi::Py_tp_descr_set,
+//                         pfunc: {
+//                             struct Def;
+
+//                             impl
+//                                 pyo3::impl_::trampoline::MethodDef<
+//                                     pyo3::impl_::trampoline::setattrofunc::Func,
+//                                 > for Def
+//                             {
+//                                 const METH: pyo3::impl_::trampoline::setattrofunc::Func = slot_impl;
+//                             }
+//                             pyo3::impl_::trampoline::setattrofunc::<Def>
+//                         } as pyo3::ffi::descrsetfunc as _,
+//                     }
+//                 },
+//             ],
+//         };
+//         &ITEMS
+//     }
+// }
+// #[doc(hidden)]
+// #[allow(non_snake_case)]
+// impl Member {
+//     #[allow(non_snake_case)]
+//     unsafe fn __pymethod___get____(
+//         py: ::pyo3::Python<'_>,
+//         _slf: *mut ::pyo3::ffi::PyObject,
+//         arg0: *mut ::pyo3::ffi::PyObject,
+//         _arg1: *mut ::pyo3::ffi::PyObject,
+//     ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+//         if arg0.is_null() {
+//             unsafe { ::pyo3::ffi::Py_INCREF(_slf) };
+//             return Ok(_slf);
+//         }
+
+//         #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+//         let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+//         let result = Member::__get_impl(
+//             unsafe { ::pyo3::impl_::pymethods::BoundRef::ref_from_ptr(py, &_slf) }
+//                 .cast::<Member>()
+//                 .map_err(::std::convert::Into::<::pyo3::PyErr>::into)
+//                 .and_then(
+//                     #[allow(
+//                         clippy::unnecessary_fallible_conversions,
+//                         reason = "anything implementing `TryFrom<BoundRef>` is permitted"
+//                     )]
+//                     |bound| {
+//                         ::std::convert::TryFrom::try_from(bound).map_err(::std::convert::Into::into)
+//                     },
+//                 )?,
+//             {
+//                 #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+//                 use ::pyo3::impl_::pyclass::Probe as _;
+//                 ::pyo3::impl_::extract_argument::extract_argument(
+//                     unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
+//                     &mut holder_0,
+//                     "object",
+//                 )
+//             }?,
+//         );
+//         ::pyo3::impl_::callback::convert(py, result)
+//     }
+//     pub unsafe extern "C" fn __pymethod_traverse__(
+//         slf: *mut ::pyo3::ffi::PyObject,
+//         visit: ::pyo3::ffi::visitproc,
+//         arg: *mut ::std::ffi::c_void,
+//     ) -> ::std::ffi::c_int {
+//         ::pyo3::impl_::pymethods::_call_traverse::<Member>(
+//             slf,
+//             Member::__traverse__,
+//             visit,
+//             arg,
+//             Member::__pymethod_traverse__,
+//         )
+//     }
+// }
 
 #[pyclass(module = "ators._ators", name = "member", from_py_object)]
 #[derive(Debug, Default)]
