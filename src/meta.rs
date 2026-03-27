@@ -13,7 +13,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
-        PyFunction, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyFunction, PyListMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods,
+        PyType, PyTypeMethods,
     },
 };
 
@@ -121,6 +122,135 @@ fn make_unknown_method_error<'py>(
     ))
 }
 
+fn type_param_display(param: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(type_) = param.cast::<PyType>() {
+        return Ok(type_.name()?.to_string());
+    }
+    if let Ok(name) = param.getattr(intern!(param.py(), "__name__")) {
+        return name.extract();
+    }
+    Ok(param.repr()?.to_string())
+}
+
+#[pyfunction]
+pub fn create_ators_specialized_subclass<'py>(
+    cls: Bound<'py, PyType>,
+    params: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = cls.py();
+    let builtins = py.import(intern!(py, "builtins"))?;
+
+    let type_params_obj = match cls.getattr(intern!(py, "__type_params__")) {
+        Ok(obj) if !obj.is_none() => obj,
+        _ => cls
+            .getattr(intern!(py, "__parameters__"))
+            .unwrap_or_else(|_| PyTuple::empty(py).into_any()),
+    };
+    let type_params = if type_params_obj.is_instance_of::<PyTuple>() {
+        type_params_obj.cast_into::<PyTuple>()?
+    } else {
+        builtins
+            .getattr(intern!(py, "tuple"))?
+            .call1((type_params_obj,))?
+            .cast_into::<PyTuple>()?
+    };
+
+    if type_params.is_empty() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{} is not a generic Ators class",
+            cls.qualname()?
+        )));
+    }
+
+    let params_tuple = if params.is_instance_of::<PyTuple>() {
+        params.cast_into::<PyTuple>()?
+    } else {
+        PyTuple::new(py, [params])?
+    };
+
+    if params_tuple.len() != type_params.len() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{} expects {} type arguments, got {}",
+            cls.qualname()?,
+            type_params.len(),
+            params_tuple.len()
+        )));
+    }
+
+    for p in params_tuple.iter() {
+        if type_params.iter().any(|tp| tp.is(&p)) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Partial specialization is not supported; all type parameters must be concrete",
+            ));
+        }
+    }
+
+    let cache = match cls.getattr(intern!(py, "__ators_specializations__")) {
+        Ok(d) => d.cast_into::<PyDict>()?,
+        Err(_) => {
+            let d = PyDict::new(py);
+            cls.setattr(intern!(py, "__ators_specializations__"), &d)?;
+            d
+        }
+    };
+    if let Some(cached) = cache.get_item(&params_tuple)? {
+        return Ok(cached);
+    }
+
+    let typevar_bindings = PyDict::new(py);
+    for (tp, p) in type_params.iter().zip(params_tuple.iter()) {
+        typevar_bindings.set_item(tp, p)?;
+    }
+
+    let annotations = builtins
+        .getattr(intern!(py, "dict"))?
+        .call1((cls.getattr(intern!(py, "__annotations__"))?,))?
+        .cast_into::<PyDict>()?;
+
+    let namespace = PyDict::new(py);
+    namespace.set_item(intern!(py, "__module__"), cls.getattr(intern!(py, "__module__"))?)?;
+    namespace.set_item(intern!(py, "__annotations__"), &annotations)?;
+    namespace.set_item(intern!(py, "__ators_typevar_bindings__"), &typevar_bindings)?;
+
+    let member_factory = py.import(intern!(py, "ators._ators"))?.getattr(intern!(py, "member"))?;
+    let members = cls.getattr(intern!(py, "__ators_members__"))?.cast_into::<PyDict>()?;
+    for member_name in members.keys().iter() {
+        if annotations.contains(&member_name)? {
+            namespace.set_item(
+                &member_name,
+                member_factory.call0()?.call_method0(intern!(py, "inherit"))?,
+            )?;
+        }
+    }
+
+    let base_name = cls.name()?;
+    let rendered = params_tuple
+        .iter()
+        .map(|p| type_param_display(&p))
+        .collect::<PyResult<Vec<String>>>()?
+        .join(", ");
+    let specialized_name = format!("{base_name}[{rendered}]");
+
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(intern!(py, "frozen"), cls.getattr(intern!(py, "__ators_frozen__"))?)?;
+    let specialized = cls.get_type().call(
+        (
+            specialized_name,
+            PyTuple::new(py, [cls.as_any()])?,
+            namespace,
+        ),
+        Some(&kwargs),
+    )?;
+
+    specialized.setattr(intern!(py, "__ators_origin__"), cls.as_any())?;
+    specialized.setattr(intern!(py, "__ators_args__"), &params_tuple)?;
+    specialized.setattr(intern!(py, "__ators_type_params__"), &type_params)?;
+    specialized.setattr(intern!(py, "__ators_typevar_bindings__"), &typevar_bindings)?;
+    cache.set_item(&params_tuple, &specialized)?;
+
+    Ok(specialized)
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn create_ators_subclass<'py>(
@@ -168,8 +298,22 @@ pub fn create_ators_subclass<'py>(
         dct.set_item(slot_name, ())?;
     }
 
-    let mut member_builders =
-        generate_member_builders_from_cls_namespace(&name, &dct, type_containers)?;
+    let typevar_bindings = if let Some(tb) = dct.get_item(intern!(py, "__ators_typevar_bindings__"))?
+    {
+        Some(tb.cast_into::<PyDict>()?)
+    } else {
+        None
+    };
+    if typevar_bindings.is_some() {
+        dct.del_item(intern!(py, "__ators_typevar_bindings__"))?;
+    }
+
+    let mut member_builders = generate_member_builders_from_cls_namespace(
+        &name,
+        &dct,
+        type_containers,
+        typevar_bindings.as_ref(),
+    )?;
 
     // Collect the new members defined in this class that require the owning
     // class to be set to resolve ForwardRef
@@ -196,11 +340,16 @@ pub fn create_ators_subclass<'py>(
                 }
             }
         } else {
-            for (k, v) in base
-                .getattr(intern!(py, "__dict__"))?
-                .cast::<PyDict>()?
-                .iter()
-            {
+            let base_dict_raw = base.getattr(intern!(py, "__dict__"))?;
+            let base_dict = if base_dict_raw.is_instance_of::<PyDict>() {
+                base_dict_raw.cast_into::<PyDict>()?
+            } else {
+                py.import(intern!(py, "builtins"))?
+                    .getattr(intern!(py, "dict"))?
+                    .call1((base_dict_raw,))?
+                    .cast_into::<PyDict>()?
+            };
+            for (k, v) in base_dict.iter() {
                 if v.is_exact_instance_of::<PyFunction>() {
                     methods.add(k)?;
                 }

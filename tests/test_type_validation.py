@@ -229,3 +229,50 @@ def test_inherited_type_validator():
     assert b.a == 5
     with pytest.raises(TypeError):
         b.a = ""
+
+
+class GenericBox[T](Ators):
+    item: T = member()
+
+
+class BoundGenericBox[T: int](Ators):
+    item: T = member()
+
+
+class GenericListBox[T](Ators):
+    items: list[T] = member()
+
+
+def test_generic_specialization_is_cached_class():
+    int_box = GenericBox[int]
+    assert int_box is GenericBox[int]
+    assert int_box is not GenericBox[str]
+
+
+def test_unspecialized_typevar_uses_bound_when_available():
+    box = BoundGenericBox()
+    box.item = 1
+    with pytest.raises(TypeError):
+        box.item = "a"
+
+
+def test_unspecialized_unbound_typevar_remains_broad():
+    box = GenericBox()
+    box.item = 1
+    box.item = "a"
+
+
+def test_specialized_typevar_narrows_validator():
+    IntBox = GenericBox[int]
+    box = IntBox()
+    box.item = 1
+    with pytest.raises(TypeError):
+        box.item = "a"
+
+
+def test_specialized_nested_typevar_narrows_validator():
+    IntListBox = GenericListBox[int]
+    box = IntListBox()
+    box.items = [1, 2, 3]
+    with pytest.raises(TypeError):
+        box.items = ["a"]

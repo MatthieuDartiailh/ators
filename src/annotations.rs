@@ -115,6 +115,7 @@ pub fn build_validator_from_annotation<'py>(
     type_containers: i64, // not sure this is worth keeping it
     tools: &TypeTools<'py>,
     ctx_provider: Option<&Bound<'py, PyAny>>,
+    typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
     if ann.is_instance_of::<PyString>() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
@@ -130,6 +131,7 @@ pub fn build_validator_from_annotation<'py>(
                         ctx_provider,
                         type_containers,
                         name,
+                        typevar_bindings,
                     ),
                 },
                 None,
@@ -150,6 +152,7 @@ pub fn build_validator_from_annotation<'py>(
             type_containers,
             tools,
             ctx_provider,
+            typevar_bindings,
         );
     }
 
@@ -193,6 +196,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 Ok((
                     Validator::new(
@@ -218,6 +222,7 @@ pub fn build_validator_from_annotation<'py>(
                         type_containers,
                         tools,
                         ctx_provider,
+                        typevar_bindings,
                     )?;
                     requires_owner = requires_owner || item_info.requires_owner;
                     items.push(item_validator);
@@ -235,6 +240,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -260,6 +266,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -280,6 +287,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -300,6 +308,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 let (val_validator, val_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-value")).cast()?,
@@ -307,6 +316,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 (
                     Some((
@@ -341,6 +351,7 @@ pub fn build_validator_from_annotation<'py>(
                     type_containers,
                     tools,
                     ctx_provider,
+                    typevar_bindings,
                 )?;
                 requires_owner = requires_owner || info.requires_owner;
                 members.push(validator);
@@ -366,6 +377,7 @@ pub fn build_validator_from_annotation<'py>(
                         type_containers,
                         tools,
                         ctx_provider,
+                        typevar_bindings,
                     )?;
                     requires_owner = requires_owner || attr_info.requires_owner;
                     attributes.push((attr_name_str, attr_validator));
@@ -410,9 +422,37 @@ pub fn build_validator_from_annotation<'py>(
             }
         }
     } else if ann.is_instance(&tools.types.type_var)? {
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "Unsupported TypeVar",
-        )) // FIXME
+        if let Some(bindings) = typevar_bindings
+            && let Some(bound_ann) = bindings.get_item(ann)?
+        {
+            return build_validator_from_annotation(
+                name,
+                &bound_ann.cast_into()?,
+                type_containers,
+                tools,
+                ctx_provider,
+                typevar_bindings,
+            );
+        }
+
+        let bound = ann.getattr(intern!(py, "__bound__"))?;
+        if !bound.is_none() {
+            return build_validator_from_annotation(
+                name,
+                &bound.cast_into()?,
+                type_containers,
+                tools,
+                ctx_provider,
+                typevar_bindings,
+            );
+        }
+
+        Ok((
+            Validator::default(),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is_instance(&tools.types.new_type)? {
         build_validator_from_annotation(
             name,
@@ -420,6 +460,7 @@ pub fn build_validator_from_annotation<'py>(
             type_containers,
             tools,
             ctx_provider,
+            typevar_bindings,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok((
@@ -500,6 +541,7 @@ fn configure_member_builder_from_annotation<'py>(
     type_containers: i64,
     tools: &TypeTools<'py>,
     final_annotated: bool,
+    typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<()> {
     let origin = tools.get_origin.call1((ann,))?;
 
@@ -524,6 +566,7 @@ fn configure_member_builder_from_annotation<'py>(
             type_containers,
             tools,
             true,
+            typevar_bindings,
         )?;
         match builder.pre_setattr() {
             Some(PreSetattrBehavior::Constant {}) => {}
@@ -557,6 +600,7 @@ fn configure_member_builder_from_annotation<'py>(
         builder
             .forward_ref_environment_factory()
             .map(|f| f.bind(name.py())),
+        typevar_bindings,
     ) {
         Ok(v) => Ok(v),
         Err(err) => Err(err_with_cause(
@@ -596,14 +640,21 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     name: &Bound<'py, PyString>,
     dct: &Bound<'py, PyDict>,
     type_containers: i64,
+    typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<HashMap<String, MemberBuilder>> {
     let py = name.py();
 
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
     let annotations = if dct.contains(intern!(py, "__annotations__"))? {
-        dct.as_any()
-            .get_item(intern!(py, "__annotations__"))?
-            .cast_into()
+        let raw_annotations = dct.as_any().get_item(intern!(py, "__annotations__"))?;
+        if raw_annotations.is_instance_of::<PyDict>() {
+            raw_annotations.cast_into()
+        } else {
+            py.import(intern!(py, "builtins"))?
+                .getattr(intern!(py, "dict"))?
+                .call1((raw_annotations,))?
+                .cast_into()
+        }
     } else {
         let annotate = annotationlib
             .getattr(intern!(py, "get_annotate_from_class_namespace"))?
@@ -666,6 +717,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             type_containers,
             &tools,
             false,
+            typevar_bindings,
         )
         .map_err(|err| {
             err_with_cause(

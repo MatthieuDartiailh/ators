@@ -60,7 +60,7 @@ mod _ators {
         unobserve,
     };
     #[pymodule_export]
-    use self::meta::create_ators_subclass;
+    use self::meta::{create_ators_specialized_subclass, create_ators_subclass};
 
     #[pymodule_export]
     use self::member::{
