@@ -8,7 +8,8 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, Literal
+from annotationlib import ForwardRef
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import pytest
 
@@ -243,6 +244,29 @@ class GenericListBox[T](Ators):
     items: list[T] = member()
 
 
+class GenericPair[T, U](Ators):
+    first: T = member()
+    second: U = member()
+
+
+class BoundedPair[T: int, U: int](Ators):
+    first: T = member()
+    second: U = member()
+
+
+class ForwardRefPartialHolder[T: int](Ators):
+    pair: ForwardRef("GenericPair[int, T]") = member()
+
+
+class DelayedForwardRefPartialHolder[T: int](Ators):
+    pair: ForwardRef("DelayedGenericPair[int, T]") = member()
+
+
+class DelayedGenericPair[T, U](Ators):
+    first: T = member()
+    second: U = member()
+
+
 def test_generic_specialization_is_cached_class():
     int_box = GenericBox[int]
     assert int_box is GenericBox[int]
@@ -276,3 +300,60 @@ def test_specialized_nested_typevar_narrows_validator():
     box.items = [1, 2, 3]
     with pytest.raises(TypeError):
         box.items = ["a"]
+
+
+def test_partial_specialization_keeps_generic_parameter():
+    T2 = TypeVar("T2", bound=int)
+    partial = GenericPair[int, T2]
+
+    assert len(partial.__type_params__) == 1
+    assert partial.__type_params__[0] is T2
+
+    pair = partial()
+    pair.first = 1
+    pair.second = 2
+    with pytest.raises(TypeError):
+        pair.second = "a"
+
+
+def test_partial_specialization_can_be_fully_specialized_later():
+    T2 = TypeVar("T2", bound=int)
+    partial = GenericPair[int, T2]
+    final = partial[bool]
+
+    pair = final()
+    pair.first = 1
+    pair.second = True
+    with pytest.raises(TypeError):
+        pair.second = "a"
+
+
+def test_partial_specialization_typevar_bound_must_be_narrower():
+    narrower = TypeVar("narrower", bound=bool)
+    _ = BoundedPair[int, narrower]
+
+    wider = TypeVar("wider", bound=str)
+    with pytest.raises(TypeError, match="not narrower"):
+        _ = BoundedPair[int, wider]
+
+
+def test_partial_specialization_typevar_without_required_bound_is_rejected():
+    unbounded = TypeVar("unbounded")
+    with pytest.raises(TypeError, match="must define a bound"):
+        _ = BoundedPair[int, unbounded]
+
+
+def test_forward_ref_support_partial_specialization():
+    T2 = TypeVar("T2", bound=int)
+    holder = ForwardRefPartialHolder[T2]()
+
+    holder.pair = GenericPair[int, T2]()
+    with pytest.raises(TypeError):
+        holder.pair = GenericPair[str, T2]()
+
+
+def test_delayed_forward_ref_support_partial_specialization():
+    holder = DelayedForwardRefPartialHolder[int]()
+    holder.pair = DelayedGenericPair[int, int]()
+    with pytest.raises(TypeError):
+        holder.pair = DelayedGenericPair[str, int]()
