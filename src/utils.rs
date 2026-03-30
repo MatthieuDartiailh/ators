@@ -15,6 +15,7 @@ use pyo3::{
 use std::collections::HashMap;
 
 /// Helper function to set the cause of a PyErr and return it in one step.
+#[cold]
 pub(crate) fn err_with_cause<'py>(py: Python<'py>, err: PyErr, cause: PyErr) -> PyErr {
     err.set_cause(py, Some(cause));
     err

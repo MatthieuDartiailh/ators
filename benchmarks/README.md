@@ -14,6 +14,11 @@ Benchmarks are organized into focused test files, each measuring different aspec
   - Compares: Python (slotted), Python (plain), Ators (Any), Atom (if available)
   - Measures pure attribute assignment overhead (no validation)
 
+- **`bench_set_untyped_alternating.py`**: Benchmark `__set__` (write) performance with untyped fields using alternating values
+  - Compares: Python (slotted), Python (plain), Ators (Any), Atom (if available)
+  - Alternates between two values on each write to avoid same-object fast-path effects
+  - Measures steady-state write overhead when each assignment is distinct from the previous one
+
 - **`bench_validation.py`**: Benchmark validation performance with typed fields
   - Compares: Python baseline (no validation), Ators (typed validators), Atom (typed validators)
   - Measures the cost of type validation for various types:
@@ -74,4 +79,10 @@ Each benchmark provides:
 1. **Access Overhead** (get_untyped): How much slower is Ators vs pure Python?
 2. **Assignment Overhead** (set_untyped): How much slower is Ators vs pure Python (untyped)?
 3. **Validation Cost** (validation_*): Additional cost of type validation per type
+
+### Constant vs Alternating Write Benchmarks
+
+- Use **`bench_set_untyped.py`** to measure repeated assignment of the same value.
+- Use **`bench_set_untyped_alternating.py`** to measure write cost without repeated same-object assignment effects.
+- Compare both to separate identity fast-path gains from structural descriptor overhead.
 

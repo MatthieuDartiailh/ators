@@ -97,6 +97,7 @@ impl Validator {
         match self.strict_validate(name, object, value) {
             Ok(v) => Ok(v),
             Err(err) => {
+                // Apply cold_branch once stabilized in 1.95
                 if let Some(c) = &self.coercer {
                     c.coerce_value(false, &self.type_validator, name, object, value)
                 } else {
@@ -132,6 +133,11 @@ impl Validator {
                 "No coercer defined for {:?}",
             ))
         }
+    }
+
+    #[inline]
+    pub fn is_set_passthrough(&self) -> bool {
+        matches!(self.type_validator, TypeValidator::Any {}) && self.value_validators.is_empty()
     }
 
     /// Validate the value against the type and value validators, without coercion
