@@ -106,7 +106,7 @@ jobs:
           cargo llvm-cov report --lcov --output-path coverage.lcov
         shell: cmd
         if: startsWith(matrix.os, 'windows')
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         with:
           files: coverage.lcov,coverage.xml
           name: ${{ matrix.os }}
