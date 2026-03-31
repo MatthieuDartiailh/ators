@@ -7,7 +7,9 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{AtorsBase, get_slot, set_slot},
+    core::{
+        AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, replace_slot, set_slot,
+    },
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
@@ -166,100 +168,249 @@ pub fn member_coerce_init<'py>(
     })
 }
 
-#[pymethods]
+// Get helpers (cold path to improve main branch performance)
+
+#[cold]
+fn default_get_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "Failed to get default value for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[cold]
+fn default_validate_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "Failed to validate default value for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+#[inline]
+fn get_or_create_value<'py>(
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = object.py();
+    match get_slot_owned(object, member.slot_index) {
+        Some(value) => Ok(value.into_bound(py)),
+        None => create_default_value(member, object),
+    }
+}
+
+#[cold]
+fn create_default_value<'py>(
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = object.py();
+    let default = match member.default.default(member, object) {
+        Ok(value) => value,
+        Err(err) => return Err(default_get_failed(py, member, object, err)?),
+    };
+    let new = match member
+        .validator
+        .validate(Some(&member.name), Some(object), &default)
+    {
+        Ok(value) => value,
+        Err(err) => return Err(default_validate_failed(py, member, object, err)?),
+    };
+    set_slot(object, member.slot_index, &new);
+    Ok(new)
+}
+
+/// Cold path: called when cast to AtorsBase fails. Returns self (the descriptor)
+/// if object is None (class-level access), otherwise re-raises the cast error.
+#[cold]
+fn try_get_descriptor<'py>(
+    self_: PyRef<'py, Member>,
+    object: &Bound<'py, PyAny>,
+    cast_err: pyo3::CastError<'_, 'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if object.is_none() {
+        return self_.into_bound_py_any(object.py());
+    }
+    Err(cast_err.into())
+}
+
+/// Cold path: runs pre_get hook (only called when pre_getattr is not noop).
+#[cold]
+fn run_pre_get<'py>(self_: &PyRef<'py, Member>, object: &Bound<'py, AtorsBase>) -> PyResult<()> {
+    let py = object.py();
+    match self_.pre_getattr.pre_get(self_, object) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err_with_cause(
+            py,
+            pyo3::PyErr::from_type(
+                err.get_type(py),
+                format!(
+                    "pre-get failed for member '{}' of {}",
+                    self_.name,
+                    object.repr()?,
+                ),
+            ),
+            err,
+        )),
+    }
+}
+
+// Set helpers (cold path to improve main branch performance)
+
+/// Cold path: runs post_get hook (only called when post_getattr is not noop).
+#[cold]
+fn run_post_get<'py>(
+    self_: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = object.py();
+    match self_.post_getattr.post_get(self_, object, value) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err_with_cause(
+            py,
+            pyo3::PyErr::from_type(
+                err.get_type(py),
+                format!(
+                    "post-get failed for member '{}' of {}",
+                    self_.name,
+                    object.repr()?,
+                ),
+            ),
+            err,
+        )),
+    }
+}
+
+// Cold path: runs pre_set hook (only called when pre_setattr is not noop).
+#[cold]
+fn run_pre_set<'py>(self_: &PyRef<'py, Member>, object: &Bound<'py, AtorsBase>) -> PyResult<()> {
+    let py = object.py();
+    let current = get_slot(object, self_.slot_index);
+    match self_.pre_setattr.pre_set(self_, object, &current) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Frozen takes precedence: report it when the object was frozen at call-time.
+            if is_frozen(object) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Cannot modify {} which is frozen.",
+                    object.repr()?,
+                )));
+            }
+            Err(err_with_cause(
+                py,
+                pyo3::PyErr::from_type(
+                    err.get_type(py),
+                    format!(
+                        "pre-set failed for member '{}' of {}",
+                        self_.name,
+                        object.repr()?,
+                    ),
+                ),
+                err,
+            ))
+        }
+    }
+}
+
+#[cold]
+fn validate_set_failed<'py>(
+    py: Python<'py>,
+    member: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    err: pyo3::PyErr,
+) -> PyResult<pyo3::PyErr> {
+    // Frozen takes precedence: report it when the object was frozen at call-time.
+    if is_frozen(object) {
+        return Ok(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Cannot modify {} which is frozen.",
+            object.repr()?,
+        )));
+    }
+    Ok(err_with_cause(
+        py,
+        pyo3::PyErr::from_type(
+            err.get_type(py),
+            format!(
+                "Validation failed for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            ),
+        ),
+        err,
+    ))
+}
+
+/// Cold path: runs post_set hook (only called when post_setattr is not noop).
+#[cold]
+fn run_post_set<'py>(
+    self_: &PyRef<'py, Member>,
+    object: &Bound<'py, AtorsBase>,
+    old: &Option<&Py<PyAny>>,
+    new: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = object.py();
+    match self_.post_setattr.post_set(self_, object, old, new) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err_with_cause(
+            py,
+            pyo3::PyErr::from_type(
+                err.get_type(py),
+                format!(
+                    "post-set failed for member '{}' of {}",
+                    self_.name,
+                    object.repr()?,
+                ),
+            ),
+            err,
+        )),
+    }
+}
+
 impl Member {
     pub fn __get__<'py>(
         self_: PyRef<'py, Self>,
         object: &Bound<'py, PyAny>,
-        _obtype: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let py = object.py();
-        if object.is_none() {
-            return self_.into_bound_py_any(py);
+        let object = match object.cast::<AtorsBase>() {
+            Ok(obj) => obj,
+            Err(cast_err) => return try_get_descriptor(self_, object, cast_err),
+        };
+
+        if !self_.pre_getattr.is_noop() {
+            run_pre_get(&self_, object)?;
         }
-        let object = object.cast::<crate::core::AtorsBase>()?;
 
-        // Run pre getattr behavior
-        if let Err(e) = self_.pre_getattr.pre_get(&self_, object) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "pre-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        let value = get_or_create_value(&self_, object)?;
 
-        // Get the value from the slot and build a default value if needed
-        let (slot_value, _) = get_slot(object, self_.slot_index, py);
-        let value = match slot_value {
-            Some(v) => v.clone_ref(py).into_bound(py), // Value exist we return it
-            None => {
-                print!("Default path");
-                // Attempt to create a default value
-                let default = match self_.default.default(&self_, object) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to get default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                // Validate and set the default value
-                let new = match self_
-                    .validator
-                    .validate(Some(&self_.name), Some(object), &default)
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(err_with_cause(
-                            py,
-                            pyo3::PyErr::from_type(
-                                e.get_type(py),
-                                format!(
-                                    "Failed to validate default value for member '{}' of {}",
-                                    self_.name,
-                                    object.repr()?,
-                                ),
-                            ),
-                            e,
-                        ));
-                    }
-                };
-                set_slot(object, self_.slot_index, &new);
-                new
-            }
-        };
-
-        // Run post getattr behavior
-        if let Err(e) = self_.post_getattr.post_get(&self_, object, &value) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "post-get failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        if !self_.post_getattr.is_noop() {
+            run_post_get(&self_, object, &value)?;
+        }
         Ok(value)
     }
 
@@ -270,31 +421,13 @@ impl Member {
     ) -> PyResult<()> {
         let py = self_.py();
         let object = object.cast::<crate::core::AtorsBase>()?;
-        let (current, frozen) = get_slot(object, self_.slot_index, py);
 
-        // Check the frozen bit of the object
-        if frozen {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot modify {} which is frozen.",
-                object.repr()?
-            )));
+        // Only read the current slot value when pre_setattr actually uses it.
+        // The frozen check is deferred to replace_slot to avoid an extra
+        // critical section acquisition on the hot path.
+        if !self_.pre_setattr.is_noop() {
+            run_pre_set(&self_, object)?;
         }
-
-        // Validate it is legitimate to attempt to set the member
-        if let Err(e) = self_.pre_setattr.pre_set(&self_, object, &current) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "pre-set failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
 
         // Validate the new value
         let new = match self_
@@ -302,37 +435,27 @@ impl Member {
             .validate(Some(&self_.name), Some(object), value)
         {
             Ok(v) => v,
-            Err(e) => {
-                return Err(err_with_cause(
-                    py,
-                    pyo3::PyErr::from_type(
-                        e.get_type(py),
-                        format!(
-                            "Validation failed for member '{}' of {}",
-                            self_.name,
-                            object.repr()?,
-                        ),
-                    ),
-                    e,
-                ));
+            Err(err) => return Err(validate_set_failed(py, &self_, object, err)?),
+        };
+
+        // Atomically check frozen + write slot + capture old value in one
+        // critical section. Err(()) means the object was frozen.
+        let old_on_write = match replace_slot(object, self_.slot_index, &new) {
+            Ok(ReplaceSlotOutcome::Replaced(old)) => Some(old),
+            Ok(ReplaceSlotOutcome::Unchanged) => None,
+            Err(()) => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Cannot modify {} which is frozen.",
+                    object.repr()?
+                )));
             }
         };
-        set_slot(object, self_.slot_index, &new);
 
-        if let Err(e) = self_.post_setattr.post_set(&self_, object, &current, &new) {
-            return Err(err_with_cause(
-                py,
-                pyo3::PyErr::from_type(
-                    e.get_type(py),
-                    format!(
-                        "post-set failed for member '{}' of {}",
-                        self_.name,
-                        object.repr()?,
-                    ),
-                ),
-                e,
-            ));
-        };
+        if let Some(old_on_write) = old_on_write
+            && !self_.post_setattr.is_noop()
+        {
+            run_post_set(&self_, object, &old_on_write.as_ref(), &new)?;
+        }
 
         Ok(())
     }
@@ -357,6 +480,200 @@ impl Member {
     // The class is frozen so another mutable object must be involved to
     // create a cycle and as a consequence it is not necessary to implement
     // __clear__
+}
+
+impl Member {
+    #[inline]
+    unsafe fn slot_self<'py>(
+        py: ::pyo3::Python<'py>,
+        slf: &*mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<::pyo3::PyRef<'py, Self>> {
+        // Safety: these wrappers are only installed in `Member`'s descriptor slots.
+        // CPython dispatches those slots with `self` bound to the descriptor object
+        // found during attribute lookup, and explicit `Member.__get__/__set__/__delete__`
+        // calls go through the slot wrapper which rejects non-`Member` receivers
+        // before invoking this function. That makes the unchecked cast sound here.
+        ::std::convert::TryFrom::try_from(unsafe {
+            ::pyo3::impl_::pymethods::BoundRef::ref_from_ptr(py, slf).cast_unchecked::<Member>()
+        })
+        .map_err(::std::convert::Into::into)
+    }
+}
+
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___set____(
+        py: ::pyo3::Python,
+        _slf: *mut ::pyo3::ffi::PyObject,
+        arg0: *mut ::pyo3::ffi::PyObject,
+        arg1: ::std::ptr::NonNull<::pyo3::ffi::PyObject>,
+    ) -> ::pyo3::PyResult<()> {
+        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+        let mut holder_1 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+        let result = Member::__set__(
+            unsafe { Member::slot_self(py, &_slf) }?,
+            {
+                #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+                use ::pyo3::impl_::pyclass::Probe as _;
+                ::pyo3::impl_::extract_argument::extract_argument(
+                    unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
+                    &mut holder_0,
+                    "object",
+                )
+            }?,
+            {
+                #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+                use ::pyo3::impl_::pyclass::Probe as _;
+                ::pyo3::impl_::extract_argument::extract_argument(
+                    unsafe {
+                        ::pyo3::impl_::extract_argument::cast_non_null_function_argument(py, arg1)
+                    },
+                    &mut holder_1,
+                    "value",
+                )
+            }?,
+        );
+        ::pyo3::impl_::callback::convert(py, result)
+    }
+}
+
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___delete____(
+        py: ::pyo3::Python,
+        _slf: *mut ::pyo3::ffi::PyObject,
+        arg0: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<()> {
+        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+        let result = Member::__delete__(unsafe { Member::slot_self(py, &_slf) }?, {
+            #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+            use ::pyo3::impl_::pyclass::Probe as _;
+            ::pyo3::impl_::extract_argument::extract_argument(
+                unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
+                &mut holder_0,
+                "object",
+            )
+        }?);
+        ::pyo3::impl_::callback::convert(py, result)
+    }
+}
+
+#[allow(unknown_lints, non_local_definitions)]
+impl ::pyo3::impl_::pyclass::PyMethods<Member>
+    for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
+{
+    fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
+        static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
+            methods: &[],
+            slots: &[
+                ::pyo3::ffi::PyType_Slot {
+                    slot: ::pyo3::ffi::Py_tp_descr_get,
+                    pfunc: {
+                        struct Def;
+
+                        impl
+                            pyo3::impl_::trampoline::MethodDef<
+                                pyo3::impl_::trampoline::descrgetfunc::Func,
+                            > for Def
+                        {
+                            const METH: pyo3::impl_::trampoline::descrgetfunc::Func =
+                                Member::__pymethod___get____;
+                        }
+                        pyo3::impl_::trampoline::descrgetfunc::<Def>
+                    } as ::pyo3::ffi::descrgetfunc as _,
+                },
+                ::pyo3::ffi::PyType_Slot {
+                    slot: ::pyo3::ffi::Py_tp_traverse,
+                    pfunc: Member::__pymethod_traverse__ as ::pyo3::ffi::traverseproc as _,
+                },
+                {
+                    unsafe fn slot_impl(
+                        py: pyo3::Python<'_>,
+                        _slf: *mut pyo3::ffi::PyObject,
+                        attr: *mut pyo3::ffi::PyObject,
+                        value: *mut pyo3::ffi::PyObject,
+                    ) -> pyo3::PyResult<::std::ffi::c_int> {
+                        use ::std::option::Option::*;
+                        use pyo3::impl_::callback::IntoPyCallbackOutput;
+                        if let Some(value) = ::std::ptr::NonNull::new(value) {
+                            unsafe {
+                                Member::__pymethod___set____(py, _slf, attr, value).convert(py)
+                            }
+                        } else {
+                            unsafe { Member::__pymethod___delete____(py, _slf, attr).convert(py) }
+                        }
+                    }
+                    pyo3::ffi::PyType_Slot {
+                        slot: pyo3::ffi::Py_tp_descr_set,
+                        pfunc: {
+                            struct Def;
+
+                            impl
+                                pyo3::impl_::trampoline::MethodDef<
+                                    pyo3::impl_::trampoline::setattrofunc::Func,
+                                > for Def
+                            {
+                                const METH: pyo3::impl_::trampoline::setattrofunc::Func = slot_impl;
+                            }
+                            pyo3::impl_::trampoline::setattrofunc::<Def>
+                        } as pyo3::ffi::descrsetfunc as _,
+                    }
+                },
+            ],
+        };
+        &ITEMS
+    }
+}
+
+#[doc(hidden)]
+#[allow(non_snake_case)]
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___get____(
+        py: ::pyo3::Python<'_>,
+        _slf: *mut ::pyo3::ffi::PyObject,
+        arg0: *mut ::pyo3::ffi::PyObject,
+        _arg1: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
+        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
+        let result = Member::__get__(unsafe { Member::slot_self(py, &_slf) }?, {
+            #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
+            use ::pyo3::impl_::pyclass::Probe as _;
+            ::pyo3::impl_::extract_argument::extract_argument(
+                unsafe {
+                    ::pyo3::impl_::extract_argument::cast_function_argument(
+                        py,
+                        if arg0.is_null() {
+                            ::pyo3::ffi::Py_None()
+                        } else {
+                            arg0
+                        },
+                    )
+                },
+                &mut holder_0,
+                "object",
+            )
+        }?);
+        ::pyo3::impl_::callback::convert(py, result)
+    }
+    pub unsafe extern "C" fn __pymethod_traverse__(
+        slf: *mut ::pyo3::ffi::PyObject,
+        visit: ::pyo3::ffi::visitproc,
+        arg: *mut ::std::ffi::c_void,
+    ) -> ::std::ffi::c_int {
+        unsafe {
+            ::pyo3::impl_::pymethods::_call_traverse::<Member>(
+                slf,
+                Member::__traverse__,
+                visit,
+                arg,
+                Member::__pymethod_traverse__,
+            )
+        }
+    }
 }
 
 #[pyclass(module = "ators._ators", name = "member", from_py_object)]

@@ -7,29 +7,38 @@
 |----------------------------------------------------------------------------*/
 /// Core Ators object and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
+use std::cell::UnsafeCell;
 
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::utils::Mutability;
 
-// FIXME reduce memory footprint
-// See for initializing allocated memory https://docs.rs/init_array/latest/src/init_array/stable.rs.html#71-95
-// But we need to understand how to make it Send and Sync first
-
 pub static ATORS_MEMBERS: &str = "__ators_members__";
 pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
 
-#[pyclass(module = "ators._ators", subclass)]
-pub struct AtorsBase {
+/// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
+/// interior mutability while keeping AtorsBase frozen.
+struct InnerAtors {
     frozen: bool,
     // notification_enabled: bool,  FIXME re-enable once notifications are implemented
     slots: Box<[Option<Py<PyAny>>]>,
 }
+
+#[pyclass(module = "ators._ators", subclass, frozen)]
+pub struct AtorsBase {
+    inner: UnsafeCell<InnerAtors>,
+}
+
+// Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
+// sections, which guarantee mutual exclusion. GC methods (__traverse__, __clear__) are
+// called with Python GC guarantees that ensure exclusive access regardless of whether
+// the GIL is enabled (holds for both GIL and free-threaded builds).
+unsafe impl Sync for AtorsBase {}
 
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug, Clone)]
@@ -62,48 +71,61 @@ impl AtorsBase {
         // We can revisit this later if needed.
         let slots = (0..=slots_count).map(|_| None).collect();
         Ok(Self {
-            frozen: false,
-            // notification_enabled: false, FIXME re-enable once notifications are implemented
-            slots,
+            inner: UnsafeCell::new(InnerAtors {
+                frozen: false,
+                // notification_enabled: false, FIXME re-enable once notifications are implemented
+                slots,
+            }),
         })
     }
 
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-        for slot in self.slots.iter().flatten() {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
+        let inner = unsafe { &*self.inner.get() };
+        for slot in inner.slots.iter().flatten() {
             visit.call(slot)?;
         }
         Ok(())
     }
 
-    pub fn __clear__(&mut self) {
-        for o in self.slots.iter_mut() {
-            o.take();
+    pub fn __clear__(&self) {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
+        let inner = unsafe { &mut *self.inner.get() };
+        for o in inner.slots.iter_mut() {
+            *o = None;
         }
     }
 }
 
-impl AtorsBase {
-    /// Check if a Ators instance is frozen
-    #[inline]
-    pub(crate) fn is_frozen(&self) -> bool {
-        self.frozen
-    }
+#[inline]
+/// Get a reference to the value stored in the slot at index if any.
+/// A critical section is always used to guarantee safe concurrent access.
+pub(crate) fn get_slot<'a, 'py>(
+    object: &'a Bound<'py, AtorsBase>,
+    index: u8,
+) -> Option<&'a Py<PyAny>> {
+    with_critical_section(object.as_any(), || {
+        // Safety: we hold the critical section lock on this object.
+        let inner = unsafe { &*object.get().inner.get() };
+        inner.slots[index as usize].as_ref()
+    })
 }
 
 #[inline]
-/// Get a clone (ref) of the value stored in the slot at index if any
-/// A critical section is always used to guarantee the object can be safely borrowed.
-pub(crate) fn get_slot<'py>(
-    object: &Bound<'py, AtorsBase>,
-    index: u8,
-    py: Python<'py>,
-) -> (Option<Py<PyAny>>, bool) {
+/// Get an owned clone of the value stored in the slot at index if any.
+///
+/// This helper is intended for return-oriented paths such as Member.__get__
+/// where the caller needs an owned Python reference.
+pub(crate) fn get_slot_owned<'py>(object: &Bound<'py, AtorsBase>, index: u8) -> Option<Py<PyAny>> {
+    let py = object.py();
     with_critical_section(object.as_any(), || {
-        let oref = object.borrow();
-        (
-            oref.slots[index as usize].as_ref().map(|v| v.clone_ref(py)),
-            oref.is_frozen(),
-        )
+        // Safety: we hold the critical section lock on this object.
+        let inner = unsafe { &*object.get().inner.get() };
+        inner.slots[index as usize]
+            .as_ref()
+            .map(|value| value.clone_ref(py))
     })
 }
 
@@ -112,11 +134,56 @@ pub(crate) fn get_slot<'py>(
 pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();
     with_critical_section(object.as_any(), || {
-        object.borrow_mut().slots[index as usize].replace(
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe {
+            (*object.get().inner.get()).slots[index as usize].replace(
+                value
+                    .into_py_any(py)
+                    .expect("Unfaillible conversion to Py<PyAny>"),
+            );
+        }
+    })
+}
+
+pub(crate) enum ReplaceSlotOutcome {
+    Replaced(Option<Py<PyAny>>),
+    Unchanged,
+}
+
+#[inline]
+/// Atomically check frozen state, write the slot, and return the previous value.
+///
+/// Returns `Ok(ReplaceSlotOutcome::Replaced(old))` on success where `old` is the
+/// previous slot value.
+/// Returns `Ok(ReplaceSlotOutcome::Unchanged)` if the slot already contains the
+/// exact same Python object.
+/// Returns `Err(())` if the object was frozen at write-time (write was skipped).
+pub(crate) fn replace_slot<'py>(
+    object: &Bound<'py, AtorsBase>,
+    index: u8,
+    value: &Bound<'py, PyAny>,
+) -> Result<ReplaceSlotOutcome, ()> {
+    let py = object.py();
+    with_critical_section(object.as_any(), || {
+        // Safety: we hold the critical section lock on this object.
+        let inner = unsafe { &mut *object.get().inner.get() };
+        if inner.frozen {
+            return Err(());
+        }
+        let old = inner.slots[index as usize].replace(
             value
                 .into_py_any(py)
                 .expect("Unfaillible conversion to Py<PyAny>"),
         );
+        if old
+            .as_ref()
+            .is_some_and(|old| old.as_ptr() == value.as_ptr())
+        {
+            Ok(ReplaceSlotOutcome::Unchanged)
+        } else {
+            Ok(ReplaceSlotOutcome::Replaced(old))
+        }
     })
 }
 
@@ -124,7 +191,11 @@ pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &B
 /// Del the slot value at index
 pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
     with_critical_section(object.as_any(), || {
-        object.borrow_mut().slots[index as usize] = None;
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe {
+            (*object.get().inner.get()).slots[index as usize] = None;
+        }
     })
 }
 
@@ -152,6 +223,15 @@ pub fn init_ators<'py>(self_: &Bound<'py, AtorsBase>, kwargs: &Bound<'py, PyDict
     Ok(())
 }
 
+/// Private helper: set the frozen bit on an AtorsBase object inside a critical section.
+fn do_freeze(obj: &Bound<'_, AtorsBase>) {
+    with_critical_section(obj.as_any(), || {
+        // Safety: we hold the critical section lock on this object. We write through the
+        // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe { (*obj.get().inner.get()).frozen = true };
+    });
+}
+
 #[pyfunction]
 pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
@@ -164,9 +244,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
             match mutability_enum {
                 ClassMutability::Immutable {} => {
                     // All members are immutable, allow freezing
-                    with_critical_section(obj.as_any(), || {
-                        obj.borrow_mut().frozen = true;
-                    });
+                    do_freeze(obj);
                     Ok(())
                 }
                 ClassMutability::Mutable {} => {
@@ -185,7 +263,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
                             .cast_into::<Member>()?;
 
                         // Get the slot index and retrieve the value
-                        if let (Some(slot_value), _) = get_slot(obj, member_obj.get().index(), py) {
+                        if let Some(slot_value) = get_slot(obj, member_obj.get().index()) {
                             let attr_bound = slot_value.bind(py);
                             let attr_mutability =
                                 with_critical_section(ty_mutability_map.as_any(), || {
@@ -204,9 +282,7 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
                     }
 
                     // All inspected attributes are immutable, allow freezing
-                    with_critical_section(obj.as_any(), || {
-                        obj.borrow_mut().frozen = true;
-                    });
+                    do_freeze(obj);
                     Ok(())
                 }
             }
@@ -222,7 +298,8 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
 #[pyfunction]
 pub fn is_frozen<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
     with_critical_section(obj.as_any(), || {
-        return obj.borrow().frozen;
+        // Safety: we hold the critical section lock on this object.
+        unsafe { (*obj.get().inner.get()).frozen }
     })
 }
 

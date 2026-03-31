@@ -28,6 +28,11 @@ pub enum PreGetattrBehavior {
 }
 
 impl PreGetattrBehavior {
+    #[inline]
+    pub(crate) fn is_noop(&self) -> bool {
+        matches!(self, Self::NoOp {})
+    }
+
     /// Behavior to execute before getting a member value.
     // new is unvalidated at this stage
     pub(crate) fn pre_get<'py>(
@@ -77,6 +82,11 @@ pub enum PostGetattrBehavior {
 }
 
 impl PostGetattrBehavior {
+    #[inline]
+    pub(crate) fn is_noop(&self) -> bool {
+        matches!(self, Self::NoOp {})
+    }
+
     /// Behavior to execute after getting a member value. The value cannot be modified.
     // Value cannot be modified this is a design choice
     pub(crate) fn post_get<'py>(

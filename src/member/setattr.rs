@@ -31,13 +31,18 @@ pub enum PreSetattrBehavior {
 }
 
 impl PreSetattrBehavior {
+    #[inline]
+    pub(crate) fn is_noop(&self) -> bool {
+        matches!(self, Self::NoOp {})
+    }
+
     /// Execute the pre-setattr behavior, returning an error if the behavior
     /// does not allow the setattr to proceed.
     pub(crate) fn pre_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        current: &Option<Py<PyAny>>,
+        current: &Option<&Py<PyAny>>,
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
@@ -55,7 +60,6 @@ impl PreSetattrBehavior {
             }
             Self::CallMemberObjectValue { callable } => {
                 let py = member.py();
-                println!("Calling");
                 callable
                     .0
                     .bind(py)
@@ -63,7 +67,7 @@ impl PreSetattrBehavior {
                     .call1((
                         &member.name,
                         object,
-                        current.as_ref().unwrap_or(&py.None()).bind(py),
+                        current.map_or(&py.None(), |v| v).bind(py),
                     ))
                     .map(|_| ())
             }
@@ -105,12 +109,17 @@ pub enum PostSetattrBehavior {
 }
 
 impl PostSetattrBehavior {
+    #[inline]
+    pub(crate) fn is_noop(&self) -> bool {
+        matches!(self, Self::NoOp {})
+    }
+
     /// Behavior to execute after setting a member value.
     pub(crate) fn post_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
         object: &Bound<'py, crate::core::AtorsBase>,
-        old: &Option<Py<PyAny>>,
+        old: &Option<&Py<PyAny>>,
         new: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {
