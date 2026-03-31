@@ -197,3 +197,31 @@ def test_observable_is_inherited():
     observe(b, "a", lambda change: hits.append(change.newvalue))
     b.a = 5
     assert hits == [5]
+
+
+def test_observer_not_called_when_value_unchanged():
+    calls = []
+
+    def callback(change):
+        calls.append(change)
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A()
+    observe(a, "a", callback)
+
+    # Setting to a new value triggers the observer
+    a.a = 1
+    assert len(calls) == 1
+
+    # Setting the exact same object again should not trigger the observer
+    val = object()
+    a.a = val
+    assert len(calls) == 2
+    a.a = val
+    assert len(calls) == 2  # no new call since same object
+
+    # Setting a different value triggers again
+    a.a = 2
+    assert len(calls) == 3
