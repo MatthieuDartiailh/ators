@@ -678,18 +678,32 @@ impl TypeValidator {
                 }
             }
             Self::Set { item: Some(item) } => {
-                // FIXME add a fast path for ATorsSet with matching object and memeber
+                if let Ok(ators_set) = value.cast::<crate::containers::AtorsSet>()
+                    && ators_set.get().matches_assignment_context(name, object)
+                {
+                    return Ok(
+                        crate::containers::AtorsSet::clone_for_assignment(ators_set)?.into_any(),
+                    );
+                }
                 if let Ok(set) = value.cast::<pyo3::types::PySet>() {
                     let py = value.py();
-                    let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(set.len());
+                    // Build the output container directly without an intermediate Vec.
+                    // If validation fails the partially-built container is abandoned.
+                    let aset = crate::containers::AtorsSet::new_empty(
+                        py,
+                        (*item.0).clone(),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let set_bound = aset.cast::<PySet>()?;
                     for (index, titem) in set.iter().enumerate() {
                         match item.validate(name, object, &titem) {
-                            Ok(v) => validated_items.push(v),
+                            Ok(v) => set_bound.add(&v)?,
                             Err(cause) => {
                                 if let Some(m) = name
                                     && let Some(o) = object
                                 {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate item {} for the member {} of {}.",
@@ -700,7 +714,7 @@ impl TypeValidator {
                                         cause,
                                     ));
                                 } else {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate item {index}.",
@@ -711,16 +725,7 @@ impl TypeValidator {
                             }
                         }
                     }
-                    Ok({
-                        crate::containers::AtorsSet::new(
-                            py,
-                            (*item.0).clone(),
-                            name,
-                            object.map(|m| m.clone().unbind()),
-                            validated_items,
-                        )?
-                        .into_any()
-                    })
+                    Ok(aset.into_any())
                 } else {
                     validation_error!("set", name, object, value)
                 }
@@ -734,18 +739,32 @@ impl TypeValidator {
                 }
             }
             Self::List { item: Some(item) } => {
-                // FIXME add a fast path for AtorsList with matching object and member
+                if let Ok(ators_list) = value.cast::<crate::containers::AtorsList>()
+                    && ators_list.get().matches_assignment_context(name, object)
+                {
+                    return Ok(
+                        crate::containers::AtorsList::clone_for_assignment(ators_list)?.into_any(),
+                    );
+                }
                 if let Ok(list) = value.cast::<pyo3::types::PyList>() {
                     let py = value.py();
-                    let mut validated_items: Vec<Bound<'_, PyAny>> = Vec::with_capacity(list.len());
+                    // Build the output container directly without an intermediate Vec.
+                    // If validation fails the partially-built container is abandoned.
+                    let alist = crate::containers::AtorsList::new_empty(
+                        py,
+                        (*item.0).clone(),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let list_bound = alist.cast::<PyList>()?;
                     for (index, titem) in list.iter().enumerate() {
                         match item.validate(name, object, &titem) {
-                            Ok(v) => validated_items.push(v),
+                            Ok(v) => list_bound.append(&v)?,
                             Err(cause) => {
                                 if let Some(m) = name
                                     && let Some(o) = object
                                 {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate item {} for the member {} of {}.",
@@ -756,7 +775,7 @@ impl TypeValidator {
                                         cause,
                                     ));
                                 } else {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate item {index}.",
@@ -767,16 +786,7 @@ impl TypeValidator {
                             }
                         }
                     }
-                    Ok({
-                        crate::containers::AtorsList::new(
-                            py,
-                            (*item.0).clone(),
-                            name,
-                            object.map(|m| m.clone().unbind()),
-                            validated_items,
-                        )?
-                        .into_any()
-                    })
+                    Ok(alist.into_any())
                 } else {
                     validation_error!("list", name, object, value)
                 }
@@ -792,21 +802,36 @@ impl TypeValidator {
             Self::Dict {
                 items: Some((key_v, val_v)),
             } => {
-                // FIXME add a fast path for AtorsDict with matching object and memeber
+                if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDict>()
+                    && ators_dict.get().matches_assignment_context(name, object)
+                {
+                    return Ok(
+                        crate::containers::AtorsDict::clone_for_assignment(ators_dict)?.into_any(),
+                    );
+                }
                 if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
-                    let mut validated_items: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> =
-                        Vec::with_capacity(dict.len());
+                    let py = value.py();
+                    // Build the output container directly without an intermediate Vec.
+                    // If validation fails the partially-built container is abandoned.
+                    let adict = crate::containers::AtorsDict::new_empty(
+                        py,
+                        (*key_v.0).clone(),
+                        (*val_v.0).clone(),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = adict.cast::<PyDict>()?;
                     for (tk, tv) in dict.iter() {
                         match (
                             key_v.validate(name, object, &tk),
                             val_v.validate(name, object, &tv),
                         ) {
-                            (Ok(k), Ok(v)) => validated_items.push((k, v)),
-                            (Err(err), __ior__) => {
+                            (Ok(k), Ok(v)) => dict_bound.set_item(&k, &v)?,
+                            (Err(err), _) => {
                                 if let Some(m) = name
                                     && let Some(o) = object
                                 {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate key '{}' for the member {} of {}.",
@@ -817,7 +842,7 @@ impl TypeValidator {
                                         err,
                                     ));
                                 } else {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate key '{}'.",
@@ -831,7 +856,7 @@ impl TypeValidator {
                                 if let Some(m) = name
                                     && let Some(o) = object
                                 {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate value '{}' with key '{}' for the member {} of {}.",
@@ -843,7 +868,7 @@ impl TypeValidator {
                                         err,
                                     ));
                                 } else {
-                                    return Err(crate::utils::err_with_cause(
+                                    return Err(err_with_cause(
                                         value.py(),
                                         pyo3::exceptions::PyTypeError::new_err(format!(
                                             "Failed to validate value '{}' with key '{}'.",
@@ -856,18 +881,7 @@ impl TypeValidator {
                             }
                         }
                     }
-                    Ok({
-                        let py = value.py();
-                        crate::containers::AtorsDict::new(
-                            py,
-                            (*key_v.0).clone(),
-                            (*val_v.0).clone(),
-                            name,
-                            object.map(|m| m.clone().unbind()),
-                            validated_items,
-                        )?
-                        .into_any()
-                    })
+                    Ok(adict.into_any())
                 } else {
                     validation_error!("dict", name, object, value)
                 }
