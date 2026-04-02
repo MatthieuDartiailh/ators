@@ -8,7 +8,8 @@
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
     core::{
-        AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, replace_slot, set_slot,
+        AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, notify_member_change,
+        replace_slot, set_slot,
     },
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
@@ -451,10 +452,17 @@ impl Member {
             }
         };
 
-        if let Some(old_on_write) = old_on_write
-            && !self_.post_setattr.is_noop()
-        {
-            run_post_set(&self_, object, &old_on_write.as_ref(), &new)?;
+        if let Some(old_on_write) = old_on_write {
+            if !self_.post_setattr.is_noop() {
+                run_post_set(&self_, object, &old_on_write.as_ref(), &new)?;
+            }
+
+            notify_member_change(
+                object,
+                &self_.name,
+                old_on_write.unwrap_or_else(|| py.None()),
+                new.unbind(),
+            )?;
         }
 
         Ok(())

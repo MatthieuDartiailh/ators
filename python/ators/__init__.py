@@ -9,8 +9,11 @@
 
 from ._ators import (
     AtorsBase as _Base,
+    AtorsChange,
     Member,
     add_generic_type_attributes,
+    disable_notifications,
+    enable_notifications,
     freeze,
     get_member,
     get_member_customization_tool,
@@ -19,8 +22,11 @@ from ._ators import (
     get_members_by_tag_and_value,
     init_ators as _init_ators,
     is_frozen,
+    is_notifications_enabled,
     member,
+    observe,
     register_type_mutability_info,
+    unobserve,
 )
 from ._meta import AtorsMeta as _Meta
 
@@ -81,8 +87,11 @@ class Ators(_Base, metaclass=_Meta):
 
 __all__ = [
     "Ators",
+    "AtorsChange",
     "Member",
     "add_generic_type_attributes",
+    "disable_notifications",
+    "enable_notifications",
     "freeze",
     "get_member",
     "get_member_customization_tool",
@@ -90,6 +99,9 @@ __all__ = [
     "get_members_by_tag",
     "get_members_by_tag_and_value",
     "is_frozen",
+    "is_notifications_enabled",
     "member",
+    "observe",
     "register_type_mutability_info",
+    "unobserve",
 ]

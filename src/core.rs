@@ -15,17 +15,23 @@ use std::cell::UnsafeCell;
 
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
+use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
 pub static ATORS_MEMBERS: &str = "__ators_members__";
 pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
+pub static ATORS_OBSERVABLE: &str = "__ators_observable__";
 
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
 struct InnerAtors {
     frozen: bool,
-    // notification_enabled: bool,  FIXME re-enable once notifications are implemented
+    notification_enabled: bool,
+    /// Whether the class this instance belongs to is observable.
+    /// Set once at construction time and never mutated thereafter;
+    /// it may therefore be read without holding the critical section.
+    is_observable: bool,
     slots: Box<[Option<Py<PyAny>>]>,
 }
 
@@ -59,6 +65,14 @@ impl AtorsBase {
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
         let slots_count = cls.getattr(intern!(py, ATORS_MEMBERS))?.len()?;
+        // Determine observability at instantiation time by checking the class attribute.
+        // The result is cached on the instance (is_observable field) and never mutated,
+        // so later accesses can skip the critical section.
+        let is_observable = cls
+            .getattr(ATORS_OBSERVABLE)
+            .ok()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(false);
         if slots_count > (u8::MAX as usize) {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The class {} has more than 255 members which is not supported.",
@@ -69,11 +83,17 @@ impl AtorsBase {
         // when limiting ourselves to 255 members but it is the easiest way to have
         // a fixed size array without using unsafe code.
         // We can revisit this later if needed.
-        let slots = (0..=slots_count).map(|_| None).collect();
+        let total_slots = slots_count + usize::from(is_observable);
+        let mut slots: Box<[Option<Py<PyAny>>]> = (0..total_slots).map(|_| None).collect();
+        if is_observable {
+            let pool = Bound::new(py, ObserverPool::new())?.into_any().unbind();
+            slots[0] = Some(pool);
+        }
         Ok(Self {
             inner: UnsafeCell::new(InnerAtors {
                 frozen: false,
-                // notification_enabled: false, FIXME re-enable once notifications are implemented
+                notification_enabled: is_observable,
+                is_observable,
                 slots,
             }),
         })
@@ -197,6 +217,89 @@ pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
             (*object.get().inner.get()).slots[index as usize] = None;
         }
     })
+}
+
+/// Check whether an instance belongs to an observable class.
+///
+/// This reads `is_observable` directly from `InnerAtors` **without** acquiring the critical
+/// section. This is safe because `is_observable` is set once at construction time and is
+/// never mutated afterwards.
+#[inline]
+pub(crate) fn instance_is_observable(obj: &Bound<'_, AtorsBase>) -> bool {
+    // Safety: is_observable is written exactly once (in py_new) and never modified
+    // afterwards, so a relaxed read without the critical section is safe here.
+    unsafe { (*obj.get().inner.get()).is_observable }
+}
+
+pub(crate) fn notifications_enabled(obj: &Bound<'_, AtorsBase>) -> bool {
+    with_critical_section(obj.as_any(), || {
+        // Safety: we hold the critical section lock on this object.
+        unsafe { (*obj.get().inner.get()).notification_enabled }
+    })
+}
+
+/// Return a borrowed reference to the observer pool for an observable instance.
+///
+/// Callers must have verified that `instance_is_observable(obj)` is `true` before calling
+/// this function. When the instance is observable, `slots[0]` is guaranteed to hold the
+/// `ObserverPool` for the entire lifetime of the object (set at construction, never replaced).
+///
+/// No critical section is needed here because `slots[0]` is written exactly once (in
+/// `py_new`) and never mutated afterwards; it may therefore be dereferenced without locking.
+pub(crate) fn get_observer_pool<'a, 'py>(
+    obj: &'a Bound<'py, AtorsBase>,
+) -> &'a Bound<'py, ObserverPool> {
+    let py = obj.py();
+    // Safety:
+    // - is_observable is true (caller-verified), so slots[0] is always Some(ObserverPool).
+    // - slots[0] is set once at construction and never mutated; reading without CS is safe.
+    // - The returned reference is bounded by 'a (the borrow of obj), which keeps AtorsBase alive,
+    //   ensuring the Py<PyAny> in slots[0] remains valid for the reference's lifetime.
+    unsafe {
+        let inner: &'a InnerAtors = &*obj.get().inner.get();
+        let pool: &'a Py<PyAny> = inner.slots[0].as_ref().unwrap_unchecked();
+        pool.bind(py).cast_unchecked::<ObserverPool>()
+    }
+}
+
+pub(crate) fn notify_member_change<'py>(
+    obj: &Bound<'py, AtorsBase>,
+    member_name: &str,
+    oldvalue: Py<PyAny>,
+    newvalue: Py<PyAny>,
+) -> PyResult<()> {
+    // Fast path: check is_observable without a critical section.
+    // is_observable is set once at construction and never mutated.
+    if !instance_is_observable(obj) {
+        return Ok(());
+    }
+
+    // Check notification_enabled under a single critical section.
+    if !notifications_enabled(obj) {
+        return Ok(());
+    }
+
+    // slots[0] is immutable after construction: no CS needed to get a reference to the pool.
+    let pool = get_observer_pool(obj);
+    let py = obj.py();
+    let change = Bound::new(
+        py,
+        AtorsChange::new(
+            obj.clone().unbind(),
+            member_name.to_string(),
+            oldvalue,
+            newvalue,
+        ),
+    )?;
+    let errors = ObserverPool::fire(pool, member_name, &change)?;
+    if !errors.is_empty() {
+        let exception_group = py
+            .import(intern!(py, "builtins"))?
+            .getattr(intern!(py, "ExceptionGroup"))?
+            .call1(("errors in observers", errors))?;
+        return Err(pyo3::PyErr::from_value(exception_group));
+    }
+    Ok(())
 }
 
 // FIXME move once #[init] has landed
@@ -375,24 +478,76 @@ pub fn get_member_customization_tool<'py>(
     }
 }
 
-// FIXME re-enable once notification are implemented
-// #[pyfunction]
-// pub fn enable_notification<'py>(obj: &Bound<'py, AtorsBase>) {
-//     with_critical_section(obj.as_any(), || {
-//         obj.borrow_mut().notification_enabled = true;
-//     });
-// }
+#[pyfunction]
+pub fn observe<'py>(
+    obj: &Bound<'py, AtorsBase>,
+    member_name: String,
+    callback: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    if !instance_is_observable(obj) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Cannot register observers on a non-observable class",
+        ));
+    }
 
-// #[pyfunction]
-// pub fn disable_notification<'py>(obj: &Bound<'py, AtorsBase>) {
-//     with_critical_section(obj.as_any(), || {
-//         obj.borrow_mut().notification_enabled = false;
-//     });
-// }
+    let obj_type = obj.get_type();
+    let members_obj = obj_type.getattr(ATORS_MEMBERS)?;
+    let members = members_obj.cast::<PyDict>()?;
+    if !members.contains(&member_name)? {
+        return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "Unknown member '{member_name}'"
+        )));
+    }
 
-// #[pyfunction]
-// pub fn is_notification_enabled<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
-//     with_critical_section(obj.as_any(), || {
-//         return obj.borrow().notification_enabled;
-//     })
-// }
+    let pool = get_observer_pool(obj);
+    ObserverPool::add(pool, &member_name, callback)
+}
+
+#[pyfunction]
+pub fn unobserve<'py>(
+    obj: &Bound<'py, AtorsBase>,
+    member_name: String,
+    callback: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    if !instance_is_observable(obj) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Cannot unregister observers on a non-observable class",
+        ));
+    }
+
+    let pool = get_observer_pool(obj);
+    ObserverPool::remove(pool, &member_name, callback)
+}
+
+#[pyfunction]
+pub fn enable_notifications<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
+    if !instance_is_observable(obj) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Cannot enable notifications on a non-observable class",
+        ));
+    }
+
+    with_critical_section(obj.as_any(), || {
+        // Safety: we hold the critical section lock on this object. We write through
+        // the raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
+        unsafe {
+            (*obj.get().inner.get()).notification_enabled = true;
+        }
+    });
+    Ok(())
+}
+
+#[pyfunction]
+pub fn disable_notifications<'py>(obj: &Bound<'py, AtorsBase>) {
+    with_critical_section(obj.as_any(), || {
+        // Safety: we hold the critical section lock on this object.
+        unsafe {
+            (*obj.get().inner.get()).notification_enabled = false;
+        }
+    });
+}
+
+#[pyfunction]
+pub fn is_notifications_enabled<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
+    notifications_enabled(obj)
+}
