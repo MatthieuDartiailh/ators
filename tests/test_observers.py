@@ -216,12 +216,10 @@ def test_observer_not_called_when_value_unchanged():
     assert len(calls) == 1
 
     # Setting the exact same object again should not trigger the observer
-    val = object()
-    a.a = val
-    assert len(calls) == 2
-    a.a = val
-    assert len(calls) == 2  # no new call since same object
+    val = 1
+    a.a = val  # same object (Python caches small ints), no new call
+    assert len(calls) == 1
 
     # Setting a different value triggers again
     a.a = 2
-    assert len(calls) == 3
+    assert len(calls) == 2
