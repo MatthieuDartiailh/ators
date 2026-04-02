@@ -5,17 +5,18 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Run the shared list container benchmark family with pyperf."""
+"""Run shared validation benchmark families with pyperf."""
 
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 if __name__ == "__main__":
-    from benchmarks.shared.pyperf_frontend import run_container_cases
+    from benchmarks.shared.pyperf_frontend import run_benchmark_cases
+    from benchmarks.shared.validation_registry import VALIDATION_FAMILIES
 
-    run_container_cases(families=["list"])
+    run_benchmark_cases(families=VALIDATION_FAMILIES)

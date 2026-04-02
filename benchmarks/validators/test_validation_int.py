@@ -7,49 +7,15 @@
 # --------------------------------------------------------------------------------------
 """Benchmarks for int field validation."""
 
-import importlib.util
-
 import pytest
 
-ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
+from benchmarks.validators._shared_validation import (
+    run_validation_benchmark,
+    validation_case_params,
+)
 
 
 @pytest.mark.benchmark(group="validation_int")
-def test_benchmark_validation_int_py(benchmark, py_slotted_typed):
-    """Benchmark Python baseline int field (no validation)."""
-
-    def int_set_ops():
-        py_slotted_typed._field = 42
-
-    benchmark(int_set_ops)
-
-
-@pytest.mark.benchmark(group="validation_int")
-def test_benchmark_validation_int_ators(benchmark, ators_typed):
-    """Benchmark Ators int field validation overhead."""
-
-    def int_set_ops():
-        ators_typed.int_field = 42
-
-    benchmark(int_set_ops)
-
-
-@pytest.mark.benchmark(group="validation_int")
-def test_benchmark_validation_int_property(benchmark, property_typed):
-    """Benchmark property-based int field validation overhead."""
-
-    def int_set_ops():
-        property_typed.int_field = 42
-
-    benchmark(int_set_ops)
-
-
-@pytest.mark.skipif(not ATOM_AVAILABLE, reason="Atom not available")
-@pytest.mark.benchmark(group="validation_int")
-def test_benchmark_validation_int_atom(benchmark, atom_typed):
-    """Benchmark Atom int field validation overhead."""
-
-    def int_set_ops():
-        atom_typed.int_field = 42
-
-    benchmark(int_set_ops)
+@pytest.mark.parametrize("case", validation_case_params("validation_int"))
+def test_benchmark_validation_int(benchmark, case):
+    run_validation_benchmark(benchmark, case)

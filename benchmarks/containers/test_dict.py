@@ -5,17 +5,14 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Benchmarks for str field validation."""
+"""Benchmark shared Rust-backed dict mutation cases through pytest-benchmark."""
 
 import pytest
 
-from benchmarks.validators._shared_validation import (
-    run_validation_benchmark,
-    validation_case_params,
-)
+from benchmarks.shared.pytest_frontend import benchmark_case_params, run_pytest_benchmark
 
 
-@pytest.mark.benchmark(group="validation_str")
-@pytest.mark.parametrize("case", validation_case_params("validation_str"))
-def test_benchmark_validation_str(benchmark, case):
-    run_validation_benchmark(benchmark, case)
+@pytest.mark.benchmark(group="container_dict")
+@pytest.mark.parametrize("case", benchmark_case_params(families=["dict"]))
+def test_benchmark_container_dict(benchmark, case):
+    run_pytest_benchmark(benchmark, case)

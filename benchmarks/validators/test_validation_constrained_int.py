@@ -7,38 +7,15 @@
 # --------------------------------------------------------------------------------------
 """Benchmarks for constrained int field validation."""
 
-import importlib.util
-
 import pytest
 
-ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
+from benchmarks.validators._shared_validation import (
+    run_validation_benchmark,
+    validation_case_params,
+)
 
 
 @pytest.mark.benchmark(group="validation_constrained_int")
-def test_benchmark_validation_constrained_int_py(benchmark, py_slotted_typed):
-    """Benchmark Python baseline constrained int field (no validation)."""
-
-    def constrained_set_ops():
-        py_slotted_typed._field = 50
-
-    benchmark(constrained_set_ops)
-
-
-@pytest.mark.benchmark(group="validation_constrained_int")
-def test_benchmark_validation_constrained_int_property(benchmark, property_typed):
-    """Benchmark property-based constrained int field with custom validator."""
-
-    def constrained_set_ops():
-        property_typed.constrained_int_field = 50
-
-    benchmark(constrained_set_ops)
-
-
-@pytest.mark.benchmark(group="validation_constrained_int")
-def test_benchmark_validation_constrained_int_ators(benchmark, ators_typed):
-    """Benchmark Ators constrained int field validation overhead."""
-
-    def constrained_set_ops():
-        ators_typed.constrained_int_field = 50
-
-    benchmark(constrained_set_ops)
+@pytest.mark.parametrize("case", validation_case_params("validation_constrained_int"))
+def test_benchmark_validation_constrained_int(benchmark, case):
+    run_validation_benchmark(benchmark, case)
