@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core Ators object and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
@@ -238,33 +238,28 @@ pub(crate) fn notifications_enabled(obj: &Bound<'_, AtorsBase>) -> bool {
     })
 }
 
-/// Clone the observer pool `Py` from `slots[0]`.
-///
-/// # Safety
-///
-/// - The caller must hold the critical section for the object that owns `inner`.
-/// - `is_observable` must be `true` for this object, which by construction guarantees
-///   that `slots[0]` is `Some(ObserverPool)` and is never `None` for the object's lifetime.
-#[inline]
-unsafe fn clone_pool_py(inner: &InnerAtors, py: Python<'_>) -> Py<PyAny> {
-    // Safety: caller has verified is_observable (see doc), so slots[0] is always Some.
-    unsafe { inner.slots[0].as_ref().unwrap_unchecked().clone_ref(py) }
-}
-
-/// Return the observer pool for an observable instance.
+/// Return a borrowed reference to the observer pool for an observable instance.
 ///
 /// Callers must have verified that `instance_is_observable(obj)` is `true` before calling
 /// this function. When the instance is observable, `slots[0]` is guaranteed to hold the
 /// `ObserverPool` for the entire lifetime of the object (set at construction, never replaced).
-pub(crate) fn get_observer_pool<'py>(obj: &Bound<'py, AtorsBase>) -> Bound<'py, ObserverPool> {
+///
+/// No critical section is needed here because `slots[0]` is written exactly once (in
+/// `py_new`) and never mutated afterwards; it may therefore be dereferenced without locking.
+pub(crate) fn get_observer_pool<'a, 'py>(
+    obj: &'a Bound<'py, AtorsBase>,
+) -> &'a Bound<'py, ObserverPool> {
     let py = obj.py();
-    let pool_py = with_critical_section(obj.as_any(), || {
-        // Safety: we hold the critical section lock on this object, and the caller
-        // has verified is_observable is true.
-        unsafe { clone_pool_py(&*obj.get().inner.get(), py) }
-    });
-    // Safety: slots[0] is always an ObserverPool when is_observable is true.
-    unsafe { pool_py.into_bound(py).cast_into_unchecked::<ObserverPool>() }
+    // Safety:
+    // - is_observable is true (caller-verified), so slots[0] is always Some(ObserverPool).
+    // - slots[0] is set once at construction and never mutated; reading without CS is safe.
+    // - The returned reference is bounded by 'a (the borrow of obj), which keeps AtorsBase alive,
+    //   ensuring the Py<PyAny> in slots[0] remains valid for the reference's lifetime.
+    unsafe {
+        let inner: &'a InnerAtors = &*obj.get().inner.get();
+        let pool: &'a Py<PyAny> = inner.slots[0].as_ref().unwrap_unchecked();
+        pool.bind(py).cast_unchecked::<ObserverPool>()
+    }
 }
 
 pub(crate) fn notify_member_change<'py>(
@@ -279,36 +274,25 @@ pub(crate) fn notify_member_change<'py>(
         return Ok(());
     }
 
-    // Single critical section: check notification_enabled and fetch the pool pointer
-    // atomically. Returns None when notifications are currently disabled.
-    let py = obj.py();
-    let pool_opt = with_critical_section(obj.as_any(), || {
-        // Safety: we hold the critical section lock on this object.
-        unsafe {
-            let inner = &*obj.get().inner.get();
-            if inner.notification_enabled {
-                Some(clone_pool_py(inner, py))
-            } else {
-                None
-            }
-        }
-    });
+    // Check notification_enabled under a single critical section.
+    if !notifications_enabled(obj) {
+        return Ok(());
+    }
 
-    if let Some(pool_py) = pool_opt {
-        // Safety: slots[0] is always an ObserverPool when is_observable is true.
-        let pool = unsafe { pool_py.into_bound(py).cast_into_unchecked::<ObserverPool>() };
-        let change = Bound::new(
-            py,
-            AtorsChange::new(obj.clone().unbind(), member_name.to_string(), oldvalue, newvalue),
-        )?;
-        let errors = ObserverPool::fire(&pool, member_name, &change)?;
-        if !errors.is_empty() {
-            let exception_group = py
-                .import(intern!(py, "builtins"))?
-                .getattr(intern!(py, "ExceptionGroup"))?
-                .call1(("errors in observers", errors))?;
-            return Err(pyo3::PyErr::from_value(exception_group));
-        }
+    // slots[0] is immutable after construction: no CS needed to get a reference to the pool.
+    let pool = get_observer_pool(obj);
+    let py = obj.py();
+    let change = Bound::new(
+        py,
+        AtorsChange::new(obj.clone().unbind(), member_name.to_string(), oldvalue, newvalue),
+    )?;
+    let errors = ObserverPool::fire(pool, member_name, &change)?;
+    if !errors.is_empty() {
+        let exception_group = py
+            .import(intern!(py, "builtins"))?
+            .getattr(intern!(py, "ExceptionGroup"))?
+            .call1(("errors in observers", errors))?;
+        return Err(pyo3::PyErr::from_value(exception_group));
     }
     Ok(())
 }
@@ -511,7 +495,7 @@ pub fn observe<'py>(
     }
 
     let pool = get_observer_pool(obj);
-    ObserverPool::add(&pool, &member_name, callback)
+    ObserverPool::add(pool, &member_name, callback)
 }
 
 #[pyfunction]
@@ -527,7 +511,7 @@ pub fn unobserve<'py>(
     }
 
     let pool = get_observer_pool(obj);
-    ObserverPool::remove(&pool, &member_name, callback)
+    ObserverPool::remove(pool, &member_name, callback)
 }
 
 #[pyfunction]
