@@ -157,6 +157,67 @@ def test_dict_container_validation(
     assert ators_dict_object.a == expected
 
 
+def test_list_same_owner_member_reassignment_copies_container():
+    from ators import Ators
+
+    class A(Ators):
+        a: list[int]
+
+    obj = A(a=[1, 2, 3])
+    original = obj.a
+
+    obj.a = original
+
+    assert obj.a == [1, 2, 3]
+    assert obj.a is not original
+    assert type(obj.a) is type(original)
+
+
+def test_set_same_owner_member_reassignment_copies_container():
+    from ators import Ators
+
+    class A(Ators):
+        a: set[int]
+
+    obj = A(a={1, 2, 3})
+    original = obj.a
+
+    obj.a = original
+
+    assert obj.a == {1, 2, 3}
+    assert obj.a is not original
+    assert type(obj.a) is type(original)
+
+
+def test_dict_same_owner_member_reassignment_copies_container():
+    from ators import Ators
+
+    class A(Ators):
+        a: dict[str, int]
+
+    obj = A(a={"a": 1, "b": 2})
+    original = obj.a
+
+    obj.a = original
+
+    assert obj.a == {"a": 1, "b": 2}
+    assert obj.a is not original
+    assert type(obj.a) is type(original)
+
+
+def test_list_reassignment_to_other_member_still_validates():
+    from ators import Ators
+
+    class A(Ators):
+        ints: list[int]
+        strs: list[str]
+
+    obj = A(ints=[1, 2], strs=["x", "y"])
+
+    with pytest.raises(TypeError):
+        obj.strs = obj.ints
+
+
 # def test_ators_dict_pickling(ators_dict_object):
 #     dumped = pickle.dumps(ators_dict_object.a)
 #     loaded = pickle.loads(dumped)

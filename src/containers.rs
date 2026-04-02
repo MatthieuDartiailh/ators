@@ -33,26 +33,28 @@ pub struct AtorsList {
 unsafe impl Sync for AtorsList {}
 
 impl AtorsList {
-    pub(crate) fn new<'py>(
+    /// Create an empty, owner-bound `AtorsList` with the given validator.
+    ///
+    /// Note on pre-allocation: `PyList_New(n)` creates a plain `PyList`; a
+    /// subtype cannot be seeded with it.  `PyList_Resize` is CPython-private.
+    /// `ffi::PyList_Extend` (public since Python 3.13, available via PyO3 ffi)
+    /// would give exact-capacity extension from a pre-built source list, but
+    /// that still requires an intermediate container.  For typical small sizes
+    /// `PyList_Append`'s amortised growth is sufficient.
+    pub(crate) fn new_empty<'py>(
         py: Python<'py>,
         validator: Validator,
         member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
-        values: Vec<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, AtorsList>> {
-        let n = Bound::new(
+        Bound::new(
             py,
             AtorsList {
                 validator,
                 member_name: member_name.map(|m| m.to_string()),
                 object: UnsafeCell::new(object),
             },
-        )?
-        .cast_into::<PyList>()?;
-        for v in values.into_iter() {
-            n.append(v)?;
-        }
-        Ok(n.cast_into::<AtorsList>()?)
+        )
     }
 
     fn validate_item<'py>(
@@ -77,12 +79,53 @@ impl AtorsList {
         let m = self.member_name.as_deref();
         // Safety: same as validate_item.
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        let mut validated_items = Vec::new();
+        // Pre-allocate if the source supports __len__ (e.g. list, tuple, set)
+        // so we only do at most one Rust Vec realloc regardless of input type.
+        let mut validated_items = Vec::with_capacity(value.len().unwrap_or(0));
         for item in value.try_iter()? {
             let valid = self.validator.validate(m, o, &item?)?;
             validated_items.push(valid);
         }
         PyList::new(py, validated_items)
+    }
+
+    pub(crate) fn matches_assignment_context<'py>(
+        &self,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) -> bool {
+        self.member_name.as_deref() == member_name
+            && match (unsafe { &*self.object.get() }.as_ref(), object) {
+                (None, None) => true,
+                (Some(stored), Some(current)) => {
+                    stored.bind(current.py()).as_ptr() == current.as_ptr()
+                }
+                _ => false,
+            }
+    }
+
+    pub(crate) fn clone_for_assignment<'py>(
+        source: &Bound<'py, AtorsList>,
+    ) -> PyResult<Bound<'py, AtorsList>> {
+        let list = source.get();
+        let alist = AtorsList::new_empty(
+            source.py(),
+            list.validator.clone(),
+            list.member_name.as_deref(),
+            unsafe { &*list.object.get() }
+                .as_ref()
+                .map(|object| object.clone_ref(source.py())),
+        )?;
+        // Iterate the source list and append items directly without an intermediate Vec.
+        // Cast is unchecked on the source since AtorsList extends PyList and cast is guaranteed safe.
+        // Cast is checked when building to ensure the result is properly typed.
+        // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
+        let py_list = unsafe { source.cast_unchecked::<PyList>() };
+        let alist_as_list = alist.cast::<PyList>()?;
+        for item in py_list.iter() {
+            alist_as_list.append(&item)?;
+        }
+        Ok(alist)
     }
 }
 
@@ -137,13 +180,14 @@ impl AtorsList {
     }
 
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
-        let py = other.py();
-        let valid =
-            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, other))?;
-        self_
-            .py_super()?
-            .call_method1(intern!(py, "extend"), (valid,))
-            .map(|_| ())
+        let valid = with_critical_section(self_.as_any(), || {
+            self_.get().validate_iterable(other.py(), other)
+        })?;
+        let list = self_.cast::<PyList>()?;
+        for item in valid.iter() {
+            list.append(&item)?;
+        }
+        Ok(())
     }
 
     pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
@@ -197,26 +241,26 @@ pub struct AtorsSet {
 unsafe impl Sync for AtorsSet {}
 
 impl AtorsSet {
-    pub(crate) fn new<'py>(
+    /// Create an empty, owner-bound `AtorsSet` with the given validator.
+    ///
+    /// Note on pre-allocation: `_PySet_Presized` is CPython-private and not
+    /// exposed in PyO3's ffi bindings.  `PySet_New(iterable)` creates a plain
+    /// `PySet`, not a subtype.  For typical small container sizes iterative
+    /// `PySet_Add` is sufficient.
+    pub(crate) fn new_empty<'py>(
         py: Python<'py>,
         validator: Validator,
         member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
-        values: Vec<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, AtorsSet>> {
-        let n = Bound::new(
+        Bound::new(
             py,
             AtorsSet {
                 validator,
                 member_name: member_name.map(|m| m.to_string()),
                 object: UnsafeCell::new(object),
             },
-        )?
-        .cast_into::<PySet>()?;
-        for v in values.into_iter() {
-            n.add(v)?;
-        }
-        Ok(n.cast_into::<AtorsSet>()?)
+        )
     }
 
     fn validate_set<'py>(
@@ -241,6 +285,45 @@ impl AtorsSet {
             validated_items.push(valid);
         }
         PySet::new(py, validated_items)
+    }
+
+    pub(crate) fn matches_assignment_context<'py>(
+        &self,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) -> bool {
+        self.member_name.as_deref() == member_name
+            && match (unsafe { &*self.object.get() }.as_ref(), object) {
+                (None, None) => true,
+                (Some(stored), Some(current)) => {
+                    stored.bind(current.py()).as_ptr() == current.as_ptr()
+                }
+                _ => false,
+            }
+    }
+
+    pub(crate) fn clone_for_assignment<'py>(
+        source: &Bound<'py, AtorsSet>,
+    ) -> PyResult<Bound<'py, AtorsSet>> {
+        let set = source.get();
+        let aset = AtorsSet::new_empty(
+            source.py(),
+            set.validator.clone(),
+            set.member_name.as_deref(),
+            unsafe { &*set.object.get() }
+                .as_ref()
+                .map(|object| object.clone_ref(source.py())),
+        )?;
+        // Iterate the source set and add items directly without an intermediate Vec.
+        // Cast is unchecked on the source since AtorsSet extends PySet and cast is guaranteed safe.
+        // Cast is checked when building to ensure the result is properly typed.
+        // Safety: AtorsSet is declared as `extends=PySet`, so this cast is always valid.
+        let py_set = unsafe { source.cast_unchecked::<PySet>() };
+        let aset_as_set = aset.cast::<PySet>()?;
+        for item in py_set.iter() {
+            aset_as_set.add(&item)?;
+        }
+        Ok(aset)
     }
 }
 
@@ -270,11 +353,11 @@ impl AtorsSet {
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
-
-        self_
-            .py_super()?
-            .call_method1(intern!(py, "__ior__"), (valid,))
-            .map(|_| ())
+        let set = self_.cast::<PySet>()?;
+        for item in valid.iter() {
+            set.add(&item)?;
+        }
+        Ok(())
     }
 
     pub fn update<'py>(self_: &Bound<'py, AtorsSet>, other: Bound<'py, PyAny>) -> PyResult<()> {
@@ -284,11 +367,15 @@ impl AtorsSet {
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
-
-        self_
-            .py_super()?
-            .call_method1(intern!(py, "__ixor__"), (valid,))
-            .map(|_| ())
+        let this = self_.cast::<PySet>()?;
+        for item in valid.iter() {
+            if this.contains(&item)? {
+                this.discard(item)?;
+            } else {
+                this.add(item)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn symmetric_difference_update<'py>(
@@ -334,15 +421,20 @@ pub struct AtorsDict {
 unsafe impl Sync for AtorsDict {}
 
 impl AtorsDict {
-    pub(crate) fn new<'py>(
+    /// Create an empty, owner-bound `AtorsDict` with the given validators.
+    ///
+    /// Note on pre-allocation: `_PyDict_NewPresized` is CPython-private and not
+    /// exposed in PyO3's ffi bindings, so there is no public API to hint the
+    /// initial hash-table capacity.  For typical small container sizes iterative
+    /// `PyDict_SetItem` is sufficient.
+    pub(crate) fn new_empty<'py>(
         py: Python<'py>,
         key_validator: Validator,
         value_validator: Validator,
         member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
-        items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>,
     ) -> PyResult<Bound<'py, AtorsDict>> {
-        let n = Bound::new(
+        Bound::new(
             py,
             AtorsDict {
                 key_validator,
@@ -350,12 +442,7 @@ impl AtorsDict {
                 member_name: member_name.map(|m| m.to_string()),
                 object: UnsafeCell::new(object),
             },
-        )?
-        .cast_into::<PyDict>()?;
-        for (k, v) in items.into_iter() {
-            n.set_item(k, v)?;
-        }
-        Ok(n.cast_into::<AtorsDict>()?)
+        )
     }
 
     /// Validate a key using the key_validator
@@ -398,6 +485,46 @@ impl AtorsDict {
         let valid_key = self.key_validator.validate(m, o, &key)?;
         let valid_value = self.value_validator.validate(m, o, &value)?;
         Ok((valid_key, valid_value))
+    }
+
+    pub(crate) fn matches_assignment_context<'py>(
+        &self,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) -> bool {
+        self.member_name.as_deref() == member_name
+            && match (unsafe { &*self.object.get() }.as_ref(), object) {
+                (None, None) => true,
+                (Some(stored), Some(current)) => {
+                    stored.bind(current.py()).as_ptr() == current.as_ptr()
+                }
+                _ => false,
+            }
+    }
+
+    pub(crate) fn clone_for_assignment<'py>(
+        source: &Bound<'py, AtorsDict>,
+    ) -> PyResult<Bound<'py, AtorsDict>> {
+        let dict = source.get();
+        let adict = AtorsDict::new_empty(
+            source.py(),
+            dict.key_validator.clone(),
+            dict.value_validator.clone(),
+            dict.member_name.as_deref(),
+            unsafe { &*dict.object.get() }
+                .as_ref()
+                .map(|object| object.clone_ref(source.py())),
+        )?;
+        // Iterate the source dict and set items directly without an intermediate Vec.
+        // Cast is unchecked on the source since AtorsDict extends PyDict and cast is guaranteed safe.
+        // Cast is checked when building to ensure the result is properly typed.
+        // Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+        let py_dict = unsafe { source.cast_unchecked::<PyDict>() };
+        let adict_as_dict = adict.cast::<PyDict>()?;
+        for (k, v) in py_dict.iter() {
+            adict_as_dict.set_item(&k, &v)?;
+        }
+        Ok(adict)
     }
 }
 
