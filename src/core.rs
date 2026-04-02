@@ -178,7 +178,7 @@ pub(crate) fn replace_slot<'py>(
         );
         if old
             .as_ref()
-            .map_or(false, |old| old.as_ptr() == value.as_ptr())
+            .is_some_and(|old| old.as_ptr() == value.as_ptr())
         {
             Ok(ReplaceSlotOutcome::Unchanged)
         } else {
