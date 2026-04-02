@@ -20,6 +20,7 @@ mod containers;
 mod core;
 mod member;
 mod meta;
+mod observers;
 mod utils;
 mod validators;
 
@@ -53,8 +54,10 @@ mod _ators {
 
     #[pymodule_export]
     use self::core::{
-        AtorsBase, freeze, get_member, get_member_customization_tool, get_members,
-        get_members_by_tag, get_members_by_tag_and_value, init_ators, is_frozen,
+        AtorsBase, disable_notifications, enable_notifications, freeze, get_member,
+        get_member_customization_tool, get_members, get_members_by_tag,
+        get_members_by_tag_and_value, init_ators, is_frozen, is_notifications_enabled, observe,
+        unobserve,
     };
     #[pymodule_export]
     use self::meta::create_ators_subclass;
@@ -71,6 +74,9 @@ mod _ators {
     // Exported only to enable pickling
     #[pymodule_export]
     use self::containers::{AtorsDict, AtorsList, AtorsSet};
+
+    #[pymodule_export]
+    use self::observers::AtorsChange;
 
     #[pyfunction]
     pub(crate) fn add_generic_type_attributes<'py>(
