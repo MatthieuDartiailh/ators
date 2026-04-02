@@ -13,10 +13,12 @@ use pyo3::{
 };
 use std::{cell::UnsafeCell, collections::HashMap};
 
+use crate::core::AtorsBase;
+
 #[pyclass(module = "ators._ators", frozen, get_all)]
 #[derive(Debug)]
 pub struct AtorsChange {
-    object: Py<PyAny>,
+    object: Py<AtorsBase>,
     member_name: String,
     oldvalue: Py<PyAny>,
     newvalue: Py<PyAny>,
@@ -24,7 +26,7 @@ pub struct AtorsChange {
 
 impl AtorsChange {
     pub(crate) fn new(
-        object: Py<PyAny>,
+        object: Py<AtorsBase>,
         member_name: String,
         oldvalue: Py<PyAny>,
         newvalue: Py<PyAny>,
