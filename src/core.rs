@@ -284,7 +284,12 @@ pub(crate) fn notify_member_change<'py>(
     let py = obj.py();
     let change = Bound::new(
         py,
-        AtorsChange::new(obj.clone().unbind(), member_name.to_string(), oldvalue, newvalue),
+        AtorsChange::new(
+            obj.clone().unbind(),
+            member_name.to_string(),
+            oldvalue,
+            newvalue,
+        ),
     )?;
     let errors = ObserverPool::fire(pool, member_name, &change)?;
     if !errors.is_empty() {

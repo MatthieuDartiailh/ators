@@ -8,8 +8,7 @@
 /// Observer support for Ators objects.
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, Python, intern, pyclass, pymethods,
-    sync::critical_section::with_critical_section,
-    types::PyAnyMethods,
+    sync::critical_section::with_critical_section, types::PyAnyMethods,
 };
 use std::{cell::UnsafeCell, collections::HashMap};
 
@@ -161,13 +160,11 @@ impl ObserverPool {
         change: &Bound<'py, AtorsChange>,
     ) -> PyResult<Vec<PyErr>> {
         let py = pool.py();
-        let observers = with_critical_section(pool.as_any(), || {
-            unsafe {
-                (*pool.get().callbacks.get())
-                    .get(member_name)
-                    .cloned()
-                    .unwrap_or_default()
-            }
+        let observers = with_critical_section(pool.as_any(), || unsafe {
+            (*pool.get().callbacks.get())
+                .get(member_name)
+                .cloned()
+                .unwrap_or_default()
         });
 
         let mut errors = Vec::new();
@@ -178,14 +175,18 @@ impl ObserverPool {
                         errors.push(err);
                     }
                 }
-                ObserverCallback::WeakMethod { weak_method } => match weak_method.bind(py).call0() {
-                    Ok(cb) => {
-                        if !cb.is_none() && let Err(err) = cb.call1((change,)) {
-                            errors.push(err);
+                ObserverCallback::WeakMethod { weak_method } => {
+                    match weak_method.bind(py).call0() {
+                        Ok(cb) => {
+                            if !cb.is_none()
+                                && let Err(err) = cb.call1((change,))
+                            {
+                                errors.push(err);
+                            }
                         }
+                        Err(err) => errors.push(err),
                     }
-                    Err(err) => errors.push(err),
-                },
+                }
             }
         }
 
