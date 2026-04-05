@@ -147,6 +147,7 @@ pub struct LateResolvedValidator {
     validator_cell: OnceLock<PyResult<Py<TypeValidator>>>,
     forward_ref: Py<PyAny>,
     ctx_provider: Option<Py<PyAny>>,
+    typevar_bindings: Option<Py<PyDict>>,
     type_containers: i64,
     name: Py<PyString>,
     owner: Option<Py<PyAny>>,
@@ -160,11 +161,13 @@ impl LateResolvedValidator {
         ctx_provider: Option<&Bound<'py, PyAny>>,
         type_containers: i64,
         name: &Bound<'py, PyString>,
+        typevar_bindings: Option<&Bound<'py, PyDict>>,
     ) -> Self {
         Self {
             validator_cell: OnceLock::new(),
             forward_ref: forward_ref.clone().unbind(),
             ctx_provider: ctx_provider.map(|cp| cp.clone().unbind()),
+            typevar_bindings: typevar_bindings.map(|tb| tb.clone().unbind()),
             type_containers,
             name: name.clone().unbind(),
             owner: None,
@@ -180,9 +183,21 @@ impl LateResolvedValidator {
             let resolved;
 
             let kwargs = PyDict::new(py);
-            if let Some(cp) = &self.ctx_provider {
-                let ctx_provider = cp.bind(py);
-                kwargs.set_item("locals", ctx_provider.call0()?)?;
+            let locals = if let Some(cp) = &self.ctx_provider {
+                cp.bind(py).call0()?.cast_into::<PyDict>()?
+            } else {
+                PyDict::new(py)
+            };
+
+            if let Some(bindings) = &self.typevar_bindings {
+                for (k, v) in bindings.bind(py).iter() {
+                    if let Ok(name) = k.getattr("__name__") {
+                        locals.set_item(name, v)?;
+                    }
+                }
+            }
+            if !locals.is_empty() {
+                kwargs.set_item("locals", locals)?;
             }
             if let Some(owner) = &self.owner {
                 let owner_bound = owner.bind(py);
@@ -217,6 +232,7 @@ impl LateResolvedValidator {
                     self.type_containers,
                     &get_type_tools(py)?,
                     None,
+                    self.typevar_bindings.as_ref().map(|tb| tb.bind(py)),
                 )?
                 .0
                 .type_validator,
@@ -247,6 +263,7 @@ impl LateResolvedValidator {
             validator_cell: OnceLock::new(),
             forward_ref: self.forward_ref.clone_ref(py),
             ctx_provider: self.ctx_provider.as_ref().map(|cp| cp.clone_ref(py)),
+            typevar_bindings: self.typevar_bindings.as_ref().map(|tb| tb.clone_ref(py)),
             type_containers: self.type_containers,
             name: self.name.clone_ref(py),
             owner: Some(owner.clone().unbind()),
@@ -260,6 +277,7 @@ impl Clone for LateResolvedValidator {
             validator_cell: OnceLock::new(),
             forward_ref: self.forward_ref.clone_ref(py),
             ctx_provider: self.ctx_provider.as_ref().map(|cp| cp.clone_ref(py)),
+            typevar_bindings: self.typevar_bindings.as_ref().map(|tb| tb.clone_ref(py)),
             type_containers: self.type_containers,
             name: self.name.clone_ref(py),
             owner: self.owner.as_ref().map(|o| o.clone_ref(py)),
