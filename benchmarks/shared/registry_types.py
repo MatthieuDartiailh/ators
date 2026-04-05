@@ -5,17 +5,18 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Benchmarks for str field validation."""
+"""Shared benchmark case types."""
 
-import pytest
-
-from benchmarks.validators._shared_validation import (
-    run_validation_benchmark,
-    validation_case_params,
-)
+from dataclasses import dataclass
+from typing import Callable
 
 
-@pytest.mark.benchmark(group="validation_str")
-@pytest.mark.parametrize("case", validation_case_params("validation_str"))
-def test_benchmark_validation_str(benchmark, case):
-    run_validation_benchmark(benchmark, case)
+@dataclass(frozen=True)
+class BenchmarkCase:
+    """Single benchmark case shared across pyperf and future pytest frontends."""
+
+    family: str
+    group: str
+    implementation: str
+    benchmark_name: str
+    operation_factory: Callable[[], Callable[[], None]]

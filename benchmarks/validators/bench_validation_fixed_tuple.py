@@ -5,17 +5,17 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Benchmarks for str field validation."""
+"""Run shared fixed-tuple validation benchmark family with pyperf."""
 
-import pytest
+import sys
+from pathlib import Path
 
-from benchmarks.validators._shared_validation import (
-    run_validation_benchmark,
-    validation_case_params,
-)
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
-@pytest.mark.benchmark(group="validation_str")
-@pytest.mark.parametrize("case", validation_case_params("validation_str"))
-def test_benchmark_validation_str(benchmark, case):
-    run_validation_benchmark(benchmark, case)
+if __name__ == "__main__":
+    from benchmarks.shared.pyperf_frontend import run_benchmark_cases
+
+    run_benchmark_cases(families=["validation_fixed_tuple"])

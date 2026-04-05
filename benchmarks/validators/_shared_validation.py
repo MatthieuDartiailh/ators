@@ -5,17 +5,14 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Benchmarks for str field validation."""
+"""Shared pytest adapters for validation benchmark families."""
 
-import pytest
-
-from benchmarks.validators._shared_validation import (
-    run_validation_benchmark,
-    validation_case_params,
-)
+from benchmarks.shared.pytest_frontend import benchmark_case_params, run_pytest_benchmark
 
 
-@pytest.mark.benchmark(group="validation_str")
-@pytest.mark.parametrize("case", validation_case_params("validation_str"))
-def test_benchmark_validation_str(benchmark, case):
-    run_validation_benchmark(benchmark, case)
+def validation_case_params(family: str) -> list[object]:
+    return benchmark_case_params(families=[family])
+
+
+def run_validation_benchmark(benchmark: object, case: object) -> None:
+    run_pytest_benchmark(benchmark, case)
