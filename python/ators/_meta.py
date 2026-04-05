@@ -53,7 +53,6 @@ class AtorsMeta(type):
         # re-implementation of C3
         assert meta.mro is type.mro, "Custom MRO calculation are not supported"
 
-        dct = {k: v for k, v in dct.items()}
         return _create_ators_subclass(
             meta,
             name,

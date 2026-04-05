@@ -10,7 +10,8 @@ use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PySet, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
+        PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -435,6 +436,18 @@ pub fn build_validator_from_annotation<'py>(
             );
         }
 
+        // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are not
+        // supported.  Callers should use a Union annotation instead.
+        let constraints = ann.getattr(intern!(py, "__constraints__"))?;
+        if let Ok(constraints_tuple) = constraints.cast::<PyTuple>()
+            && !constraints_tuple.is_empty()
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Constrained TypeVars are not supported for member '{name}'. \
+                 Use a Union type annotation instead.",
+            )));
+        }
+
         let bound = ann.getattr(intern!(py, "__bound__"))?;
         if !bound.is_none() {
             return build_validator_from_annotation(
@@ -645,22 +658,18 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     let py = name.py();
 
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
-    let annotations = if dct.contains(intern!(py, "__annotations__"))? {
-        let raw_annotations = dct.as_any().get_item(intern!(py, "__annotations__"))?;
-        if raw_annotations.is_instance_of::<PyDict>() {
-            raw_annotations.cast_into()
-        } else {
-            py.import(intern!(py, "builtins"))?
-                .getattr(intern!(py, "dict"))?
-                .call1((raw_annotations,))?
-                .cast_into()
-        }
+    // `__annotations__` is guaranteed by Python to be a mapping; cast it
+    // directly rather than checking `isinstance(…, dict)` and copying.
+    let annotations: Bound<'py, PyMapping> = if dct.contains(intern!(py, "__annotations__"))? {
+        dct.as_any()
+            .get_item(intern!(py, "__annotations__"))?
+            .cast_into()?
     } else {
         let annotate = annotationlib
             .getattr(intern!(py, "get_annotate_from_class_namespace"))?
             .call1((dct,))?;
         if annotate.is_none() {
-            Ok(PyDict::new(py))
+            PyDict::new(py).into_any().cast_into()?
         } else {
             annotationlib
                 .getattr(intern!(py, "call_annotate_function"))?
@@ -670,9 +679,9 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                         .getattr(intern!(py, "Format"))?
                         .getattr(intern!(py, "FORWARDREF"))?,
                 ))?
-                .cast_into()
+                .cast_into()?
         }
-    }?;
+    };
 
     let typing_mod = py.import(intern!(py, "typing"))?;
     let class_var = typing_mod.getattr(intern!(py, "ClassVar"))?;
@@ -680,7 +689,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     let tools = get_type_tools(py)?;
 
     let mut builders = HashMap::new();
-    for (name, ann) in annotations.iter() {
+    for item in annotations.items()?.iter() {
+        let (name, ann) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
         // Get the origin of the type annotation
         let origin = tools.get_origin.call1((&ann,))?;
 

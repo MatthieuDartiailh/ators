@@ -32,14 +32,36 @@ use crate::{
     member::PreGetattrBehavior,
 };
 
+// FIXME: once pyo3 supports writing metaclasses in Rust, all of the generic-
+// specialization state below should be stored on the metaclass itself and
+// exposed through read-only interfaces rather than as module-level statics.
+
+/// Name of the frozenset attribute that lists the member names specific to
+/// each Ators subclass (as opposed to those inherited from a base class).
 static ATORS_SPECIFIC_MEMBERS: &str = "__ators_specific_members__";
+/// Name of the frozenset attribute that records all callable method names
+/// defined on an Ators class, used to validate behavior references.
 static ATORS_METHODS: &str = "__ators_methods__";
+/// Name of the bool attribute that records whether instances of an Ators class
+/// should be automatically frozen after `__init__`.
 pub(crate) static ATORS_FROZEN: &str = "__ators_frozen__";
-static ATORS_ORIGIN_ATTR: &str = "__ators_origin__";
-static ATORS_ARGS_ATTR: &str = "__ators_args__";
-static ATORS_TYPE_PARAMS_ATTR: &str = "__ators_type_params__";
-static ATORS_TYPEVAR_BINDINGS_ATTR: &str = "__ators_typevar_bindings__";
-static ATORS_SPECIALIZATIONS_ATTR: &str = "__ators_specializations__";
+/// Name of the attribute that stores the un-specialized origin class for a
+/// specialized generic Ators class.
+static ATORS_GENERIC_ORIGIN: &str = "__ators_origin__";
+/// Name of the attribute that stores the concrete type arguments used to
+/// create a specialized class relative to the origin's full parameter list.
+static ATORS_GENERIC_ARGS: &str = "__ators_args__";
+/// Name of the attribute that stores the remaining unbound type parameters
+/// of a partially-specialized generic Ators class.
+static ATORS_GENERIC_TYPE_PARAMS: &str = "__ators_type_params__";
+/// Name of the attribute that stores the mapping from each origin type
+/// parameter to its current binding (concrete type or remaining TypeVar).
+static ATORS_GENERIC_TYPEVAR_BINDINGS: &str = "__ators_typevar_bindings__";
+/// Name of the dict attribute on the origin class that caches already-created
+/// specializations, keyed by the full argument tuple for all origin params.
+/// Storing the cache on the origin guarantees that `A[int, str]` and
+/// `A[int][str]` always return the same class object.
+static ATORS_GENERIC_SPECIALIZATIONS: &str = "__ators_specializations__";
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
@@ -127,6 +149,10 @@ fn make_unknown_method_error<'py>(
     ))
 }
 
+/// Return a human-readable display string for a single type parameter.
+/// For concrete types the qualified name is used; for TypeVars and other
+/// parameter objects the `__name__` attribute is preferred before falling
+/// back to `repr`.
 fn type_param_display(param: &Bound<'_, PyAny>) -> PyResult<String> {
     if let Ok(type_) = param.cast::<PyType>() {
         return Ok(type_.name()?.to_string());
@@ -137,6 +163,12 @@ fn type_param_display(param: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(param.repr()?.to_string())
 }
 
+/// Return the exposed type parameters for `type_obj` as a tuple.
+///
+/// Prefers PEP 695 runtime metadata (`__type_params__`), falling back to the
+/// legacy `typing.Generic` attribute (`__parameters__`) so that classes
+/// declared with the old `Generic[T, ...]` style are also specializable.
+/// Returns an empty tuple for non-generic classes.
 #[inline]
 fn get_generic_params_obj<'py>(type_obj: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyTuple>> {
     let py = type_obj.py();
@@ -167,10 +199,18 @@ fn get_generic_params_obj<'py>(type_obj: &Bound<'py, PyType>) -> PyResult<Bound<
 
 fn is_type_var(param: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = param.py();
+    // FIXME: importing `typing` every call is wasteful; this lookup should
+    // be cached on the module state once pyo3 makes that ergonomic.
     let typing = py.import(intern!(py, "typing"))?;
     param.is_instance(&typing.getattr(intern!(py, "TypeVar"))?)
 }
 
+/// Verify that `replacement` TypeVar has a bound that is at least as narrow
+/// as the bound declared on the `parent` TypeVar.
+///
+/// If `parent` has no bound the replacement is accepted unconditionally.
+/// Raises `TypeError` when the bound of `replacement` is either absent or
+/// not a subtype of the bound of `parent`.
 fn enforce_narrower_typevar_bound(
     parent: &Bound<'_, PyAny>,
     replacement: &Bound<'_, PyAny>,
@@ -224,7 +264,6 @@ pub fn create_ators_specialized_subclass<'py>(
     params: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
-    let builtins = py.import(intern!(py, "builtins"))?;
 
     let exposed_params = get_generic_params_obj(&cls)?;
 
@@ -260,8 +299,10 @@ pub fn create_ators_specialized_subclass<'py>(
         return Ok(cls.into_any());
     }
 
-    let origin = match cls.getattr(intern!(py, ATORS_ORIGIN_ATTR)) {
+    let origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
+        // cls is already a specialization – use its recorded origin.
         Ok(o) => o.cast_into::<PyType>()?,
+        // cls is the first time it is being specialized; it IS the origin.
         Err(_) => cls.clone(),
     };
     // Always bind against the origin definition so repeated partial
@@ -270,7 +311,7 @@ pub fn create_ators_specialized_subclass<'py>(
     let origin_params = get_generic_params_obj(&origin)?;
 
     let full_bindings = PyDict::new(py);
-    if let Ok(existing) = cls.getattr(intern!(py, ATORS_TYPEVAR_BINDINGS_ATTR)) {
+    if let Ok(existing) = cls.getattr(intern!(py, ATORS_GENERIC_TYPEVAR_BINDINGS)) {
         for (k, v) in existing.cast_into::<PyDict>()?.iter() {
             full_bindings.set_item(k, v)?;
         }
@@ -278,18 +319,6 @@ pub fn create_ators_specialized_subclass<'py>(
         for tp in origin_params.iter() {
             full_bindings.set_item(&tp, &tp)?;
         }
-    }
-
-    let cache = match cls.getattr(intern!(py, ATORS_SPECIALIZATIONS_ATTR)) {
-        Ok(d) => d.cast_into::<PyDict>()?,
-        Err(_) => {
-            let d = PyDict::new(py);
-            cls.setattr(intern!(py, ATORS_SPECIALIZATIONS_ATTR), &d)?;
-            d
-        }
-    };
-    if let Some(cached) = cache.get_item(&params_tuple)? {
-        return Ok(cached);
     }
 
     for (exposed, arg) in exposed_params.iter().zip(params_tuple.iter()) {
@@ -329,10 +358,29 @@ pub fn create_ators_specialized_subclass<'py>(
 
     let typevar_bindings = full_bindings;
 
-    let annotations = builtins
-        .getattr(intern!(py, "dict"))?
-        .call1((cls.getattr(intern!(py, "__annotations__"))?,))?
+    // Compute the full argument tuple for all origin params.  This is the
+    // canonical cache key: using the full args (relative to the origin) means
+    // that `A[int, str]` and `A[int][str]` always resolve to the same class.
+    let full_args = origin_params
+        .iter()
+        .map(|tp| Ok(typevar_bindings.get_item(&tp)?.unwrap_or(tp)))
+        .collect::<PyResult<Vec<Bound<'_, PyAny>>>>()?;
+    let full_args_tuple = PyTuple::new(py, full_args.iter())?;
+
+    // The cache always lives on the origin class so that independent
+    // specialization paths (direct vs. step-wise) share the same result.
+    let cache = origin
+        .getattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS))?
         .cast_into::<PyDict>()?;
+    if let Some(cached) = cache.get_item(&full_args_tuple)? {
+        return Ok(cached);
+    }
+
+    // `__annotations__` is guaranteed by Python to be a mapping; cast
+    // directly rather than copying through `builtins.dict`.
+    let annotations = cls
+        .getattr(intern!(py, "__annotations__"))?
+        .cast_into::<PyMapping>()?;
 
     let namespace = PyDict::new(py);
     namespace.set_item(
@@ -340,7 +388,10 @@ pub fn create_ators_specialized_subclass<'py>(
         cls.getattr(intern!(py, "__module__"))?,
     )?;
     namespace.set_item(intern!(py, "__annotations__"), &annotations)?;
-    namespace.set_item(intern!(py, ATORS_TYPEVAR_BINDINGS_ATTR), &typevar_bindings)?;
+    namespace.set_item(
+        intern!(py, ATORS_GENERIC_TYPEVAR_BINDINGS),
+        &typevar_bindings,
+    )?;
 
     let members = cls
         .getattr(intern!(py, "__ators_members__"))?
@@ -354,11 +405,6 @@ pub fn create_ators_specialized_subclass<'py>(
     }
 
     let base_name = origin.name()?;
-    let full_args = origin_params
-        .iter()
-        .map(|tp| Ok(typevar_bindings.get_item(&tp)?.unwrap_or(tp)))
-        .collect::<PyResult<Vec<Bound<'_, PyAny>>>>()?;
-    let full_args_tuple = PyTuple::new(py, full_args.iter())?;
     let rendered = full_args_tuple
         .iter()
         .map(|p| type_param_display(&p))
@@ -380,12 +426,15 @@ pub fn create_ators_specialized_subclass<'py>(
         Some(&kwargs),
     )?;
 
-    specialized.setattr(intern!(py, ATORS_ORIGIN_ATTR), origin.as_any())?;
-    specialized.setattr(intern!(py, ATORS_ARGS_ATTR), &full_args_tuple)?;
-    specialized.setattr(intern!(py, ATORS_TYPE_PARAMS_ATTR), &unresolved_tuple)?;
+    specialized.setattr(intern!(py, ATORS_GENERIC_ORIGIN), origin.as_any())?;
+    specialized.setattr(intern!(py, ATORS_GENERIC_ARGS), &full_args_tuple)?;
+    specialized.setattr(intern!(py, ATORS_GENERIC_TYPE_PARAMS), &unresolved_tuple)?;
     specialized.setattr(intern!(py, "__type_params__"), &unresolved_tuple)?;
-    specialized.setattr(intern!(py, ATORS_TYPEVAR_BINDINGS_ATTR), &typevar_bindings)?;
-    cache.set_item(&params_tuple, &specialized)?;
+    specialized.setattr(
+        intern!(py, ATORS_GENERIC_TYPEVAR_BINDINGS),
+        &typevar_bindings,
+    )?;
+    cache.set_item(&full_args_tuple, &specialized)?;
 
     Ok(specialized)
 }
@@ -438,13 +487,13 @@ pub fn create_ators_subclass<'py>(
     }
 
     let typevar_bindings =
-        if let Some(tb) = dct.get_item(intern!(py, ATORS_TYPEVAR_BINDINGS_ATTR))? {
+        if let Some(tb) = dct.get_item(intern!(py, ATORS_GENERIC_TYPEVAR_BINDINGS))? {
             Some(tb.cast_into::<PyDict>()?)
         } else {
             None
         };
     if typevar_bindings.is_some() {
-        dct.del_item(intern!(py, ATORS_TYPEVAR_BINDINGS_ATTR))?;
+        dct.del_item(intern!(py, ATORS_GENERIC_TYPEVAR_BINDINGS))?;
     }
 
     let mut member_builders = generate_member_builders_from_cls_namespace(
@@ -835,6 +884,15 @@ pub fn create_ators_subclass<'py>(
         crate::core::ATORS_MEMBERS_MUTABILITY,
         Bound::new(py, class_mutability)?,
     )?;
+
+    // Initialize the specialization cache on generic classes so it always
+    // lives on the origin (non-specialized) class. This ensures that
+    // `A[int, str]` and `A[int][str]` resolve to the same class object.
+    if let Ok(cls_type) = cls.cast::<PyType>()
+        && !get_generic_params_obj(cls_type)?.is_empty()
+    {
+        cls.setattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS), PyDict::new(py))?;
+    }
 
     Ok(cls)
 }
