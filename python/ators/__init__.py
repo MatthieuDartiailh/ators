@@ -20,7 +20,6 @@ from ._ators import (
     get_members,
     get_members_by_tag,
     get_members_by_tag_and_value,
-    init_ators as _init_ators,
     is_frozen,
     is_notifications_enabled,
     member,
@@ -59,11 +58,6 @@ def __newobj__(cls, *args):
 
 class Ators(_Base, metaclass=_Meta):
     """"""
-
-    # NOTE implement init using a rust accelerator, once pyo3 support init it
-    # will be moved
-    def __init__(self, **kwargs):
-        _init_ators(self, kwargs)
 
     def __reduce_ex__(self, proto):
         """An implementation of the reduce protocol.
