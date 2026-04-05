@@ -12,7 +12,7 @@
 
 [dependency-groups]
   test = ["pytest", "pytest-cov"]
-  bench = ["pytest", "pytest-benchmark", "pyperf", "atom"]
+  bench = ["pytest", "pytest-benchmark", "pyperf", "atom", "rich"]
   ci-bench = ["pytest", "pytest-codspeed", "atom"]
   docs = [
     "pydata-sphinx-theme",
