@@ -7,8 +7,6 @@
 # --------------------------------------------------------------------------------------
 """Suite-wide benchmark case selection helpers."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Sequence
 
 from benchmarks.shared.assignment_registry import select_assignment_cases

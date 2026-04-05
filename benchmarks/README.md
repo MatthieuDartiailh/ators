@@ -34,15 +34,6 @@ and two frontends:
 - `containers/bench_set.py`: convenience runner for set method family.
 - `containers/bench_dict.py`: convenience runner for dict method family.
 
-### Local-only microbenchmarks (not yet fully shared)
-
-- `bench_containers_mutation.py`
-- `bench_container_method_strategies.py`
-- `bench_ffi_vs_pyo3.py`
-
-Container assignment is intentionally pyperf-only to avoid duplicating
-coverage already represented in list/set/dict validation benchmarks.
-
 ## Running Benchmarks
 
 Activate the local environment first:

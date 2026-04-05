@@ -7,8 +7,6 @@
 # --------------------------------------------------------------------------------------
 """Helpers for exposing shared benchmark cases through pytest benchmark tests."""
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 
 import pytest
