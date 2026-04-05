@@ -132,6 +132,7 @@ impl AtorsBase {
             match slf.setattr(key, v.clone()) {
                 Ok(_) => Ok(()),
                 Err(err) => {
+                    // FIXME use cold_branch once Rust 1.95 is out
                     let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
                     if let Some(r) = member_coerce_init(&m, slf, &v) {
                         let coerced_v = r?;
