@@ -273,6 +273,13 @@ def test_generic_specialization_is_cached_class():
     assert int_box is not GenericBox[str]
 
 
+def test_full_and_stepwise_specialization_are_identical():
+    U = TypeVar("U")
+    direct = GenericPair[int, str]
+    stepwise = GenericPair[int, U][str]
+    assert direct is stepwise
+
+
 def test_unspecialized_typevar_uses_bound_when_available():
     box = BoundGenericBox()
     box.item = 1
