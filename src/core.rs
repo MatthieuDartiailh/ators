@@ -117,6 +117,34 @@ impl AtorsBase {
             *o = None;
         }
     }
+
+    #[pyo3(signature = (**kwargs))]
+    pub fn __init__(
+        slf: &Bound<'_, AtorsBase>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let Some(kwargs) = kwargs else {
+            return Ok(());
+        };
+        let members = slf.getattr(ATORS_MEMBERS)?;
+        for (k, v) in kwargs.iter() {
+            let key = k.cast::<PyString>()?;
+            match slf.setattr(key, v.clone()) {
+                Ok(_) => Ok(()),
+                Err(err) => {
+                    // FIXME use cold_branch once Rust 1.95 is out
+                    let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
+                    if let Some(r) = member_coerce_init(&m, slf, &v) {
+                        let coerced_v = r?;
+                        slf.setattr(key, coerced_v).map(|_| ())
+                    } else {
+                        Err(err)
+                    }
+                }
+            }?
+        }
+        Ok(())
+    }
 }
 
 #[inline]
@@ -298,30 +326,6 @@ pub(crate) fn notify_member_change<'py>(
             .getattr(intern!(py, "ExceptionGroup"))?
             .call1(("errors in observers", errors))?;
         return Err(pyo3::PyErr::from_value(exception_group));
-    }
-    Ok(())
-}
-
-// FIXME move once #[init] has landed
-#[pyfunction]
-pub fn init_ators<'py>(self_: &Bound<'py, AtorsBase>, kwargs: &Bound<'py, PyDict>) -> PyResult<()> {
-    let members = self_.getattr(ATORS_MEMBERS)?;
-    for (k, v) in kwargs.cast::<PyDict>()?.iter() {
-        let key = k.cast::<PyString>()?;
-        {
-            match self_.setattr(key, v.clone()) {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
-                    if let Some(r) = member_coerce_init(&m, self_, &v) {
-                        let coerced_v = r?;
-                        self_.setattr(key, coerced_v).map(|_| ())
-                    } else {
-                        Err(err)
-                    }
-                }
-            }
-        }?
     }
     Ok(())
 }
