@@ -1078,6 +1078,11 @@ impl MemberBuilder {
     }
 
     #[inline]
+    pub fn set_inherit(&mut self, inherit: bool) {
+        self.inherit = inherit;
+    }
+
+    #[inline]
     pub fn pre_getattr(&self) -> Option<&PreGetattrBehavior> {
         self.pre_getattr.as_ref()
     }
@@ -1228,17 +1233,29 @@ impl MemberBuilder {
                 "Cannot build member {name} of {type_name} without an assigned slot."
             )));
         };
+        let py = type_name.py();
+        let mut warnings_warn: Option<Py<PyAny>> = None;
+        let mut get_warnings_warn = || -> PyResult<Bound<'py, PyAny>> {
+            if warnings_warn.is_none() {
+                warnings_warn = Some(
+                    py.import(intern!(py, "warnings"))?
+                        .getattr(intern!(py, "warn"))?
+                        .unbind(),
+                );
+            }
+            Ok(warnings_warn
+                .as_ref()
+                .expect("Initialized")
+                .bind(py)
+                .clone())
+        };
         let mut tv = self.type_validator.unwrap_or(TypeValidator::Any {});
         if !self.multiple_settings.is_empty() {
-            let py = type_name.py();
-            let warnings_mod = py.import(intern!(py, "warnings"))?;
-            warnings_mod.getattr(intern!(py, "warn"))?.call1((
-                pyo3::exceptions::PyUserWarning::new_err(format!(
-                    "The followng behaviors of member {} of {type_name} were \
+            get_warnings_warn()?.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
+                "The followng behaviors of member {} of {type_name} were \
                         set multiple times: {:#?}",
-                    &name, &self.multiple_settings
-                )),
-            ))?;
+                &name, &self.multiple_settings
+            )),))?;
         }
 
         if (self.coerce.is_some() || self.coerce_init.is_some())
@@ -1248,11 +1265,7 @@ impl MemberBuilder {
                 .as_ref()
                 .is_none_or(|vv| vv.is_empty())
         {
-            let py = type_name.py();
-            let warnings_warn = py
-                .import(intern!(py, "warnings"))?
-                .getattr(intern!(py, "warn"))?;
-            warnings_warn.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
+            get_warnings_warn()?.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
                 "Member {} of {} specify a coercion behavior but no type nor value validation.\
              As a consequence, the coercer will never be invoked.",
                 &name, &type_name

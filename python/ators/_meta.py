@@ -9,7 +9,12 @@
 
 from typing import Any, Mapping, dataclass_transform
 
-from ._ators import Member, create_ators_subclass as _create_ators_subclass, freeze
+from ._ators import (
+    Member,
+    create_ators_specialized_subclass as _create_ators_specialized_subclass,
+    create_ators_subclass as _create_ators_subclass,
+    freeze,
+)
 
 
 @dataclass_transform(frozen=False)
@@ -64,3 +69,6 @@ class AtorsMeta(type):
         if self.__ators_frozen__:
             freeze(new)
         return new
+
+    def __getitem__(self, params):
+        return _create_ators_specialized_subclass(self, params)
