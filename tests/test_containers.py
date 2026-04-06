@@ -223,3 +223,153 @@ def test_list_reassignment_to_other_member_still_validates():
 #     loaded = pickle.loads(dumped)
 #     assert loaded == ators_dict_object.a
 #     assert type(loaded) is dict
+
+
+@pytest.fixture()
+def ators_ordered_dict_object():
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    return A(a=StdOrderedDict([("a", 2), ("b", 3), ("c", 4)]))
+
+
+@pytest.mark.parametrize(
+    "operation, value, kw, expected, exception",
+    [
+        ("__setitem__", ("d", 5), None, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("__setitem__", ("a", 9), None, {"a": 9, "b": 3, "c": 4}, None),
+        ("__setitem__", (2, 3), None, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("__setitem__", ("d", "1"), None, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("setdefault", ("d", 5), None, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("setdefault", ("a", 9), None, {"a": 2, "b": 3, "c": 4}, None),
+        # Value does not need to be validated for existing keys
+        ("setdefault", ("a", "9"), None, {"a": 2, "b": 3, "c": 4}, None),
+        ("setdefault", (1, 5), None, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("setdefault", ("d", "5"), None, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("update", ({"d": 5},), {}, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("update", ({"a": 9},), {}, {"a": 9, "b": 3, "c": 4}, None),
+        ("update", ({1: 5},), {}, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("update", ({"a": "9"},), {}, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("update", ([("d", 5)],), {}, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("update", ([(1, 5)],), {}, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("update", None, {"d": 5}, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("update", None, {"a": "9"}, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("__ior__", ({"d": 5},), {}, {"a": 2, "b": 3, "c": 4, "d": 5}, None),
+        ("__ior__", ({1: 5},), {}, {"a": 2, "b": 3, "c": 4}, TypeError),
+        ("__ior__", ({"a": "9"},), {}, {"a": 2, "b": 3, "c": 4}, TypeError),
+    ],
+)
+def test_ordered_dict_container_validation(
+    ators_ordered_dict_object, operation, value, kw, expected, exception
+):
+    with pytest.raises(exception) if exception else nullcontext():
+        if value is not None:
+            getattr(ators_ordered_dict_object.a, operation)(*value)
+        else:
+            getattr(ators_ordered_dict_object.a, operation)(**kw)
+    assert ators_ordered_dict_object.a == expected
+
+
+def test_ordered_dict_insertion_order_preserved(ators_ordered_dict_object):
+    """Insertion order must be preserved across operations."""
+    obj = ators_ordered_dict_object
+    assert list(obj.a.keys()) == ["a", "b", "c"]
+    obj.a["d"] = 5
+    assert list(obj.a.keys()) == ["a", "b", "c", "d"]
+    obj.a.update({"e": 6, "f": 7})
+    assert list(obj.a.keys()) == ["a", "b", "c", "d", "e", "f"]
+
+
+def test_ordered_dict_move_to_end_last_true(ators_ordered_dict_object):
+    """move_to_end(key) moves key to the back."""
+    obj = ators_ordered_dict_object
+    obj.a.move_to_end("a")
+    assert list(obj.a.keys()) == ["b", "c", "a"]
+    assert obj.a["a"] == 2
+
+
+def test_ordered_dict_move_to_end_last_false(ators_ordered_dict_object):
+    """move_to_end(key, last=False) moves key to the front."""
+    obj = ators_ordered_dict_object
+    obj.a.move_to_end("c", last=False)
+    assert list(obj.a.keys()) == ["c", "a", "b"]
+    assert obj.a["c"] == 4
+
+
+def test_ordered_dict_move_to_end_nonexistent_key(ators_ordered_dict_object):
+    """move_to_end raises KeyError for a missing key."""
+    with pytest.raises(KeyError):
+        ators_ordered_dict_object.a.move_to_end("nonexistent")
+
+
+def test_ordered_dict_popitem_last_true(ators_ordered_dict_object):
+    """popitem(last=True) removes and returns the last inserted item."""
+    obj = ators_ordered_dict_object
+    k, v = obj.a.popitem()
+    assert k == "c"
+    assert v == 4
+    assert list(obj.a.keys()) == ["a", "b"]
+
+
+def test_ordered_dict_popitem_last_false(ators_ordered_dict_object):
+    """popitem(last=False) removes and returns the first inserted item."""
+    obj = ators_ordered_dict_object
+    k, v = obj.a.popitem(last=False)
+    assert k == "a"
+    assert v == 2
+    assert list(obj.a.keys()) == ["b", "c"]
+
+
+def test_ordered_dict_popitem_empty():
+    """popitem on an empty AtorsOrderedDict raises KeyError."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict())
+    with pytest.raises(KeyError):
+        obj.a.popitem()
+
+
+def test_ordered_dict_same_owner_member_reassignment_copies_container():
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1, "y": 2}))
+    original = obj.a
+
+    obj.a = original
+
+    assert obj.a == {"x": 1, "y": 2}
+    assert obj.a is not original
+    assert type(obj.a) is type(original)
+
+
+def test_ordered_dict_container_type():
+    """AtorsOrderedDict is a subclass of OrderedDict (and thus dict)."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators, AtorsOrderedDict
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1}))
+    assert isinstance(obj.a, dict)
+    assert isinstance(obj.a, StdOrderedDict)
+    assert isinstance(obj.a, AtorsOrderedDict)
