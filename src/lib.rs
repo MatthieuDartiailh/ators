@@ -72,7 +72,7 @@ mod _ators {
 
     // Exported only to enable pickling
     #[pymodule_export]
-    use self::containers::{AtorsDict, AtorsList, AtorsSet};
+    use self::containers::{AtorsDict, AtorsList, AtorsOrderedDict, AtorsSet};
 
     #[pymodule_export]
     use self::observers::AtorsChange;

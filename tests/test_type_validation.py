@@ -9,7 +9,7 @@
 
 from abc import ABC
 from annotationlib import ForwardRef
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, OrderedDict, TypeVar
 
 import pytest
 
@@ -87,6 +87,12 @@ type MyInt = int
         (set[int], [set(), {1}], [1, (), {1, "a"}], False),
         (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
+        (
+            OrderedDict[str, int],
+            [{}, {"a": 1}, {"a": 1, "b": 2}],
+            [1, (), {"a": "1"}, {1: 1}],
+            False,
+        ),
         # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
         (CustomBase, [CustomObj()], ["", 1, object()], False),
@@ -364,3 +370,16 @@ def test_delayed_forward_ref_support_partial_specialization():
     holder.pair = DelayedGenericPair[int, int]()
     with pytest.raises(TypeError):
         holder.pair = DelayedGenericPair[str, int]()
+
+
+def test_ordered_dict_annotation_produces_ators_ordered_dict():
+    """OrderedDict[K, V] annotations must produce AtorsOrderedDict containers."""
+    from ators._ators import AtorsOrderedDict
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a={"x": 1, "y": 2})
+    assert isinstance(obj.a, AtorsOrderedDict)
+    assert isinstance(obj.a, dict)
+    assert list(obj.a.keys()) == ["x", "y"]

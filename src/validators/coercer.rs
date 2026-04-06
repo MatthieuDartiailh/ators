@@ -203,6 +203,45 @@ impl Coercer {
                     // a fast validation path
                     Ok(coerced.as_any().clone())
                 },
+                TypeValidator::OrderedDict { items } => {
+                    let coerced = PyDict::new(py);
+                    if let Ok(t) = value.cast::<PyDict>() {
+                        for (k, v) in t.iter(){
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    } else if let Ok(tm) = value.cast::<PyMapping>() {
+                        for i in tm.items()?.iter(){
+                            let (k, v) = i.extract()?;
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    } else {
+                        for p in value.try_iter()? {
+                            let (k, v) = p?.extract()?;
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
+                                let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    };
+                    // FIXME create the right container upfront so that we can use
+                    // a fast validation path
+                    Ok(coerced.as_any().clone())
+                },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
                 TypeValidator::Instance { types } => types.coerce(value),
                 TypeValidator::ForwardValidator { late_validator } => self.coerce_value(
