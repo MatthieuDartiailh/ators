@@ -45,6 +45,41 @@ fn get_type_mutability_map<'py>(py: Python<'py>) -> Bound<'py, TypeMutabilityMap
         .into_bound(py)
 }
 
+/// Cached `collections.OrderedDict` type object.
+static ORDERED_DICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+/// Return the `collections.OrderedDict` type, initialising the cache on first call.
+pub(crate) fn get_ordered_dict_type(py: Python<'_>) -> Bound<'_, PyType> {
+    ORDERED_DICT_TYPE
+        .get_or_init(py, || {
+            py.import("collections")
+                .and_then(|m| m.getattr("OrderedDict"))
+                .map(|t| t.cast_into::<PyType>().expect("OrderedDict is a type"))
+                .expect("collections.OrderedDict must exist")
+                .unbind()
+        })
+        .clone_ref(py)
+        .into_bound(py)
+}
+
+/// Cached Python `AtorsOrderedDict` class (set by `_register_ators_ordered_dict_type`).
+static ATORS_ORDERED_DICT_TYPE: std::sync::OnceLock<Py<pyo3::PyAny>> =
+    std::sync::OnceLock::new();
+
+/// Return the Python `AtorsOrderedDict` class, or an error if it has not been
+/// registered yet via `_register_ators_ordered_dict_type`.
+pub(crate) fn get_ators_ordered_dict_type(py: Python<'_>) -> PyResult<Bound<'_, pyo3::PyAny>> {
+    ATORS_ORDERED_DICT_TYPE
+        .get()
+        .map(|t| t.clone_ref(py).into_bound(py))
+        .ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "AtorsOrderedDict has not been registered. \
+                 Ensure `import ators` is called before using OrderedDict members.",
+            )
+        })
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 mod _ators {
@@ -72,10 +107,20 @@ mod _ators {
 
     // Exported only to enable pickling
     #[pymodule_export]
-    use self::containers::{AtorsDict, AtorsList, AtorsOrderedDict, AtorsSet};
+    use self::containers::{AtorsDict, AtorsList, AtorsOrderedDictCore, AtorsSet};
 
     #[pymodule_export]
     use self::observers::AtorsChange;
+
+    #[pyfunction]
+    /// Register the Python `AtorsOrderedDict` class so that the Rust type-validator
+    /// can produce it when an `OrderedDict` annotation is encountered.
+    ///
+    /// This is called automatically by `ators/__init__.py` when the package is
+    /// imported; users do not need to call it directly.
+    pub(crate) fn _register_ators_ordered_dict_type(cls: &pyo3::Bound<'_, pyo3::PyAny>) {
+        let _ = ATORS_ORDERED_DICT_TYPE.set(cls.clone().unbind());
+    }
 
     #[pyfunction]
     pub(crate) fn add_generic_type_attributes<'py>(

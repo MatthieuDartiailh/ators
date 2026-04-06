@@ -204,43 +204,45 @@ impl Coercer {
                     Ok(coerced.as_any().clone())
                 },
                 TypeValidator::OrderedDict { items } => {
-                    let coerced = PyDict::new(py);
+                    // Coerce the value to a plain `collections.OrderedDict`.
+                    // The subsequent type-validation step will then wrap it in
+                    // `AtorsOrderedDict`.
+                    let ordered_dict_type = crate::get_ordered_dict_type(py);
+                    let coerced = ordered_dict_type.call0()?;
                     if let Ok(t) = value.cast::<PyDict>() {
                         for (k, v) in t.iter(){
                             if let Some((key_validator, val_validator)) = items {
                                 let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
                                 let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
-                                coerced.set_item(ck?, cv?)?;
+                                coerced.call_method1("__setitem__", (ck?, cv?))?;
                             } else {
-                                coerced.set_item(k, v)?;
+                                coerced.call_method1("__setitem__", (k, v))?;
                             }
                         }
                     } else if let Ok(tm) = value.cast::<PyMapping>() {
                         for i in tm.items()?.iter(){
-                            let (k, v) = i.extract()?;
+                            let (k, v): (Bound<'py, PyAny>, Bound<'py, PyAny>) = i.extract()?;
                             if let Some((key_validator, val_validator)) = items {
                                 let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
                                 let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
-                                coerced.set_item(ck?, cv?)?;
+                                coerced.call_method1("__setitem__", (ck?, cv?))?;
                             } else {
-                                coerced.set_item(k, v)?;
+                                coerced.call_method1("__setitem__", (k, v))?;
                             }
                         }
                     } else {
                         for p in value.try_iter()? {
-                            let (k, v) = p?.extract()?;
+                            let (k, v): (Bound<'py, PyAny>, Bound<'py, PyAny>) = p?.extract()?;
                             if let Some((key_validator, val_validator)) = items {
                                 let ck = self.coerce_value(is_init_coercion, &key_validator.type_validator, name, object, &k);
                                 let cv = self.coerce_value(is_init_coercion, &val_validator.type_validator, name, object, &v);
-                                coerced.set_item(ck?, cv?)?;
+                                coerced.call_method1("__setitem__", (ck?, cv?))?;
                             } else {
-                                coerced.set_item(k, v)?;
+                                coerced.call_method1("__setitem__", (k, v))?;
                             }
                         }
                     };
-                    // FIXME create the right container upfront so that we can use
-                    // a fast validation path
-                    Ok(coerced.as_any().clone())
+                    Ok(coerced)
                 },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
                 TypeValidator::Instance { types } => types.coerce(value),

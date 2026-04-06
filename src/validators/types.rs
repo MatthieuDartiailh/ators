@@ -14,7 +14,7 @@ use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::PyStringMethods;
 use pyo3::{
-    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
+    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python, intern,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
@@ -926,109 +926,146 @@ impl TypeValidator {
             Self::OrderedDict {
                 items: Some((key_v, val_v)),
             } => {
-                if let Ok(ators_odict) = value.cast::<crate::containers::AtorsOrderedDict>()
-                    && ators_odict.get().matches_assignment_context(name, object)
+                let py = value.py();
+                let aod_type = crate::get_ators_ordered_dict_type(py)?;
+                let ordered_dict_type = crate::get_ordered_dict_type(py);
+
+                // Fast path: already an AtorsOrderedDict assigned to the same context.
+                // We copy items without re-validation and return a fresh container.
+                if value.is_instance(&aod_type)?
+                    && value
+                        .getattr(intern!(py, "_core"))
+                        .ok()
+                        .and_then(|c| c.cast_into::<crate::containers::AtorsOrderedDictCore>().ok())
+                        .map(|c| c.get().matches_assignment_context(name, object))
+                        .unwrap_or(false)
                 {
-                    return Ok(
-                        crate::containers::AtorsOrderedDict::clone_for_assignment(
-                            ators_odict,
-                        )?
-                        .into_any(),
+                    let old_core = value
+                        .getattr(intern!(py, "_core"))?
+                        .cast_into::<crate::containers::AtorsOrderedDictCore>()?;
+                    let old = old_core.get();
+                    let new_core = crate::containers::AtorsOrderedDictCore::new_empty(
+                        py,
+                        old.key_validator.clone(),
+                        old.value_validator.clone(),
+                        old.member_name.as_deref(),
+                        unsafe { &*old.object.get() }
+                            .as_ref()
+                            .map(|o| o.clone_ref(py)),
+                    )?;
+                    // Collect existing (already-validated) items from the source.
+                    let py_items = PyList::empty(py);
+                    for (k, v) in value.cast::<PyDict>()?.iter() {
+                        py_items.append(PyTuple::new(py, [&k, &v])?)?;
+                    }
+                    return aod_type.call_method1(
+                        intern!(py, "_from_core_and_items"),
+                        (new_core, py_items),
                     );
                 }
-                if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
-                    let py = value.py();
-                    let aodict = crate::containers::AtorsOrderedDict::new_empty(
-                        py,
-                        (*key_v.0).clone(),
-                        (*val_v.0).clone(),
-                        name,
-                        object.map(|m| m.clone().unbind()),
-                    )?;
-                    let dict_bound = aodict.cast::<PyDict>()?;
-                    for (tk, tv) in dict.iter() {
-                        match (
-                            key_v.validate(name, object, &tk),
-                            val_v.validate(name, object, &tv),
-                        ) {
-                            (Ok(k), Ok(v)) => dict_bound.set_item(&k, &v)?,
-                            (Err(err), _) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate key '{}' for the member {} of {}.",
-                                            tk.repr()?,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        err,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate key '{}'.",
-                                            tk.repr()?,
-                                        )),
-                                        err,
-                                    ));
-                                }
+
+                // Only accept OrderedDict (and subclasses); plain dict is rejected.
+                if !value.is_instance(ordered_dict_type.as_any())? {
+                    return validation_error!("OrderedDict", name, object, value);
+                }
+
+                // Build a new AtorsOrderedDictCore, validate every item, then hand
+                // everything to the Python factory.
+                let new_core = crate::containers::AtorsOrderedDictCore::new_empty(
+                    py,
+                    (*key_v.0).clone(),
+                    (*val_v.0).clone(),
+                    name,
+                    object.map(|m| m.clone().unbind()),
+                )?;
+                let src_dict = value.cast::<PyDict>()?;
+                let py_items = PyList::empty(py);
+                for (tk, tv) in src_dict.iter() {
+                    match (
+                        key_v.validate(name, object, &tk),
+                        val_v.validate(name, object, &tv),
+                    ) {
+                        (Ok(k), Ok(v)) => {
+                            py_items.append(PyTuple::new(py, [&k, &v])?)?;
+                        }
+                        (Err(err), _) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}' for the member {} of {}.",
+                                        tk.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}'.",
+                                        tk.repr()?,
+                                    )),
+                                    err,
+                                ));
                             }
-                            (Ok(_), Err(err)) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
-                                            tv.repr()?,
-                                            tk.repr()?,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        err,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate value '{}' with key '{}'.",
-                                            tk.repr()?,
-                                            tv.repr()?
-                                        )),
-                                        err,
-                                    ));
-                                }
+                        }
+                        (Ok(_), Err(err)) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                        tv.repr()?,
+                                        tk.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}'.",
+                                        tk.repr()?,
+                                        tv.repr()?
+                                    )),
+                                    err,
+                                ));
                             }
                         }
                     }
-                    Ok(aodict.into_any())
-                } else {
-                    validation_error!("OrderedDict", name, object, value)
                 }
+                aod_type.call_method1(intern!(py, "_from_core_and_items"), (new_core, py_items))
             }
             Self::OrderedDict { items: None } => {
-                if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
-                    let py = value.py();
-                    let aodict = crate::containers::AtorsOrderedDict::new_empty(
-                        py,
-                        crate::validators::Validator::default(),
-                        crate::validators::Validator::default(),
-                        name,
-                        object.map(|m| m.clone().unbind()),
-                    )?;
-                    let dict_bound = aodict.cast::<PyDict>()?;
-                    for (k, val) in v.iter() {
-                        dict_bound.set_item(&k, &val)?;
-                    }
-                    Ok(aodict.into_any())
-                } else {
-                    validation_error!("OrderedDict", name, object, value)
+                let py = value.py();
+                let ordered_dict_type = crate::get_ordered_dict_type(py);
+
+                // Only accept OrderedDict (and subclasses); plain dict is rejected.
+                if !value.is_instance(ordered_dict_type.as_any())? {
+                    return validation_error!("OrderedDict", name, object, value);
                 }
+
+                let aod_type = crate::get_ators_ordered_dict_type(py)?;
+                let new_core = crate::containers::AtorsOrderedDictCore::new_empty(
+                    py,
+                    crate::validators::Validator::default(),
+                    crate::validators::Validator::default(),
+                    name,
+                    object.map(|m| m.clone().unbind()),
+                )?;
+                let py_items = PyList::empty(py);
+                for (k, v) in value.cast::<PyDict>()?.iter() {
+                    py_items.append(PyTuple::new(py, [&k, &v])?)?;
+                }
+                aod_type.call_method1(intern!(py, "_from_core_and_items"), (new_core, py_items))
             }
             Self::Typed { type_ } => {
                 let t = type_.bind(value.py());

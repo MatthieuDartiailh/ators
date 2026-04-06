@@ -540,27 +540,6 @@ fn dict_set_item<'py>(
     })
 }
 
-/// Collect all (key, value) pairs from a dict pointer using the C-level iterator.
-///
-/// The returned `Bound` values are owned references (ref count incremented).
-/// This avoids needing a `Bound<PyDict>` — only the raw pointer is required.
-fn dict_items<'py>(
-    py: Python<'py>,
-    dict_ptr: *mut ffi::PyObject,
-) -> Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-    let mut pos: ffi::Py_ssize_t = 0;
-    let mut key_ptr: *mut ffi::PyObject = std::ptr::null_mut();
-    let mut val_ptr: *mut ffi::PyObject = std::ptr::null_mut();
-    let mut items = Vec::new();
-    // Safety: PyDict_Next yields borrowed references; we immediately upgrade them to
-    // owned Bounds so the reference counts are correct when items outlive the iteration.
-    while unsafe { ffi::PyDict_Next(dict_ptr, &mut pos, &mut key_ptr, &mut val_ptr) } != 0 {
-        let key = unsafe { Bound::from_borrowed_ptr(py, key_ptr) };
-        let val = unsafe { Bound::from_borrowed_ptr(py, val_ptr) };
-        items.push((key, val));
-    }
-    items
-}
 
 #[pymethods]
 impl AtorsDict {
@@ -688,34 +667,41 @@ impl AtorsDict {
     // XXX can simply implement __getstate__ and __setstate__ without dealing with items
 }
 
-// XXX not pickable ...
-#[pyclass(module = "ators._ators", extends=PyDict, frozen)]
-pub struct AtorsOrderedDict {
-    key_validator: Validator,
-    value_validator: Validator,
-    member_name: Option<String>,
+/// Validation core for `AtorsOrderedDict` (the Python class defined in
+/// `python/ators/_containers.py`).
+///
+/// `AtorsOrderedDict` is defined in Python as
+/// `class AtorsOrderedDict(collections.OrderedDict)`, making it a proper
+/// `OrderedDict` subclass.  This Rust struct holds the key/value validators
+/// and the owner-assignment context so that every mutating operation on the
+/// Python container can delegate validation here.
+#[pyclass(module = "ators._ators", frozen)]
+pub struct AtorsOrderedDictCore {
+    pub(crate) key_validator: Validator,
+    pub(crate) value_validator: Validator,
+    pub(crate) member_name: Option<String>,
     // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
-    object: UnsafeCell<Option<Py<AtorsBase>>>,
+    pub(crate) object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
 
 // Safety: key_validator, value_validator, and member_name are immutable after construction;
 // object is only modified during __clear__, which Python's GC calls only once all references
 // to this object have been dropped — ensuring no concurrent access (holds for both GIL and
 // free-threaded builds).
-unsafe impl Sync for AtorsOrderedDict {}
+unsafe impl Sync for AtorsOrderedDictCore {}
 
-impl AtorsOrderedDict {
-    /// Create an empty, owner-bound `AtorsOrderedDict` with the given validators.
+impl AtorsOrderedDictCore {
+    /// Create a new `AtorsOrderedDictCore` with the given validators and context.
     pub(crate) fn new_empty<'py>(
         py: Python<'py>,
         key_validator: Validator,
         value_validator: Validator,
         member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
-    ) -> PyResult<Bound<'py, AtorsOrderedDict>> {
+    ) -> PyResult<Bound<'py, AtorsOrderedDictCore>> {
         Bound::new(
             py,
-            AtorsOrderedDict {
+            AtorsOrderedDictCore {
                 key_validator,
                 value_validator,
                 member_name: member_name.map(|m| m.to_string()),
@@ -724,48 +710,7 @@ impl AtorsOrderedDict {
         )
     }
 
-    /// Validate a key using the key_validator
-    fn validate_key<'py>(
-        &self,
-        py: Python<'py>,
-        key: Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member_name.as_deref();
-        // Safety: object is only written during __clear__, which can only run after all
-        // live references to this object are gone. A live reference is required to call
-        // this method, so __clear__ cannot run concurrently (holds for both GIL and
-        // free-threaded builds).
-        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        self.key_validator.validate(m, o, &key)
-    }
-
-    /// Validate a value for insertion into the dict
-    fn validate_value<'py>(
-        &self,
-        py: Python<'py>,
-        value: Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let m = self.member_name.as_deref();
-        // Safety: same as validate_key.
-        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        self.value_validator.validate(m, o, &value)
-    }
-
-    /// Validate both key and value for insertion into the dict
-    fn validate_item<'py>(
-        &self,
-        py: Python<'py>,
-        key: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
-    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let m = self.member_name.as_deref();
-        // Safety: same as validate_key.
-        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        let valid_key = self.key_validator.validate(m, o, &key)?;
-        let valid_value = self.value_validator.validate(m, o, &value)?;
-        Ok((valid_key, valid_value))
-    }
-
+    /// Return `true` if this core matches the given assignment context.
     pub(crate) fn matches_assignment_context<'py>(
         &self,
         member_name: Option<&str>,
@@ -780,231 +725,53 @@ impl AtorsOrderedDict {
                 _ => false,
             }
     }
-
-    pub(crate) fn clone_for_assignment<'py>(
-        source: &Bound<'py, AtorsOrderedDict>,
-    ) -> PyResult<Bound<'py, AtorsOrderedDict>> {
-        let dict = source.get();
-        let aodict = AtorsOrderedDict::new_empty(
-            source.py(),
-            dict.key_validator.clone(),
-            dict.value_validator.clone(),
-            dict.member_name.as_deref(),
-            unsafe { &*dict.object.get() }
-                .as_ref()
-                .map(|object| object.clone_ref(source.py())),
-        )?;
-        // Iterate the source dict and set items directly without an intermediate Vec.
-        // Safety: AtorsOrderedDict is declared as `extends=PyDict`, so this cast is always valid.
-        let py_dict = unsafe { source.cast_unchecked::<PyDict>() };
-        let aodict_as_dict = aodict.cast::<PyDict>()?;
-        for (k, v) in py_dict.iter() {
-            aodict_as_dict.set_item(&k, &v)?;
-        }
-        Ok(aodict)
-    }
 }
 
 #[pymethods]
-impl AtorsOrderedDict {
-    pub fn __setitem__<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
+impl AtorsOrderedDictCore {
+    /// Validate and return a key.
+    pub fn validate_key<'py>(
+        &self,
         key: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
-    ) -> PyResult<()> {
-        let py = key.py();
-        let (valid_key, valid_value) = self_.validate_item(py, key, value)?;
-        dict_set_item(py, self_.as_ptr(), valid_key, valid_value)
-    }
-
-    #[pyo3(signature = (other=None, **kwargs))]
-    pub fn update<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
-        other: Option<&Bound<'py, PyAny>>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<()> {
-        let py = self_.py();
-        if let Some(o) = other {
-            // Shortcut for dicts for which we can safely iterate over
-            if let Ok(od) = o.cast::<PyDict>() {
-                for (k, v) in od.iter() {
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
-                }
-            }
-            // Handle object providing keys() method
-            else if o.hasattr(intern!(self_.py(), "keys"))? {
-                let keys = o.call_method0(intern!(self_.py(), "keys"))?;
-                for key in keys.try_iter()? {
-                    let k = key?;
-                    let v = o
-                        .getattr(intern!(self_.py(), "__getitem__"))?
-                        .call1((&k,))?;
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
-                }
-            }
-            // Handle iterable of key-value pairs
-            else {
-                for t in o.try_iter()? {
-                    let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
-                }
-            }
-        }
-
-        // Handle keyword arguments
-        if let Some(kw) = kwargs {
-            for (k, v) in kw.iter() {
-                let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn setdefault<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
-        key: Bound<'py, PyAny>,
-        default: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = key.py();
-        let valid_key = self_.validate_key(py, key)?;
-        if let Some(existing) = {
-            let mut result: *mut ffi::PyObject = std::ptr::null_mut();
-            match unsafe {
-                ffi::compat::PyDict_GetItemRef(self_.as_ptr(), valid_key.as_ptr(), &mut result)
-            } {
-                std::ffi::c_int::MIN..=-1 => Err(PyErr::fetch(py)),
-                0 => Ok(None),
-                1..=std::ffi::c_int::MAX => {
-                    // Safety: PyDict_GetItemRef positive return value means the result is a valid
-                    // owned reference
-                    Ok(Some(unsafe { Bound::from_owned_ptr(py, result) }))
-                }
-            }?
-        } {
-            return Ok(existing);
-        }
-
-        let value = if let Some(def) = default {
-            def
-        } else {
-            py.None().into_bound(py)
-        };
-        let valid_value = self_.validate_value(py, value)?;
-        dict_set_item(py, self_.as_ptr(), valid_key, Bound::clone(&valid_value))?;
-
-        Ok(valid_value)
+        let m = self.member_name.as_deref();
+        // Safety: object is only written during __clear__, which can only run after all
+        // live references to this object are gone. A live reference is required to call
+        // this method, so __clear__ cannot run concurrently (holds for both GIL and
+        // free-threaded builds).
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        self.key_validator.validate(m, o, &key)
     }
 
-    pub fn __ior__<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
-        other: Bound<'py, PyAny>,
-    ) -> PyResult<()> {
-        AtorsOrderedDict::update(self_, Some(&other), None)
+    /// Validate and return a value.
+    pub fn validate_value<'py>(
+        &self,
+        value: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = value.py();
+        let m = self.member_name.as_deref();
+        // Safety: same as validate_key.
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        self.value_validator.validate(m, o, &value)
     }
 
-    /// Move an existing element to the end (or beginning) of the ordered dict.
-    ///
-    /// If `last` is true (the default), the element is moved to the right end.
-    /// If `last` is false, the element is moved to the beginning.
-    /// Raises `KeyError` if the element does not exist.
-    #[pyo3(signature = (key, last=true))]
-    pub fn move_to_end<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
+    /// Validate a key-value pair and return `(valid_key, valid_value)`.
+    pub fn validate_item<'py>(
+        &self,
         key: Bound<'py, PyAny>,
-        last: bool,
-    ) -> PyResult<()> {
-        let py = key.py();
-        let self_ptr = self_.as_ptr();
-
-        // Retrieve the value; raise KeyError if missing.
-        let mut result: *mut ffi::PyObject = std::ptr::null_mut();
-        let found = unsafe {
-            ffi::compat::PyDict_GetItemRef(self_ptr, key.as_ptr(), &mut result)
-        };
-        match found {
-            std::ffi::c_int::MIN..=-1 => return Err(PyErr::fetch(py)),
-            0 => {
-                return Err(pyo3::exceptions::PyKeyError::new_err(
-                    key.repr()?.to_string(),
-                ))
-            }
-            _ => {}
-        }
-        // Safety: PyDict_GetItemRef positive return value means the result is a valid
-        // owned reference.
-        let value = unsafe { Bound::from_owned_ptr(py, result) };
-
-        if last {
-            // Delete the entry then re-insert it — dict preserves insertion order,
-            // so the key ends up at the back.
-            crate::utils::error_on_minusone(
-                py,
-                unsafe { ffi::PyDict_DelItem(self_ptr, key.as_ptr()) },
-            )?;
-            dict_set_item(py, self_ptr, key, value)
-        } else {
-            // Delete the key first, then snapshot remaining items, clear the dict,
-            // re-insert the key at the front, and restore the rest.
-            crate::utils::error_on_minusone(
-                py,
-                unsafe { ffi::PyDict_DelItem(self_ptr, key.as_ptr()) },
-            )?;
-            // Collect remaining items after the deletion using the C-level iterator.
-            let other_items = dict_items(py, self_ptr);
-            // Clear the dict (the target key is already gone).
-            unsafe { ffi::PyDict_Clear(self_ptr) };
-            // Re-insert target at the front.
-            dict_set_item(py, self_ptr, key, value)?;
-            // Re-insert remaining items in their original order.
-            for (k, v) in other_items {
-                dict_set_item(py, self_ptr, k, v)?;
-            }
-            Ok(())
-        }
-    }
-
-    /// Remove and return a (key, value) pair from the dict.
-    ///
-    /// If `last` is true (the default), the last inserted pair is removed and
-    /// returned (LIFO order).  If `last` is false, the first inserted pair is
-    /// removed and returned (FIFO order).
-    /// Raises `KeyError` if the dict is empty.
-    #[pyo3(signature = (last=true))]
-    pub fn popitem<'py>(
-        self_: PyRef<'py, AtorsOrderedDict>,
-        last: bool,
+        value: Bound<'py, PyAny>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-        let py = self_.py();
-        let self_ptr = self_.as_ptr();
-
-        // Check for empty dict via C API.
-        if unsafe { ffi::PyDict_Size(self_ptr) } == 0 {
-            return Err(pyo3::exceptions::PyKeyError::new_err("dictionary is empty"));
-        }
-
-        // Collect items via C-level iterator to get the first or last entry.
-        let items = dict_items(py, self_ptr);
-        let (key, value) = if last {
-            items.into_iter().last().unwrap()
-        } else {
-            items.into_iter().next().unwrap()
-        };
-
-        crate::utils::error_on_minusone(
-            py,
-            unsafe { ffi::PyDict_DelItem(self_ptr, key.as_ptr()) },
-        )?;
-
-        Ok((key, value))
+        let py = key.py();
+        let m = self.member_name.as_deref();
+        // Safety: same as validate_key.
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        let valid_key = self.key_validator.validate(m, o, &key)?;
+        let valid_value = self.value_validator.validate(m, o, &value)?;
+        Ok((valid_key, valid_value))
     }
 
-    // The traverse method of the parent class (PyDict) is called automatically and
-    // the type is also traversed so we only need to visit our own references.
+    // The type is also traversed by Python's GC so we only need to visit our own references.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
@@ -1014,13 +781,11 @@ impl AtorsOrderedDict {
         Ok(())
     }
 
-    // The clear method of the parent class (PyDict) is called automatically and
-    // so we only need to clear our own references.
     pub fn __clear__(&self) {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
     }
-
-    // XXX can simply implement __getstate__ and __setstate__ without dealing with items
 }
+
+

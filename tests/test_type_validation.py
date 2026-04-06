@@ -9,6 +9,7 @@
 
 from abc import ABC
 from annotationlib import ForwardRef
+from collections import OrderedDict as StdOrderedDict
 from typing import TYPE_CHECKING, Any, Literal, OrderedDict, TypeVar
 
 import pytest
@@ -89,8 +90,8 @@ type MyInt = int
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
         (
             OrderedDict[str, int],
-            [{}, {"a": 1}, {"a": 1, "b": 2}],
-            [1, (), {"a": "1"}, {1: 1}],
+            [StdOrderedDict(), StdOrderedDict({"a": 1}), StdOrderedDict({"a": 1, "b": 2})],
+            [1, (), {"a": "1"}, {1: 1}, {"a": 1}],
             False,
         ),
         # NOTE Not a type validation
@@ -374,12 +375,14 @@ def test_delayed_forward_ref_support_partial_specialization():
 
 def test_ordered_dict_annotation_produces_ators_ordered_dict():
     """OrderedDict[K, V] annotations must produce AtorsOrderedDict containers."""
-    from ators._ators import AtorsOrderedDict
+    from collections import OrderedDict as StdOrderedDict
+
+    from ators import AtorsOrderedDict
 
     class A(Ators):
         a: OrderedDict[str, int]
 
-    obj = A(a={"x": 1, "y": 2})
+    obj = A(a=StdOrderedDict({"x": 1, "y": 2}))
     assert isinstance(obj.a, AtorsOrderedDict)
-    assert isinstance(obj.a, dict)
+    assert isinstance(obj.a, StdOrderedDict)
     assert list(obj.a.keys()) == ["x", "y"]

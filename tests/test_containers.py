@@ -227,6 +227,7 @@ def test_list_reassignment_to_other_member_still_validates():
 
 @pytest.fixture()
 def ators_ordered_dict_object():
+    from collections import OrderedDict as StdOrderedDict
     from typing import OrderedDict
 
     from ators import Ators
@@ -234,7 +235,7 @@ def ators_ordered_dict_object():
     class A(Ators):
         a: OrderedDict[str, int]
 
-    return A(a={"a": 2, "b": 3, "c": 4})
+    return A(a=StdOrderedDict([("a", 2), ("b", 3), ("c", 4)]))
 
 
 @pytest.mark.parametrize(
@@ -326,6 +327,7 @@ def test_ordered_dict_popitem_last_false(ators_ordered_dict_object):
 
 def test_ordered_dict_popitem_empty():
     """popitem on an empty AtorsOrderedDict raises KeyError."""
+    from collections import OrderedDict as StdOrderedDict
     from typing import OrderedDict
 
     from ators import Ators
@@ -333,12 +335,13 @@ def test_ordered_dict_popitem_empty():
     class A(Ators):
         a: OrderedDict[str, int]
 
-    obj = A(a={})
+    obj = A(a=StdOrderedDict())
     with pytest.raises(KeyError):
         obj.a.popitem()
 
 
 def test_ordered_dict_same_owner_member_reassignment_copies_container():
+    from collections import OrderedDict as StdOrderedDict
     from typing import OrderedDict
 
     from ators import Ators
@@ -346,7 +349,7 @@ def test_ordered_dict_same_owner_member_reassignment_copies_container():
     class A(Ators):
         a: OrderedDict[str, int]
 
-    obj = A(a={"x": 1, "y": 2})
+    obj = A(a=StdOrderedDict({"x": 1, "y": 2}))
     original = obj.a
 
     obj.a = original
@@ -357,15 +360,16 @@ def test_ordered_dict_same_owner_member_reassignment_copies_container():
 
 
 def test_ordered_dict_container_type():
-    """AtorsOrderedDict is a subclass of dict."""
+    """AtorsOrderedDict is a subclass of OrderedDict (and thus dict)."""
+    from collections import OrderedDict as StdOrderedDict
     from typing import OrderedDict
 
-    from ators import Ators
-    from ators._ators import AtorsOrderedDict
+    from ators import Ators, AtorsOrderedDict
 
     class A(Ators):
         a: OrderedDict[str, int]
 
-    obj = A(a={"x": 1})
+    obj = A(a=StdOrderedDict({"x": 1}))
     assert isinstance(obj.a, dict)
+    assert isinstance(obj.a, StdOrderedDict)
     assert isinstance(obj.a, AtorsOrderedDict)
