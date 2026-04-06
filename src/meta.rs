@@ -7,6 +7,7 @@
 |----------------------------------------------------------------------------*/
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
@@ -62,6 +63,18 @@ static ATORS_GENERIC_TYPEVAR_BINDINGS: &str = "__ators_typevar_bindings__";
 /// Storing the cache on the origin guarantees that `A[int, str]` and
 /// `A[int][str]` always return the same class object.
 static ATORS_GENERIC_SPECIALIZATIONS: &str = "__ators_specializations__";
+
+/// Cache for `rust_subclasscheck` results.
+/// Keyed by `(sub_ptr, cls_ptr)` (raw pointer addresses of the two type objects).
+/// Safe because Ators specialisations are strongly referenced by the origin
+/// class cache and therefore outlive any entry in this table.
+static SUBCLASS_CACHE: LazyLock<Mutex<HashMap<(usize, usize), bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Cache for `rust_instancecheck` results.
+/// Keyed by `(type_of_instance_ptr, cls_ptr)`.
+static INSTANCE_CACHE: LazyLock<Mutex<HashMap<(usize, usize), bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
@@ -258,6 +271,204 @@ fn enforce_narrower_typevar_bound(
     Ok(())
 }
 
+/// Return `true` when `param` is an instance of `typing.ForwardRef`.
+fn is_forward_ref(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = param.py();
+    // FIXME: importing `typing` every call is wasteful; cache on module state
+    // once pyo3 makes that ergonomic.
+    let typing = py.import(intern!(py, "typing"))?;
+    param.is_instance(&typing.getattr(intern!(py, "ForwardRef"))?)
+}
+
+/// Return `true` when `param` is `typing.Any`.
+fn is_any_type(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = param.py();
+    let typing = py.import(intern!(py, "typing"))?;
+    let any = typing.getattr(intern!(py, "Any"))?;
+    Ok(param.is(&any))
+}
+
+/// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
+///
+/// Rules (mirroring PEP 484 compatibility):
+/// - If `typevar` has constraints `[C1, C2, …]`, `arg` must be a subclass of
+///   at least one constraint.
+/// - If `typevar` has a bound `B`, `arg` must be a subclass of `B`.
+/// - An unconstrained, unbound TypeVar is a wildcard and matches anything.
+fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = typevar.py();
+
+    // Constrained TypeVar: arg must be subclass of (at least) one constraint.
+    let constraints = typevar.getattr(intern!(py, "__constraints__"))?;
+    let constraints_tuple = constraints.cast_into::<PyTuple>()?;
+    if !constraints_tuple.is_empty() {
+        for constraint in constraints_tuple.iter() {
+            if arg.is(&constraint) {
+                return Ok(true);
+            }
+            if let (Ok(arg_t), Ok(con_t)) =
+                (arg.cast::<PyType>(), constraint.cast::<PyType>())
+                && arg_t.is_subclass(con_t)?
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
+    // Bounded TypeVar: arg must be a subclass of the bound.
+    let bound = typevar.getattr(intern!(py, "__bound__"))?;
+    if !bound.is_none() {
+        if let (Ok(arg_t), Ok(bound_t)) = (arg.cast::<PyType>(), bound.cast::<PyType>()) {
+            return arg_t.is_subclass(bound_t);
+        }
+        // Non-type bound: fall back to equality.
+        return arg.eq(&bound);
+    }
+
+    // Unconstrained, unbound TypeVar: wildcard.
+    Ok(true)
+}
+
+/// Core generic-subclass matching logic (no caching).
+///
+/// Returns `true` when `sub` is generically compatible with the specialised
+/// generic `cls`.  Both `cls` and `sub` are expected to be Ators-specialised
+/// classes (i.e. they carry `__ators_origin__` and `__ators_args__`).
+fn generic_subclass_match_impl<'py>(
+    cls: &Bound<'py, PyAny>,
+    sub: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    let py = cls.py();
+
+    // Identity short-circuit.
+    if sub.is(cls) {
+        return Ok(true);
+    }
+
+    // `cls` must be a specialised generic (carries `__ators_origin__`).
+    let cls_origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
+        Ok(o) => o,
+        Err(_) => return Ok(false),
+    };
+
+    // `sub` must also be a specialised generic.
+    let sub_origin = match sub.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
+        Ok(o) => o,
+        Err(_) => return Ok(false),
+    };
+
+    // Origins must be compatible: same object, or sub_origin is a (normal)
+    // subclass of cls_origin.
+    if !sub_origin.is(&cls_origin) {
+        if let (Ok(so), Ok(co)) = (sub_origin.cast::<PyType>(), cls_origin.cast::<PyType>()) {
+            if !so.is_subclass(co)? {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+
+    // Retrieve argument tuples.
+    let sub_args = sub
+        .getattr(intern!(py, ATORS_GENERIC_ARGS))?
+        .cast_into::<PyTuple>()?;
+    let cls_args = cls
+        .getattr(intern!(py, ATORS_GENERIC_ARGS))?
+        .cast_into::<PyTuple>()?;
+
+    // Arity mismatch => False.
+    if sub_args.len() != cls_args.len() {
+        return Ok(false);
+    }
+
+    // Match each argument position.
+    for (sub_arg, cls_arg) in sub_args.iter().zip(cls_args.iter()) {
+        // `Any` on the RHS matches everything.
+        if is_any_type(&cls_arg)? {
+            continue;
+        }
+
+        // TypeVar on the RHS acts as a wildcard (subject to bound/constraints).
+        if is_type_var(&cls_arg)? {
+            if !typevar_matches_arg(&cls_arg, &sub_arg)? {
+                return Ok(false);
+            }
+            continue;
+        }
+
+        // Concrete type: sub_arg must be identical or a subclass.
+        if sub_arg.is(&cls_arg) {
+            continue;
+        }
+        match (sub_arg.cast::<PyType>(), cls_arg.cast::<PyType>()) {
+            (Ok(s), Ok(c)) => {
+                if !s.is_subclass(c)? {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+
+    Ok(true)
+}
+
+/// Generic-aware runtime subclass check (Rust side).
+///
+/// Called from `AtorsMeta.__subclasscheck__` when `cls` is a specialised
+/// Ators generic class.  Returns `true` when `sub` is generically compatible
+/// with `cls` (i.e. `issubclass(sub, cls)` should return `True`).
+#[pyfunction]
+pub fn rust_subclasscheck<'py>(
+    cls: Bound<'py, PyAny>,
+    sub: Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    // Cache look-up using raw pointer addresses as keys.
+    let key = (sub.as_ptr() as usize, cls.as_ptr() as usize);
+    if let Ok(cache) = SUBCLASS_CACHE.lock()
+        && let Some(&cached) = cache.get(&key)
+    {
+        return Ok(cached);
+    }
+
+    let result = generic_subclass_match_impl(&cls, &sub)?;
+
+    if let Ok(mut cache) = SUBCLASS_CACHE.lock() {
+        cache.insert(key, result);
+    }
+    Ok(result)
+}
+
+/// Generic-aware runtime instance check (Rust side).
+///
+/// Called from `AtorsMeta.__instancecheck__` when `cls` is a specialised
+/// Ators generic class.  Returns `true` when `type(instance)` is generically
+/// compatible with `cls`.
+#[pyfunction]
+pub fn rust_instancecheck<'py>(
+    cls: Bound<'py, PyAny>,
+    instance: Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    let instance_type = instance.get_type();
+
+    // Cache look-up.
+    let key = (instance_type.as_ptr() as usize, cls.as_ptr() as usize);
+    if let Ok(cache) = INSTANCE_CACHE.lock()
+        && let Some(&cached) = cache.get(&key)
+    {
+        return Ok(cached);
+    }
+
+    let result = generic_subclass_match_impl(&cls, instance_type.as_any())?;
+
+    if let Ok(mut cache) = INSTANCE_CACHE.lock() {
+        cache.insert(key, result);
+    }
+    Ok(result)
+}
+
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: Bound<'py, PyType>,
@@ -287,6 +498,17 @@ pub fn create_ators_specialized_subclass<'py>(
             exposed_params.len(),
             params_tuple.len()
         )));
+    }
+
+    // ForwardRef is forbidden at specialisation time: it cannot be resolved
+    // without a concrete namespace and would silently produce wrong results.
+    for arg in params_tuple.iter() {
+        if is_forward_ref(&arg)? {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "ForwardRef is not supported in Ators generic specialisations; \
+                 use concrete types or TypeVar instead",
+            ));
+        }
     }
 
     // If all type var are the type var involved in the definition of the class,

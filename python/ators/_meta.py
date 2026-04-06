@@ -14,6 +14,8 @@ from ._ators import (
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
+    rust_instancecheck as _rust_instancecheck,
+    rust_subclasscheck as _rust_subclasscheck,
 )
 
 
@@ -72,3 +74,27 @@ class AtorsMeta(type):
 
     def __getitem__(self, params):
         return _create_ators_specialized_subclass(self, params)
+
+    def __subclasscheck__(cls, sub):  # type: ignore[override]
+        """Generic-aware subclass check.
+
+        When *cls* is a specialised Ators generic (i.e. carries
+        ``__ators_origin__``), the check is delegated entirely to the Rust
+        engine so that, e.g., ``issubclass(A[int, str], A[T, str])`` returns
+        ``True``.  Otherwise the default :class:`type` implementation is used.
+        """
+        if hasattr(cls, "__ators_origin__"):
+            return _rust_subclasscheck(cls, sub)
+        return type.__subclasscheck__(cls, sub)
+
+    def __instancecheck__(cls, instance):  # type: ignore[override]
+        """Generic-aware instance check.
+
+        When *cls* is a specialised Ators generic, delegates to the Rust
+        engine so that ``isinstance(obj, A[T, str])`` mirrors the behaviour of
+        the subclass check for ``type(obj)``.  Otherwise the default
+        :class:`type` implementation is used.
+        """
+        if hasattr(cls, "__ators_origin__"):
+            return _rust_instancecheck(cls, instance)
+        return type.__instancecheck__(cls, instance)

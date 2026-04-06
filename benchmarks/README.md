@@ -21,6 +21,7 @@ and two frontends:
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
 - `containers/test_dict.py`: Rust-backed dict method family.
+- `test_typecheck.py`: generic-aware `issubclass`/`isinstance` family.
 
 ### Shared pyperf entrypoints
 
@@ -33,6 +34,7 @@ and two frontends:
 - `containers/bench_list.py`: convenience runner for list method family.
 - `containers/bench_set.py`: convenience runner for set method family.
 - `containers/bench_dict.py`: convenience runner for dict method family.
+- `bench_typecheck.py`: convenience runner for `typecheck` family.
 
 ## Running Benchmarks
 
@@ -90,6 +92,7 @@ python benchmarks/bench_get_descriptor.py
 python benchmarks/containers/bench_list.py
 python benchmarks/containers/bench_set.py
 python benchmarks/containers/bench_dict.py
+python benchmarks/bench_typecheck.py
 ```
 
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
@@ -136,4 +139,7 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
 - `property_typed`: property copy-and-validate assignment baseline.
 - `ators`: Ators implementation.
 - `ators_frozen`: frozen Ators variant where relevant.
+- `ators_generic_concrete`: fully-concrete Ators generic specialisation checks.
+- `ators_generic_typevar`: TypeVar-pattern Ators generic checks.
+- `ators_generic_typevar_both`: both args are TypeVars (widest wildcard).
 - `atom`: Atom implementation, included only when available.
