@@ -23,16 +23,9 @@ Families
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
 
 from ators import Ators
 from benchmarks.shared.registry_types import BenchmarkCase
-
-# ---------------------------------------------------------------------------
-# TypeVars used in the pattern checks
-# ---------------------------------------------------------------------------
-T = TypeVar("T")
-U = TypeVar("U")
 
 
 # ---------------------------------------------------------------------------
@@ -64,17 +57,21 @@ _ators_child_inst = _AtorsChild()
 
 
 # ---------------------------------------------------------------------------
-# Generic Ators class (two type params)
+# Generic Ators class (two type params, PEP-695 syntax)
 # ---------------------------------------------------------------------------
-class _AtorsG(Ators):
-    __type_params__ = (T, U)
+class _AtorsG[T, U](Ators):
+    pass
 
 
-# Concrete and partial specialisations (created once at module level so the
-# warm-cache benchmarks measure only the cached dispatch path).
+# Extract the TypeVar objects created by the class definition so that
+# partial-specialisation patterns like ``_AtorsG[_T, str]`` use the same
+# TypeVar identities that the Rust engine records.
+_T, _U = _AtorsG.__type_params__
+
+# Concrete and partial specialisations (created once at module level).
 _G_int_str = _AtorsG[int, str]
-_G_T_str = _AtorsG[T, str]
-_G_T_U = _AtorsG[T, U]
+_G_T_str = _AtorsG[_T, str]
+_G_T_U = _AtorsG[_T, _U]
 
 _g_int_str_inst = _G_int_str()
 

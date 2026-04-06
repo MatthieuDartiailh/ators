@@ -7,7 +7,6 @@
 |----------------------------------------------------------------------------*/
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
@@ -63,18 +62,6 @@ static ATORS_GENERIC_TYPEVAR_BINDINGS: &str = "__ators_typevar_bindings__";
 /// Storing the cache on the origin guarantees that `A[int, str]` and
 /// `A[int][str]` always return the same class object.
 static ATORS_GENERIC_SPECIALIZATIONS: &str = "__ators_specializations__";
-
-/// Cache for `rust_subclasscheck` results.
-/// Keyed by `(sub_ptr, cls_ptr)` (raw pointer addresses of the two type objects).
-/// Safe because Ators specialisations are strongly referenced by the origin
-/// class cache and therefore outlive any entry in this table.
-static SUBCLASS_CACHE: LazyLock<Mutex<HashMap<(usize, usize), bool>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Cache for `rust_instancecheck` results.
-/// Keyed by `(type_of_instance_ptr, cls_ptr)`.
-static INSTANCE_CACHE: LazyLock<Mutex<HashMap<(usize, usize), bool>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
@@ -291,12 +278,22 @@ fn is_any_type(param: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
 ///
 /// Rules (mirroring PEP 484 compatibility):
+/// - If `typevar` has a bound `B`, `arg` must be a subclass of `B`.
 /// - If `typevar` has constraints `[C1, C2, …]`, `arg` must be a subclass of
 ///   at least one constraint.
-/// - If `typevar` has a bound `B`, `arg` must be a subclass of `B`.
 /// - An unconstrained, unbound TypeVar is a wildcard and matches anything.
 fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = typevar.py();
+
+    // Bounded TypeVar: arg must be a subclass of the bound (checked first as more common).
+    let bound = typevar.getattr(intern!(py, "__bound__"))?;
+    if !bound.is_none() {
+        if let (Ok(arg_t), Ok(bound_t)) = (arg.cast::<PyType>(), bound.cast::<PyType>()) {
+            return arg_t.is_subclass(bound_t);
+        }
+        // Non-type bound: fall back to equality.
+        return arg.eq(&bound);
+    }
 
     // Constrained TypeVar: arg must be subclass of (at least) one constraint.
     let constraints = typevar.getattr(intern!(py, "__constraints__"))?;
@@ -314,16 +311,6 @@ fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> Py
             }
         }
         return Ok(false);
-    }
-
-    // Bounded TypeVar: arg must be a subclass of the bound.
-    let bound = typevar.getattr(intern!(py, "__bound__"))?;
-    if !bound.is_none() {
-        if let (Ok(arg_t), Ok(bound_t)) = (arg.cast::<PyType>(), bound.cast::<PyType>()) {
-            return arg_t.is_subclass(bound_t);
-        }
-        // Non-type bound: fall back to equality.
-        return arg.eq(&bound);
     }
 
     // Unconstrained, unbound TypeVar: wildcard.
@@ -415,58 +402,59 @@ fn generic_subclass_match_impl<'py>(
     Ok(true)
 }
 
+/// MRO-based subclass check that walks `sub.__mro__` directly.
+///
+/// This avoids calling back through Python's `__subclasscheck__` (which would
+/// recurse into our metaclass hook).  Used as the non-generic fallback inside
+/// `rust_subclasscheck` and `rust_instancecheck`.
+fn mro_is_subclass(sub: &Bound<'_, PyAny>, cls: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if sub.is(cls) {
+        return Ok(true);
+    }
+    if let Ok(sub_ty) = sub.cast::<PyType>() {
+        for base in sub_ty.mro().iter() {
+            if base.is(cls) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Generic-aware runtime subclass check (Rust side).
 ///
-/// Called from `AtorsMeta.__subclasscheck__` when `cls` is a specialised
-/// Ators generic class.  Returns `true` when `sub` is generically compatible
-/// with `cls` (i.e. `issubclass(sub, cls)` should return `True`).
+/// Assigned directly as `AtorsMeta.__subclasscheck__`.  When `cls` is a
+/// specialised Ators generic (carries `__ators_origin__`), the generic match
+/// engine is used.  Otherwise a direct MRO walk provides the standard
+/// subclass semantics without recursing back into this function.
 #[pyfunction]
 pub fn rust_subclasscheck<'py>(
     cls: Bound<'py, PyAny>,
     sub: Bound<'py, PyAny>,
 ) -> PyResult<bool> {
-    // Cache look-up using raw pointer addresses as keys.
-    let key = (sub.as_ptr() as usize, cls.as_ptr() as usize);
-    if let Ok(cache) = SUBCLASS_CACHE.lock()
-        && let Some(&cached) = cache.get(&key)
-    {
-        return Ok(cached);
+    let py = cls.py();
+    if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
+        return generic_subclass_match_impl(&cls, &sub);
     }
-
-    let result = generic_subclass_match_impl(&cls, &sub)?;
-
-    if let Ok(mut cache) = SUBCLASS_CACHE.lock() {
-        cache.insert(key, result);
-    }
-    Ok(result)
+    mro_is_subclass(&sub, &cls)
 }
 
 /// Generic-aware runtime instance check (Rust side).
 ///
-/// Called from `AtorsMeta.__instancecheck__` when `cls` is a specialised
-/// Ators generic class.  Returns `true` when `type(instance)` is generically
-/// compatible with `cls`.
+/// Assigned directly as `AtorsMeta.__instancecheck__`.  When `cls` is a
+/// specialised Ators generic, the generic match engine is applied to
+/// `type(instance)`.  Otherwise a direct MRO walk is used.
 #[pyfunction]
 pub fn rust_instancecheck<'py>(
     cls: Bound<'py, PyAny>,
     instance: Bound<'py, PyAny>,
 ) -> PyResult<bool> {
+    let py = cls.py();
     let instance_type = instance.get_type();
-
-    // Cache look-up.
-    let key = (instance_type.as_ptr() as usize, cls.as_ptr() as usize);
-    if let Ok(cache) = INSTANCE_CACHE.lock()
-        && let Some(&cached) = cache.get(&key)
-    {
-        return Ok(cached);
+    if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
+        return generic_subclass_match_impl(&cls, instance_type.as_any());
     }
-
-    let result = generic_subclass_match_impl(&cls, instance_type.as_any())?;
-
-    if let Ok(mut cache) = INSTANCE_CACHE.lock() {
-        cache.insert(key, result);
-    }
-    Ok(result)
+    mro_is_subclass(instance_type.as_any(), &cls)
 }
 
 #[pyfunction]

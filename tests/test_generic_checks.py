@@ -15,18 +15,17 @@ import pytest
 from ators import Ators
 
 # ---------------------------------------------------------------------------
-# Generic Ators class fixture (Python 3.12+ PEP-695 syntax)
+# Generic Ators class fixture (PEP-695 syntax, Python 3.14+)
 # ---------------------------------------------------------------------------
-T = TypeVar("T")
-U = TypeVar("U")
+
+
+class G[T, U](Ators):
+    """A two-parameter generic Ators base class."""
+
+
+T, U = G.__type_params__
 TBound = TypeVar("TBound", bound=int)
 TCon = TypeVar("TCon", int, float)
-
-
-class G(Ators):
-    """A two-parameter generic Ators base class (old-style TypeVars)."""
-
-    __type_params__ = (T, U)
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +101,11 @@ def test_subclass_typevar_constraint_violated():
 def test_subclass_origin_mismatch():
     """Two unrelated generic classes are not compatible."""
 
-    class H(Ators):
-        __type_params__ = (T, U)
+    class H[T, U](Ators):
+        pass
 
-    assert issubclass(G[int, str], H[T, str]) is False
+    h_T = H.__type_params__[0]
+    assert issubclass(G[int, str], H[h_T, str]) is False
 
 
 def test_subclass_non_specialized_lhs():
