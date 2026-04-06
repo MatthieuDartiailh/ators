@@ -258,6 +258,112 @@ fn enforce_narrower_typevar_bound(
     Ok(())
 }
 
+/// Verify that `arg` (a concrete type or TypeVar) is compatible with the
+/// constraints declared on the `parent` TypeVar.
+///
+/// If `parent` has no `__constraints__` the check is a no-op.
+/// For a concrete type `arg`: it must be a subtype of at least one constraint.
+/// For a TypeVar `arg` with constraints: every constraint must be a subtype of
+/// at least one of the parent's constraints.
+/// For a TypeVar `arg` with only a bound (no constraints): the bound must be a
+/// subtype of at least one parent constraint.
+/// A TypeVar `arg` with neither constraints nor a bound is rejected.
+fn enforce_within_constraints(
+    parent: &Bound<'_, PyAny>,
+    arg: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let py = parent.py();
+    let parent_constraints = parent.getattr(intern!(py, "__constraints__"))?;
+    let Ok(parent_constraints_tuple) = parent_constraints.cast::<PyTuple>() else {
+        return Ok(());
+    };
+    if parent_constraints_tuple.is_empty() {
+        return Ok(());
+    }
+
+    // Returns true if `ty` is a subtype of at least one parent constraint.
+    let is_within = |ty: &Bound<'_, PyAny>| -> PyResult<bool> {
+        for constraint in parent_constraints_tuple.iter() {
+            let within = if let (Ok(t), Ok(c)) = (
+                ty.cast::<PyType>(),
+                constraint.cast::<PyType>(),
+            ) {
+                t.is_subclass(&c)?
+            } else {
+                let builtins = py.import(intern!(py, "builtins"))?;
+                let issubclass = builtins.getattr(intern!(py, "issubclass"))?;
+                match issubclass.call1((ty.clone(), constraint.clone())) {
+                    Ok(v) => v.extract::<bool>()?,
+                    Err(_) => ty.eq(&constraint)?,
+                }
+            };
+            if within {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+
+    if is_type_var(arg)? {
+        // TypeVar replacement: check its constraints against the parent constraints.
+        let arg_constraints = arg.getattr(intern!(py, "__constraints__"))?;
+        if let Ok(arg_constraints_tuple) = arg_constraints.cast::<PyTuple>()
+            && !arg_constraints_tuple.is_empty()
+        {
+            for arg_constraint in arg_constraints_tuple.iter() {
+                if !is_within(&arg_constraint)? {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Replacement TypeVar {} has constraint {} which is not within \
+                         the constraints {} of {}",
+                        arg.repr()?,
+                        arg_constraint.repr()?,
+                        parent_constraints_tuple.repr()?,
+                        parent.repr()?
+                    )));
+                }
+            }
+            return Ok(());
+        }
+
+        // TypeVar without constraints: fall back to its bound.
+        let arg_bound = arg.getattr(intern!(py, "__bound__"))?;
+        if !arg_bound.is_none() {
+            if is_within(&arg_bound)? {
+                return Ok(());
+            }
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Replacement TypeVar {} has bound {} which is not within \
+                 the constraints {} of {}",
+                arg.repr()?,
+                arg_bound.repr()?,
+                parent_constraints_tuple.repr()?,
+                parent.repr()?
+            )));
+        }
+
+        // Unconstrained and unbound TypeVar: too broad for a constrained parent.
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Replacement TypeVar {} must define constraints or a bound \
+             compatible with the constraints {} of {}",
+            arg.repr()?,
+            parent_constraints_tuple.repr()?,
+            parent.repr()?
+        )));
+    }
+
+    // Concrete type: must be a subtype of at least one constraint.
+    if !is_within(arg)? {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Type argument {} is not within the constraints {} of {}",
+            arg.repr()?,
+            parent_constraints_tuple.repr()?,
+            parent.repr()?
+        )));
+    }
+
+    Ok(())
+}
+
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: Bound<'py, PyType>,
@@ -329,6 +435,7 @@ pub fn create_ators_specialized_subclass<'py>(
         if is_type_var(&arg)? {
             enforce_narrower_typevar_bound(&exposed, &arg)?;
         }
+        enforce_within_constraints(&exposed, &arg)?;
 
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {

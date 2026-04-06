@@ -415,3 +415,105 @@ def test_constrained_typevar_matches_union_behavior():
             cbox.item = val
         with pytest.raises(TypeError):
             ubox.item = val
+
+
+# ---------------------------------------------------------------------------
+# Constrained TypeVar generic class specialization tests
+# ---------------------------------------------------------------------------
+
+# PEP 695 syntax: [T: (int, str)] creates a constrained TypeVar
+class ConstrainedGenericBox[T: (int, str)](Ators):
+    item: T = member()
+
+
+class ConstrainedGenericPair[T: (int, str), U](Ators):
+    first: T = member()
+    second: U = member()
+
+
+def test_constrained_generic_unspecialized_accepts_constraints():
+    box = ConstrainedGenericBox()
+    box.item = 1
+    box.item = "hello"
+
+
+def test_constrained_generic_unspecialized_rejects_other_types():
+    box = ConstrainedGenericBox()
+    with pytest.raises(TypeError):
+        box.item = 1.5
+
+
+def test_constrained_generic_specialized_with_first_constraint():
+    IntBox = ConstrainedGenericBox[int]
+    box = IntBox()
+    box.item = 1
+    with pytest.raises(TypeError):
+        box.item = "a"
+
+
+def test_constrained_generic_specialized_with_second_constraint():
+    StrBox = ConstrainedGenericBox[str]
+    box = StrBox()
+    box.item = "hello"
+    with pytest.raises(TypeError):
+        box.item = 1
+
+
+def test_constrained_generic_specialized_with_subclass_of_constraint():
+    # bool is a subclass of int, so it is within the constraints
+    BoolBox = ConstrainedGenericBox[bool]
+    box = BoolBox()
+    box.item = True
+    with pytest.raises(TypeError):
+        box.item = "a"
+
+
+def test_constrained_generic_specialization_rejects_outside_constraints():
+    with pytest.raises(TypeError, match="not within the constraints"):
+        _ = ConstrainedGenericBox[float]
+
+
+def test_constrained_generic_specialization_rejects_list_type():
+    with pytest.raises(TypeError, match="not within the constraints"):
+        _ = ConstrainedGenericBox[list]
+
+
+def test_constrained_generic_partial_specialization_with_subset_constraints():
+    # T_sub has constraints (int, bool) — both are subtypes of int, which is in (int, str)
+    T_sub = TypeVar("T_sub", int, bool)
+    partial = ConstrainedGenericPair[T_sub, str]
+    pair = partial()
+    pair.first = 1
+    pair.second = "x"
+    with pytest.raises(TypeError):
+        pair.first = "a"
+
+
+def test_constrained_generic_partial_specialization_rejects_incompatible_constraints():
+    # T_bad has float which is not within (int, str)
+    T_bad = TypeVar("T_bad", int, float)
+    with pytest.raises(TypeError, match="not within the constraints"):
+        _ = ConstrainedGenericPair[T_bad, str]
+
+
+def test_constrained_generic_partial_specialization_rejects_unconstrained_typevar():
+    T_free = TypeVar("T_free")
+    with pytest.raises(TypeError, match="compatible with the constraints"):
+        _ = ConstrainedGenericPair[T_free, str]
+
+
+def test_constrained_generic_partial_specialization_with_bound_within_constraints():
+    # T_bound has bound=int, which is within (int, str) constraints
+    T_bound = TypeVar("T_bound", bound=int)
+    partial = ConstrainedGenericPair[T_bound, str]
+    pair = partial()
+    pair.first = 1
+    pair.second = "x"
+    with pytest.raises(TypeError):
+        pair.first = "a"
+
+
+def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
+    T_float_bound = TypeVar("T_float_bound", bound=float)
+    with pytest.raises(TypeError, match="not within the constraints"):
+        _ = ConstrainedGenericPair[T_float_bound, str]
