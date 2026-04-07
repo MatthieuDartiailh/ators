@@ -436,16 +436,30 @@ pub fn build_validator_from_annotation<'py>(
             );
         }
 
-        // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are not
-        // supported.  Callers should use a Union annotation instead.
+        // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are treated
+        // as a union of their constraints.
         let constraints = ann.getattr(intern!(py, "__constraints__"))?;
         if let Ok(constraints_tuple) = constraints.cast::<PyTuple>()
             && !constraints_tuple.is_empty()
         {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Constrained TypeVars are not supported for member '{name}'. \
-                 Use a Union type annotation instead.",
-            )));
+            let mut members = Vec::new();
+            let mut requires_owner = false;
+            for constraint in constraints_tuple.iter() {
+                let (validator, info) = build_validator_from_annotation(
+                    name,
+                    &constraint,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                requires_owner = requires_owner || info.requires_owner;
+                members.push(validator);
+            }
+            return Ok((
+                Validator::new(TypeValidator::Union { members }, None, None, None),
+                ValidatorBuildInfo { requires_owner },
+            ));
         }
 
         let bound = ann.getattr(intern!(py, "__bound__"))?;
