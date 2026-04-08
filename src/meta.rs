@@ -303,8 +303,7 @@ fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> Py
             if arg.is(&constraint) {
                 return Ok(true);
             }
-            if let (Ok(arg_t), Ok(con_t)) =
-                (arg.cast::<PyType>(), constraint.cast::<PyType>())
+            if let (Ok(arg_t), Ok(con_t)) = (arg.cast::<PyType>(), constraint.cast::<PyType>())
                 && arg_t.is_subclass(con_t)?
             {
                 return Ok(true);
@@ -327,10 +326,7 @@ fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> Py
 /// For a TypeVar `arg` with only a bound (no constraints): the bound must be a
 /// subtype of at least one parent constraint.
 /// A TypeVar `arg` with neither constraints nor a bound is rejected.
-fn enforce_within_constraints(
-    parent: &Bound<'_, PyAny>,
-    arg: &Bound<'_, PyAny>,
-) -> PyResult<()> {
+fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = parent.py();
     let parent_constraints = parent.getattr(intern!(py, "__constraints__"))?;
     let Ok(parent_constraints_tuple) = parent_constraints.cast::<PyTuple>() else {
@@ -343,11 +339,9 @@ fn enforce_within_constraints(
     // Returns true if `ty` is a subtype of at least one parent constraint.
     let is_within = |ty: &Bound<'_, PyAny>| -> PyResult<bool> {
         for constraint in parent_constraints_tuple.iter() {
-            let within = if let (Ok(t), Ok(c)) = (
-                ty.cast::<PyType>(),
-                constraint.cast::<PyType>(),
-            ) {
-                t.is_subclass(&c)?
+            let within = if let (Ok(t), Ok(c)) = (ty.cast::<PyType>(), constraint.cast::<PyType>())
+            {
+                t.is_subclass(c.as_any())?
             } else {
                 let builtins = py.import(intern!(py, "builtins"))?;
                 let issubclass = builtins.getattr(intern!(py, "issubclass"))?;
@@ -516,10 +510,7 @@ fn generic_subclass_match_impl<'py>(
 /// used.  Otherwise a direct C-level type hierarchy check is used to avoid
 /// recursion through Python's `__subclasscheck__` dispatch.
 #[pyfunction]
-pub fn rust_subclasscheck<'py>(
-    cls: &Bound<'py, PyAny>,
-    sub: &Bound<'py, PyAny>,
-) -> PyResult<bool> {
+pub fn rust_subclasscheck<'py>(cls: &Bound<'py, PyAny>, sub: &Bound<'py, PyAny>) -> PyResult<bool> {
     let py = cls.py();
     if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
         return generic_subclass_match_impl(cls, sub);
@@ -527,9 +518,9 @@ pub fn rust_subclasscheck<'py>(
     // Non-generic fallback: use the C-level subtype check to avoid going back
     // through Python's __subclasscheck__ dispatch (which would recurse here).
     match (sub.cast::<PyType>(), cls.cast::<PyType>()) {
-        (Ok(sub_ty), Ok(cls_ty)) => Ok(unsafe {
-            ffi::PyType_IsSubtype(sub_ty.as_type_ptr(), cls_ty.as_type_ptr()) != 0
-        }),
+        (Ok(sub_ty), Ok(cls_ty)) => {
+            Ok(unsafe { ffi::PyType_IsSubtype(sub_ty.as_type_ptr(), cls_ty.as_type_ptr()) != 0 })
+        }
         _ => Ok(false),
     }
 }
