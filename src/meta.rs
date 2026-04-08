@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::{
-    Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
+    Bound, Py, PyAny, PyErr, PyResult, ffi, intern, pyfunction,
     sync::critical_section::with_critical_section,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
@@ -322,6 +322,7 @@ fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> Py
 /// Returns `true` when `sub` is generically compatible with the specialised
 /// generic `cls`.  Both `cls` and `sub` are expected to be Ators-specialised
 /// classes (i.e. they carry `__ators_origin__` and `__ators_args__`).
+#[cold]
 fn generic_subclass_match_impl<'py>(
     cls: &Bound<'py, PyAny>,
     sub: &Bound<'py, PyAny>,
@@ -402,69 +403,58 @@ fn generic_subclass_match_impl<'py>(
     Ok(true)
 }
 
-/// MRO-based subclass check that walks `sub.__mro__` directly.
-///
-/// This avoids calling back through Python's `__subclasscheck__` (which would
-/// recurse into our metaclass hook).  Used as the non-generic fallback inside
-/// `rust_subclasscheck` and `rust_instancecheck`.
-fn mro_is_subclass(sub: &Bound<'_, PyAny>, cls: &Bound<'_, PyAny>) -> PyResult<bool> {
-    if sub.is(cls) {
-        return Ok(true);
-    }
-    if let Ok(sub_ty) = sub.cast::<PyType>() {
-        for base in sub_ty.mro().iter() {
-            if base.is(cls) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
-}
-
 /// Generic-aware runtime subclass check (Rust side).
 ///
-/// Assigned directly as `AtorsMeta.__subclasscheck__`.  When `cls` is a
-/// specialised Ators generic (carries `__ators_origin__`), the generic match
-/// engine is used.  Otherwise a direct MRO walk provides the standard
-/// subclass semantics without recursing back into this function.
+/// Assigned as `AtorsMeta.__subclasscheck__`.  When `cls` is a specialised
+/// Ators generic (carries `__ators_origin__`), the generic match engine is
+/// used.  Otherwise a direct C-level type hierarchy check is used to avoid
+/// recursion through Python's `__subclasscheck__` dispatch.
 #[pyfunction]
 pub fn rust_subclasscheck<'py>(
-    cls: Bound<'py, PyAny>,
-    sub: Bound<'py, PyAny>,
+    cls: &Bound<'py, PyAny>,
+    sub: &Bound<'py, PyAny>,
 ) -> PyResult<bool> {
     let py = cls.py();
     if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
-        return generic_subclass_match_impl(&cls, &sub);
+        return generic_subclass_match_impl(cls, sub);
     }
-    mro_is_subclass(&sub, &cls)
+    // Non-generic fallback: use the C-level subtype check to avoid going back
+    // through Python's __subclasscheck__ dispatch (which would recurse here).
+    match (sub.cast::<PyType>(), cls.cast::<PyType>()) {
+        (Ok(sub_ty), Ok(cls_ty)) => Ok(unsafe {
+            ffi::PyType_IsSubtype(sub_ty.as_type_ptr(), cls_ty.as_type_ptr()) != 0
+        }),
+        _ => Ok(false),
+    }
 }
 
 /// Generic-aware runtime instance check (Rust side).
 ///
-/// Assigned directly as `AtorsMeta.__instancecheck__`.  When `cls` is a
-/// specialised Ators generic, the generic match engine is applied to
-/// `type(instance)`.  Otherwise a direct MRO walk is used.
+/// Assigned as `AtorsMeta.__instancecheck__`.  When `cls` is a specialised
+/// Ators generic, the generic match engine is applied to `type(instance)`.
+/// Otherwise a standard subclass check is used.
 #[pyfunction]
 pub fn rust_instancecheck<'py>(
-    cls: Bound<'py, PyAny>,
-    instance: Bound<'py, PyAny>,
+    cls: &Bound<'py, PyAny>,
+    instance: &Bound<'py, PyAny>,
 ) -> PyResult<bool> {
     let py = cls.py();
     let instance_type = instance.get_type();
     if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
-        return generic_subclass_match_impl(&cls, instance_type.as_any());
+        return generic_subclass_match_impl(cls, instance_type.as_any());
     }
-    mro_is_subclass(instance_type.as_any(), &cls)
+    let cls_ty = cls.cast::<PyType>()?;
+    instance_type.is_subclass(cls_ty)
 }
 
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
-    cls: Bound<'py, PyType>,
-    params: Bound<'py, PyAny>,
+    cls: &Bound<'py, PyType>,
+    params: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
 
-    let exposed_params = get_generic_params_obj(&cls)?;
+    let exposed_params = get_generic_params_obj(cls)?;
 
     if exposed_params.is_empty() {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -474,7 +464,7 @@ pub fn create_ators_specialized_subclass<'py>(
     }
 
     let params_tuple = if params.is_instance_of::<PyTuple>() {
-        params.cast_into::<PyTuple>()?
+        params.cast::<PyTuple>()?.clone()
     } else {
         PyTuple::new(py, [params])?
     };
@@ -506,7 +496,7 @@ pub fn create_ators_specialized_subclass<'py>(
         .zip(params_tuple.iter())
         .all(|(tp, p)| tp.is(&p));
     if fully_passthrough {
-        return Ok(cls.into_any());
+        return Ok(cls.clone().into_any());
     }
 
     let origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
