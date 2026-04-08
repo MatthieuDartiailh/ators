@@ -443,8 +443,7 @@ pub fn rust_instancecheck<'py>(
     if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
         return generic_subclass_match_impl(cls, instance_type.as_any());
     }
-    let cls_ty = cls.cast::<PyType>()?;
-    instance_type.is_subclass(cls_ty)
+    instance_type.is_subclass(cls)
 }
 
 #[pyfunction]
