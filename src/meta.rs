@@ -434,16 +434,21 @@ fn generic_subclass_match_impl<'py>(
         return Ok(true);
     }
 
-    // `cls` must be a specialised generic (carries `__ators_origin__`).
-    let cls_origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
-        Ok(o) => o,
-        Err(_) => return Ok(false),
+    // `cls` must be a specialised generic (non-None `__ators_origin__`).
+    let cls_origin = {
+        let o = cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN))?;
+        if o.is_none() {
+            return Ok(false);
+        }
+        o
     };
 
     // `sub` must also be a specialised generic.
+    // Handle both missing attribute (non-Ators type) and None sentinel
+    // (non-specialised Ators type) as a mismatch.
     let sub_origin = match sub.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
-        Ok(o) => o,
-        Err(_) => return Ok(false),
+        Ok(o) if !o.is_none() => o,
+        _ => return Ok(false),
     };
 
     // Origins must be compatible: same object, or sub_origin is a (normal)
@@ -506,13 +511,17 @@ fn generic_subclass_match_impl<'py>(
 /// Generic-aware runtime subclass check (Rust side).
 ///
 /// Assigned as `AtorsMeta.__subclasscheck__`.  When `cls` is a specialised
-/// Ators generic (carries `__ators_origin__`), the generic match engine is
-/// used.  Otherwise a direct C-level type hierarchy check is used to avoid
-/// recursion through Python's `__subclasscheck__` dispatch.
+/// Ators generic (carries a non-`None` `__ators_origin__`), the generic match
+/// engine is used.  Otherwise a direct C-level type hierarchy check is used to
+/// avoid recursion through Python's `__subclasscheck__` dispatch.
 #[pyfunction]
 pub fn rust_subclasscheck<'py>(cls: &Bound<'py, PyAny>, sub: &Bound<'py, PyAny>) -> PyResult<bool> {
     let py = cls.py();
-    if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
+    // __ators_origin__ is always present on Ators subclasses (None when not
+    // specialised, a real type when specialised).  Testing is_none() avoids
+    // raising AttributeError and is therefore much cheaper than is_ok().
+    let cls_origin = cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN))?;
+    if !cls_origin.is_none() {
         return generic_subclass_match_impl(cls, sub);
     }
     // Non-generic fallback: use the C-level subtype check to avoid going back
@@ -537,7 +546,11 @@ pub fn rust_instancecheck<'py>(
 ) -> PyResult<bool> {
     let py = cls.py();
     let instance_type = instance.get_type();
-    if cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)).is_ok() {
+    // __ators_origin__ is always present on Ators subclasses (None when not
+    // specialised, a real type when specialised).  Testing is_none() avoids
+    // raising AttributeError and is therefore much cheaper than is_ok().
+    let cls_origin = cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN))?;
+    if !cls_origin.is_none() {
         return generic_subclass_match_impl(cls, instance_type.as_any());
     }
     instance_type.is_subclass(cls)
@@ -595,11 +608,13 @@ pub fn create_ators_specialized_subclass<'py>(
         return Ok(cls.clone().into_any());
     }
 
-    let origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
-        // cls is already a specialization – use its recorded origin.
-        Ok(o) => o.cast_into::<PyType>()?,
+    let origin_attr = cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN))?;
+    let origin = if origin_attr.is_none() {
         // cls is the first time it is being specialized; it IS the origin.
-        Err(_) => cls.clone(),
+        cls.clone()
+    } else {
+        // cls is already a specialization – use its recorded origin.
+        origin_attr.cast_into::<PyType>()?
     };
     // Always bind against the origin definition so repeated partial
     // specializations compose transitively.
@@ -1190,6 +1205,11 @@ pub fn create_ators_subclass<'py>(
     {
         cls.setattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS), PyDict::new(py))?;
     }
+
+    // Set __ators_origin__ to None on every non-specialised Ators subclass so
+    // that rust_subclasscheck / rust_instancecheck can test `is_none()` rather
+    // than catching an AttributeError (which is far more expensive).
+    cls.setattr(intern!(py, ATORS_GENERIC_ORIGIN), py.None())?;
 
     Ok(cls)
 }
