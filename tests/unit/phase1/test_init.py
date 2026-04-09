@@ -18,7 +18,7 @@ def test_public_member_init_default_true():
     class A(Ators):
         x: int
 
-    assert A.__ators_fields__["x"]["init"] is True
+    assert A.__ators_members__["x"].init is True
 
 
 def test_private_member_init_default_false():
@@ -27,7 +27,7 @@ def test_private_member_init_default_false():
     class A(Ators):
         _x: int
 
-    assert A.__ators_fields__["_x"]["init"] is False
+    assert A.__ators_members__["_x"].init is False
 
 
 def test_explicit_init_false():
@@ -36,7 +36,7 @@ def test_explicit_init_false():
     class A(Ators):
         x: int = member(init=False)
 
-    assert A.__ators_fields__["x"]["init"] is False
+    assert A.__ators_members__["x"].init is False
 
 
 def test_explicit_init_true():
@@ -45,7 +45,7 @@ def test_explicit_init_true():
     class A(Ators):
         _x: int = member(init=True)
 
-    assert A.__ators_fields__["_x"]["init"] is True
+    assert A.__ators_members__["_x"].init is True
 
 
 def test_init_false_raises_on_kwarg():
@@ -78,30 +78,17 @@ def test_init_true_accepted_in_init():
     assert a.x == 42
 
 
-def test_ators_fields_contains_all_members():
-    """__ators_fields__ contains all members of the class."""
+def test_ators_members_exposes_init_flag():
+    """__ators_members__ exposes the init flag on every member."""
 
     class A(Ators):
         x: int
         y: int = member(init=False)
         _z: int
 
-    fields = A.__ators_fields__
-    assert "x" in fields
-    assert "y" in fields
-    assert "_z" in fields
-    assert fields["x"]["init"] is True
-    assert fields["y"]["init"] is False
-    assert fields["_z"]["init"] is False
-
-
-def test_ators_fields_info_has_name_key():
-    """Each entry in __ators_fields__ has a 'name' key matching the member name."""
-
-    class A(Ators):
-        x: int
-
-    assert A.__ators_fields__["x"]["name"] == "x"
+    assert A.__ators_members__["x"].init is True
+    assert A.__ators_members__["y"].init is False
+    assert A.__ators_members__["_z"].init is False
 
 
 def test_inherited_member_init_preserved():
@@ -114,8 +101,8 @@ def test_inherited_member_init_preserved():
     class Child(Base):
         pass
 
-    assert Child.__ators_fields__["x"]["init"] is True
-    assert Child.__ators_fields__["y"]["init"] is False
+    assert Child.__ators_members__["x"].init is True
+    assert Child.__ators_members__["y"].init is False
 
 
 def test_subclass_can_override_init_flag():
@@ -127,5 +114,5 @@ def test_subclass_can_override_init_flag():
     class Child(Base):
         x: int = member(init=False)
 
-    assert Base.__ators_fields__["x"]["init"] is True
-    assert Child.__ators_fields__["x"]["init"] is False
+    assert Base.__ators_members__["x"].init is True
+    assert Child.__ators_members__["x"].init is False

@@ -28,10 +28,7 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{
-        ATORS_FIELDS, ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, AtorsBase,
-        ClassMutability,
-    },
+    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, AtorsBase, ClassMutability},
     member::PreGetattrBehavior,
 };
 
@@ -752,6 +749,10 @@ pub fn create_ators_subclass<'py>(
         // which are on base classes but not on this one).
         specific_members.insert(k.clone());
 
+        // Resolve the init flag: honour an explicit user value, then fall back
+        // to the name-based default (public → true, private → false).
+        mb.init = Some(mb.init.unwrap_or_else(|| !k.starts_with('_')));
+
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
             mb.slot_index = Some(m.get().index());
@@ -852,18 +853,6 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
-    // Resolve init flags for all new members defined in this class.
-    // If the user specified `member(init=...)`, use that; otherwise default to:
-    //   True  for public names (not starting with '_')
-    //   False for private names (starting with '_')
-    let new_member_inits: HashMap<String, bool> = member_builders
-        .iter()
-        .map(|(k, mb)| {
-            let resolved = mb.init.unwrap_or_else(|| !k.starts_with('_'));
-            (k.clone(), resolved)
-        })
-        .collect();
-
     let new_members = member_builders
         .into_iter()
         .map(|(k, v)| v.build(&name).map(|v| (k, v)))
@@ -872,42 +861,6 @@ pub fn create_ators_subclass<'py>(
     let all_members = members.into_py_dict(py)?;
     all_members.update(new_members.as_mapping())?;
     dct.update(new_members.as_mapping())?;
-
-    // Build __ators_fields__: a dict mapping each member name to its field
-    // metadata dict ({"name": str, "init": bool}).
-    // For members defined in this class, use the resolved init flags collected
-    // above.  For inherited members, look up their entry in the nearest base
-    // class that already carries __ators_fields__; fall back to the name-based
-    // default if no ancestor recorded a value.
-    let ators_fields = PyDict::new(py);
-    for member_name in all_members.cast::<PyDict>()?.keys().iter() {
-        let mname: String = member_name.extract()?;
-        let resolved_init = if let Some(&v) = new_member_inits.get(&mname) {
-            v
-        } else {
-            // Try to inherit the value from a base class.
-            let inherited = mro.iter().find_map(|base| {
-                base.getattr(ATORS_FIELDS)
-                    .ok()
-                    .and_then(|f| f.cast_into::<PyDict>().ok())
-                    .and_then(|f| {
-                        f.get_item(&mname).ok().flatten().and_then(|entry| {
-                            entry
-                                .cast_into::<PyDict>()
-                                .ok()
-                                .and_then(|d| d.get_item("init").ok().flatten())
-                                .and_then(|v| v.extract::<bool>().ok())
-                        })
-                    })
-            });
-            inherited.unwrap_or_else(|| !mname.starts_with('_'))
-        };
-        let info = PyDict::new(py);
-        info.set_item("name", &mname)?;
-        info.set_item("init", resolved_init)?;
-        ators_fields.set_item(&mname, info)?;
-    }
-    dct.set_item(ATORS_FIELDS, ators_fields)?;
 
     // Set the class level information as aggregated during the analysis
     dct.set_item(

@@ -89,6 +89,10 @@ pub struct Member {
     // Optional metadata dictionary that can be used to store arbitrary information
     // about the member.
     metadata: Option<HashMap<String, Py<PyAny>>>,
+    /// Whether this member participates in `__init__`.
+    /// Defaults to `True` for public names (not starting with `_`) and
+    /// `False` for private names, unless explicitly overridden via `member(init=...)`.
+    pub init: bool,
 }
 
 impl Member {
@@ -104,6 +108,7 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.clone(),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
         }
     }
 
@@ -135,6 +140,7 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.with_owner(py, owner),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
         }
     }
 }
@@ -1313,6 +1319,9 @@ impl MemberBuilder {
                 init_coercer: self.coerce_init,
             },
             metadata: self.metadata,
+            // `init` is resolved by the metaclass before build() is called;
+            // fall back to `true` when build() is used outside the metaclass.
+            init: self.init.unwrap_or(true),
         })
     }
 }
