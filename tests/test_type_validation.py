@@ -374,7 +374,7 @@ T_constrained = TypeVar("T_constrained", int, str)
 
 
 class ConstrainedBox(Ators):
-    item: T_constrained = member(T_constrained)
+    item: T_constrained = member()
 
 
 def test_constrained_typevar_accepts_first_constraint():
