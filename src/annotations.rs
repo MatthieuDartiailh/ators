@@ -366,12 +366,14 @@ pub fn build_validator_from_annotation<'py>(
         } else {
             let attr_names_opt: Option<Vec<String>> = {
                 let generic_attrs_bound = get_generic_attributes_map(py);
-                let generic_attrs = generic_attrs_bound.borrow();
-                origin
-                    .cast::<PyType>()
-                    .ok()
-                    .and_then(|t| generic_attrs.get_attributes(t))
-                    .cloned()
+                with_critical_section(generic_attrs_bound.as_any(), || {
+                    let generic_attrs = generic_attrs_bound.borrow();
+                    origin
+                        .cast::<PyType>()
+                        .ok()
+                        .and_then(|t| generic_attrs.get_attributes(t))
+                        .cloned()
+                })
             };
             if let Some(attr_names) = attr_names_opt {
                 let origin_type = origin.cast_into::<PyType>()?;

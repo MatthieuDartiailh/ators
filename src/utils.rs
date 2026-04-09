@@ -162,10 +162,6 @@ impl GenericAttributesMap {
     pub fn get_attributes(&self, type_: &Bound<'_, PyType>) -> Option<&Vec<String>> {
         self.map.get(&type_.into())
     }
-
-    pub fn insert(&mut self, type_: &Bound<'_, PyType>, attributes: Vec<String>) {
-        self.map.insert(type_.into(), attributes);
-    }
 }
 
 #[pymethods]
