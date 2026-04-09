@@ -268,10 +268,7 @@ fn enforce_narrower_typevar_bound(
 /// For a TypeVar `arg` with only a bound (no constraints): the bound must be a
 /// subtype of at least one parent constraint.
 /// A TypeVar `arg` with neither constraints nor a bound is rejected.
-fn enforce_within_constraints(
-    parent: &Bound<'_, PyAny>,
-    arg: &Bound<'_, PyAny>,
-) -> PyResult<()> {
+fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<()> {
     let py = parent.py();
     let parent_constraints = parent.getattr(intern!(py, "__constraints__"))?;
     let Ok(parent_constraints_tuple) = parent_constraints.cast::<PyTuple>() else {
@@ -284,7 +281,7 @@ fn enforce_within_constraints(
     // Returns true if `ty` is a subtype of at least one parent constraint.
     let is_within = |ty: &Bound<'_, PyAny>| -> PyResult<bool> {
         for constraint in parent_constraints_tuple.iter() {
-            let within = if let (Ok(t), Ok(c)) = (ty.cast::<PyType>(), constraint.cast::<PyType>()) 
+            let within = if let (Ok(t), Ok(c)) = (ty.cast::<PyType>(), constraint.cast::<PyType>())
             {
                 t.is_subclass(c)?
             } else {
