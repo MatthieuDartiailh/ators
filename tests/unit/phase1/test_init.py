@@ -54,7 +54,7 @@ def test_init_false_raises_on_kwarg():
     class A(Ators):
         x: int = member(init=False)
 
-    with pytest.raises(TypeError, match="unexpected keyword argument 'x'"):
+    with pytest.raises(TypeError, match="not marked as init"):
         A(x=1)
 
 
@@ -64,7 +64,7 @@ def test_private_default_init_false_raises_on_kwarg():
     class A(Ators):
         _x: int
 
-    with pytest.raises(TypeError, match="unexpected keyword argument '_x'"):
+    with pytest.raises(TypeError, match="not marked as init"):
         A(_x=1)
 
 
