@@ -142,10 +142,43 @@ impl Eq for PyTypeWrap {}
 
 create_behavior_callable_checker!(mutability_callable_check, TypeMutabilityMap, __setitem__, 1);
 
-// /// Dedicated class to store user specified information about third party
-// /// generic types
-// #[pyclass]
-// pub struct GenericAttributesMap
+/// Dedicated class to store user-specified attribute name lists for third-party generic types.
+#[pyclass]
+pub struct GenericAttributesMap {
+    map: HashMap<PyTypeWrap, Vec<String>>,
+}
+
+impl GenericAttributesMap {
+    pub fn new(py: Python<'_>) -> Py<GenericAttributesMap> {
+        Py::new(
+            py,
+            GenericAttributesMap {
+                map: HashMap::default(),
+            },
+        )
+        .expect("GenericAttributesMap creation cannot fail.")
+    }
+
+    pub fn get_attributes(&self, type_: &Bound<'_, PyType>) -> Option<&Vec<String>> {
+        self.map.get(&type_.into())
+    }
+
+    pub fn insert(&mut self, type_: &Bound<'_, PyType>, attributes: Vec<String>) {
+        self.map.insert(type_.into(), attributes);
+    }
+}
+
+#[pymethods]
+impl GenericAttributesMap {
+    pub fn __setitem__<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        type_: &Bound<'py, PyType>,
+        attributes: Vec<String>,
+    ) -> PyResult<()> {
+        self_.map.insert(type_.into(), attributes);
+        Ok(())
+    }
+}
 
 use crate::core::AtorsBase;
 
