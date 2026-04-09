@@ -22,6 +22,7 @@ pub static ATORS_MEMBERS: &str = "__ators_members__";
 pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
 pub static ATORS_OBSERVABLE: &str = "__ators_observable__";
+pub static ATORS_FIELDS: &str = "__ators_fields__";
 
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
@@ -126,6 +127,23 @@ impl AtorsBase {
         let Some(kwargs) = kwargs else {
             return Ok(());
         };
+        // Check __ators_fields__ to reject kwargs for members with init=False.
+        if let Ok(fields) = slf.get_type().getattr(ATORS_FIELDS)
+            && let Ok(fields_dict) = fields.cast_into::<PyDict>()
+        {
+            for (k, _v) in kwargs.iter() {
+                let key_str: String = k.extract()?;
+                if let Ok(Some(info)) = fields_dict.get_item(&key_str)
+                    && let Ok(info_dict) = info.cast_into::<PyDict>()
+                    && let Ok(Some(init_val)) = info_dict.get_item("init")
+                    && !init_val.extract::<bool>()?
+                {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "__init__() got an unexpected keyword argument '{key_str}'"
+                    )));
+                }
+            }
+        }
         let members = slf.getattr(ATORS_MEMBERS)?;
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;

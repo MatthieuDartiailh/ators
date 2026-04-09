@@ -692,6 +692,8 @@ pub struct MemberBuilder {
     // `name` and `slot_index` are public for direct Rust-level access
     pub name: Option<String>,
     pub slot_index: Option<u8>,
+    /// User-specified init flag. None means "use the default" (resolved in the metaclass).
+    pub init: Option<bool>,
     pre_getattr: Option<PreGetattrBehavior>,
     post_getattr: Option<PostGetattrBehavior>,
     pre_setattr: Option<PreSetattrBehavior>,
@@ -715,10 +717,13 @@ pub struct MemberBuilder {
 
 #[pymethods]
 impl MemberBuilder {
-    // FIXME need to pass in args for customization (init)
     #[new]
-    pub fn py_new() -> Self {
-        MemberBuilder::default()
+    #[pyo3(signature = (*, init = None))]
+    pub fn py_new(init: Option<bool>) -> Self {
+        MemberBuilder {
+            init,
+            ..Default::default()
+        }
     }
 
     pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
@@ -1336,6 +1341,7 @@ impl Clone for MemberBuilder {
                 }
             },
             inherit: self.inherit,
+            init: self.init,
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
