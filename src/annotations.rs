@@ -8,7 +8,7 @@
 /// Tools to manipulate and extract information from type annotations.
 use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
-    sync::with_critical_section,
+    sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
