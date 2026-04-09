@@ -1194,6 +1194,8 @@ impl MemberBuilder {
     /// the builder from the provided `member`, enabling inheritance of
     /// default behaviors during customization.
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
+        // Copy init behavior
+        self.init = init;
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
         }
