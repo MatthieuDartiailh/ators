@@ -401,7 +401,7 @@ def test_constrained_typevar_matches_union_behavior():
     """Constrained TypeVar validation should match int | str union behavior."""
 
     class UnionBox(Ators):
-        item: int | str = member(int | str)
+        item: int | str = member()
 
     cbox = ConstrainedBox()
     ubox = UnionBox()
