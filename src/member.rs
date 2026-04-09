@@ -1195,7 +1195,7 @@ impl MemberBuilder {
     /// default behaviors during customization.
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
         // Copy init behavior
-        self.init = init;
+        self.init = Some(member.init);
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
         }
