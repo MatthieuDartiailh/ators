@@ -8,6 +8,7 @@
 /// Tools to manipulate and extract information from type annotations.
 use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
+    sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
@@ -364,14 +365,22 @@ pub fn build_validator_from_annotation<'py>(
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {
-            let generic_attrs = get_generic_attributes_map(py);
-            if let Some(attr_list) = generic_attrs.get_item(&origin)? {
+            let attr_names_opt: Option<Vec<String>> = {
+                let generic_attrs_bound = get_generic_attributes_map(py);
+                with_critical_section(generic_attrs_bound.as_any(), || {
+                    let generic_attrs = generic_attrs_bound.borrow();
+                    origin
+                        .cast::<PyType>()
+                        .ok()
+                        .and_then(|t| generic_attrs.get_attributes(t))
+                        .cloned()
+                })
+            };
+            if let Some(attr_names) = attr_names_opt {
+                let origin_type = origin.cast_into::<PyType>()?;
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
-                for (attr_name, attr_type) in
-                    attr_list.cast_into::<PyTuple>()?.iter().zip(args.iter())
-                {
-                    let attr_name_str = attr_name.extract::<String>()?;
+                for (attr_name_str, attr_type) in attr_names.into_iter().zip(args.iter()) {
                     let (attr_validator, attr_info) = build_validator_from_annotation(
                         PyString::new(py, &format!("{name}-{attr_name_str}")).cast()?,
                         &attr_type,
@@ -386,7 +395,7 @@ pub fn build_validator_from_annotation<'py>(
                 Ok((
                     Validator::new(
                         TypeValidator::GenericAttributes {
-                            type_: origin.cast_into::<PyType>()?.unbind(),
+                            type_: origin_type.unbind(),
                             attributes,
                         },
                         None,

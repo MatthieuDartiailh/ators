@@ -10,10 +10,10 @@
 use pyo3::{
     Bound, Py, PyResult, Python, pymodule,
     sync::PyOnceLock,
-    types::{PyAnyMethods, PyDict, PyTuple, PyType},
+    types::{PyAnyMethods, PyType},
 };
 
-use crate::utils::TypeMutabilityMap;
+use crate::utils::{GenericAttributesMap, TypeMutabilityMap};
 
 mod annotations;
 mod containers;
@@ -27,11 +27,11 @@ mod validators;
 // XXX would prefer to have module state to do this
 // static ANNOTATIONS_TOOLS : PyOnceLock
 
-static GENERIC_ATTRIBUTES: PyOnceLock<Py<PyDict>> = PyOnceLock::new();
+static GENERIC_ATTRIBUTES: PyOnceLock<Py<GenericAttributesMap>> = PyOnceLock::new();
 
-fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, GenericAttributesMap> {
     GENERIC_ATTRIBUTES
-        .get_or_init(py, || PyDict::new(py).into())
+        .get_or_init(py, || GenericAttributesMap::new(py))
         .clone_ref(py)
         .into_bound(py)
 }
@@ -78,10 +78,24 @@ mod _ators {
     use self::observers::AtorsChange;
 
     #[pyfunction]
+    /// Register generic attribute names for a Python type.
+    ///
+    /// Stores the list of attribute names associated with a generic type so they
+    /// can be reused by the runtime when handling parametrized type information.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_` - The Python type for which generic attribute names are registered.
+    /// * `attributes` - The attribute names to associate with the given type.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the registration succeeds.
+    /// * `Err(PyErr)` - If inserting the mapping into the internal storage fails.
     pub(crate) fn add_generic_type_attributes<'py>(
         py: Python<'py>,
         type_: &Bound<'py, PyType>,
-        attributes: Bound<'py, PyTuple>,
+        attributes: Vec<String>,
     ) -> PyResult<()> {
         let map = get_generic_attributes_map(py);
         map.set_item(type_, attributes)
