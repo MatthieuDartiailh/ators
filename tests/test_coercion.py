@@ -13,27 +13,53 @@ from ators import Ators, member
 from ators.behaviors import Coercer, coerce, coerce_init
 
 
-# XXX refactor to support all types and follow following tests to simplify
-# testing both init true and false
 @pytest.mark.parametrize(
     "ty, init, inputs, expected",
     [
+        # ints
         (int, False, ["1", "2"], [1, 2]),
         (int, True, ["1", "2"], [1, TypeError("")]),
+        # floats
         (float, False, ["1.5", "2.5"], [1.5, 2.5]),
         (float, True, ["1.5", "2.5"], [1.5, TypeError("")]),
+        # optional int (int | None)
         (int | None, False, ["1", None, "2"], [1, None, 2]),
         (int | None, True, ["1", None, "2"], [1, None, TypeError("")]),
-        # coerce for instance and typed
+        # bool uses Python's bool(...) semantics (non-empty strings => True)
+        (bool, False, ["False", ""], [True, False]),
+        (bool, True, ["False", ""], [True, TypeError("")]),
+        # str: int -> "1", bytes -> "b'...'"
+        (str, False, [1, b"abc"], ["1", "b'abc'"]),
+        (str, True, [1, b"abc"], ["1", TypeError("")]),
+        # complex: string or complex -> complex object
+        (complex, False, ["1+2j", 3 + 4j], [complex("1+2j"), complex(3 + 4j)]),
+        (complex, True, ["1+2j", "3 + 4j"], [complex("1+2j"), TypeError("")]),
+        # fixed-length tuple: sequence coerced and items coerced
+        (tuple[int, int], False, [["1", "2"], (3, 4)], [(1, 2), (3, 4)]),
+        (tuple[int, int], True, [["1", "2"], (3, "4")], [(1, 2), TypeError("")]),
+        # var-tuple (tuple[int, ...])
+        (tuple[int, ...], False, [["1", "2", "3"], (4, "5")], [(1, 2, 3), (4, 5)]),
+        (tuple[int, ...], True, [["1", "2", "3"], ("4", 5)], [(1, 2, 3), TypeError("")]),
+        # list coercion from sequence
+        (list[int], False, [("1", "2"), [3, "4"]], [[1, 2], [3, 4]]),
+        (list[int], True, [("1", "2"), ["3", 4]], [[1, 2], TypeError("")]),
+        # dict coercion from mapping and iterable-of-pairs
+        (dict[str, int], False, [{1: "2", "3": 4}, [(5, "6")]], [{"1": 2, "3": 4}, {"5": 6}]),
+        (dict[str, int], True, [{1: "2", "3": 4}, [(5, "6")]], [{"1": 2, "3": 4}, TypeError("")]),
+        # Union: first matching member is used
+        (int | complex, False, ["1", "1j", "a"], [1, 1j, TypeError("")]),
+        (int | complex, True, ["1j", "a"], [1j, TypeError("")]),
     ],
 )
 def test_type_inferred_coercion(ty, init, inputs, expected):
     class A(Ators):
         a: ty = getattr(member(), "coerce_init" if init else "coerce")()
 
+    # initialize using the first input
     a = A(**{"a": inputs[0]})
     assert a.a == expected[0]
 
+    # subsequent inputs are assignments: either succeed or raise depending on expected
     for inp, exp in zip(inputs[1:], expected[1:]):
         if isinstance(exp, Exception):
             with pytest.raises(type(exp)) as e:
