@@ -78,14 +78,27 @@ mod _ators {
     use self::observers::AtorsChange;
 
     #[pyfunction]
+    /// Register generic attribute names for a Python type.
+    ///
+    /// Stores the list of attribute names associated with a generic type so they
+    /// can be reused by the runtime when handling parametrized type information.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_` - The Python type for which generic attribute names are registered.
+    /// * `attributes` - The attribute names to associate with the given type.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the registration succeeds.
+    /// * `Err(PyErr)` - If inserting the mapping into the internal storage fails.
     pub(crate) fn add_generic_type_attributes<'py>(
         py: Python<'py>,
         type_: &Bound<'py, PyType>,
         attributes: Vec<String>,
     ) -> PyResult<()> {
         let map = get_generic_attributes_map(py);
-        map.borrow_mut().insert(type_, attributes);
-        Ok(())
+        map.set_item(type_, attributes)
     }
 
     #[pyfunction]
