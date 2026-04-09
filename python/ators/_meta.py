@@ -17,7 +17,7 @@ from ._ators import (
 )
 
 
-@dataclass_transform(field_descriptors=("member",), kw_only_default=True, frozen=False)
+@dataclass_transform(field_descriptors=("member",), kw_only_default=True, frozen_default=False)
 class AtorsMeta(type):
     """The metaclass for classes derived from Ators.
 

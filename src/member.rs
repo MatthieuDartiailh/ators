@@ -1244,6 +1244,11 @@ impl MemberBuilder {
                 "Cannot build member {name} of {type_name} without an assigned slot."
             )));
         };
+        let Some(init) = self.init else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without a resolved init flag."
+            )));
+        };
         let py = type_name.py();
         let mut warnings_warn: Option<Py<PyAny>> = None;
         let mut get_warnings_warn = || -> PyResult<Bound<'py, PyAny>> {
@@ -1319,9 +1324,7 @@ impl MemberBuilder {
                 init_coercer: self.coerce_init,
             },
             metadata: self.metadata,
-            // `init` is resolved by the metaclass before build() is called;
-            // fall back to `true` when build() is used outside the metaclass.
-            init: self.init.unwrap_or(true),
+            init,
         })
     }
 }

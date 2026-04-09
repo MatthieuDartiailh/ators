@@ -5,7 +5,7 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Unit tests for Phase 1: init support in member and AtorsMeta."""
+"""Unit tests for init support in member and AtorsMeta."""
 
 import pytest
 
@@ -18,7 +18,8 @@ def test_public_member_init_default_true():
     class A(Ators):
         x: int
 
-    assert A.__ators_members__["x"].init is True
+    a = A(x=1)
+    assert a.x == 1
 
 
 def test_private_member_init_default_false():
@@ -27,7 +28,8 @@ def test_private_member_init_default_false():
     class A(Ators):
         _x: int
 
-    assert A.__ators_members__["_x"].init is False
+    with pytest.raises(TypeError, match="not marked as init"):
+        A(_x=1)
 
 
 def test_explicit_init_false():
@@ -36,7 +38,8 @@ def test_explicit_init_false():
     class A(Ators):
         x: int = member(init=False)
 
-    assert A.__ators_members__["x"].init is False
+    with pytest.raises(TypeError, match="not marked as init"):
+        A(x=1)
 
 
 def test_explicit_init_true():
@@ -45,27 +48,8 @@ def test_explicit_init_true():
     class A(Ators):
         _x: int = member(init=True)
 
-    assert A.__ators_members__["_x"].init is True
-
-
-def test_init_false_raises_on_kwarg():
-    """Passing a kwarg for a member with init=False raises TypeError."""
-
-    class A(Ators):
-        x: int = member(init=False)
-
-    with pytest.raises(TypeError, match="not marked as init"):
-        A(x=1)
-
-
-def test_private_default_init_false_raises_on_kwarg():
-    """Passing a kwarg for a private member (init=False by default) raises TypeError."""
-
-    class A(Ators):
-        _x: int
-
-    with pytest.raises(TypeError, match="not marked as init"):
-        A(_x=1)
+    a = A(_x=42)
+    assert a._x == 42
 
 
 def test_init_true_accepted_in_init():
@@ -101,8 +85,10 @@ def test_inherited_member_init_preserved():
     class Child(Base):
         pass
 
-    assert Child.__ators_members__["x"].init is True
-    assert Child.__ators_members__["y"].init is False
+    a = Child(x=10)
+    assert a.x == 10
+    with pytest.raises(TypeError, match="not marked as init"):
+        Child(y=5)
 
 
 def test_subclass_can_override_init_flag():
@@ -114,5 +100,7 @@ def test_subclass_can_override_init_flag():
     class Child(Base):
         x: int = member(init=False)
 
-    assert Base.__ators_members__["x"].init is True
-    assert Child.__ators_members__["x"].init is False
+    b = Base(x=1)
+    assert b.x == 1
+    with pytest.raises(TypeError, match="not marked as init"):
+        Child(x=1)

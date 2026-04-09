@@ -126,8 +126,7 @@ impl AtorsBase {
         let Some(kwargs) = kwargs else {
             return Ok(());
         };
-        let members_obj = slf.getattr(ATORS_MEMBERS)?;
-        let members = members_obj.cast::<PyMapping>()?;
+        let members = slf.getattr(ATORS_MEMBERS)?.cast_into::<PyMapping>()?;
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;
             if !members.get_item(key)?.cast::<Member>()?.get().init {
