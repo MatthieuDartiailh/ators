@@ -284,11 +284,8 @@ fn enforce_within_constraints(
     // Returns true if `ty` is a subtype of at least one parent constraint.
     let is_within = |ty: &Bound<'_, PyAny>| -> PyResult<bool> {
         for constraint in parent_constraints_tuple.iter() {
-            let within = if let (Ok(t), Ok(c)) = (
-                ty.cast::<PyType>(),
-                constraint.cast::<PyType>(),
-            ) {
-                t.is_subclass(&c)?
+            let within = if let (Ok(t), Ok(c)) = (ty.cast::<PyType>(), constraint.cast::<PyType>()) {
+                t.is_subclass(c)?
             } else {
                 let builtins = py.import(intern!(py, "builtins"))?;
                 let issubclass = builtins.getattr(intern!(py, "issubclass"))?;
