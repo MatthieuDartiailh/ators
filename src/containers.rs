@@ -157,6 +157,9 @@ impl AtorsList {
     #[classmethod]
     #[pyo3(signature = (iterable=None))]
     pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        // `iterable` is accepted only for Python calling-convention compatibility:
+        // pickle reconstructs e.g. `AtorsList([items])`. The Rust struct is always
+        // initialized empty; `__init__` below populates the parent PyList from the iterable.
         let _ = iterable;
         use crate::validators::types::TypeValidator;
         Ok(AtorsList {
@@ -405,6 +408,9 @@ impl AtorsSet {
     #[classmethod]
     #[pyo3(signature = (iterable=None))]
     pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        // `iterable` is accepted only for Python calling-convention compatibility:
+        // pickle reconstructs e.g. `AtorsSet([items])`. The Rust struct is always
+        // initialized empty; `__init__` below populates the parent PySet from the iterable.
         let _ = iterable;
         use crate::validators::types::TypeValidator;
         Ok(AtorsSet {
@@ -674,6 +680,9 @@ impl AtorsDict {
         other: Option<&Bound<'_, PyAny>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
+        // `other` and `kwargs` are accepted only for Python calling-convention compatibility:
+        // pickle reconstructs e.g. `AtorsDict({items})`. The Rust struct is always
+        // initialized empty; `__init__` below populates the parent PyDict from the mapping.
         let _ = (other, kwargs);
         use crate::validators::types::TypeValidator;
         Ok(AtorsDict {
