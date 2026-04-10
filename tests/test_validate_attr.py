@@ -11,7 +11,7 @@ from typing import ClassVar, Final
 
 import pytest
 
-from ators import Ators, member
+from ators import Ators, get_member, member
 from ators.behaviors import DelAttr, PreSetAttr
 
 # ---------------------------------------------------------------------------
@@ -25,8 +25,8 @@ def test_validate_attr_false_basic():
     class A(Ators, validate_attr=False):
         x: int
 
-    a = A()
-    a.x = "not an int"
+    a = A(x=10)
+    a.x = "not an int"  # type: ignore
     assert a.x == "not an int"
 
     a.x = 42
@@ -49,8 +49,8 @@ def test_validate_attr_false_member_builder():
     class A(Ators, validate_attr=False):
         x: int = member()
 
-    a = A()
-    a.x = "hello"
+    a = A(x=10)
+    a.x = "hello"  # type: ignore
     assert a.x == "hello"
 
 
@@ -67,8 +67,8 @@ def test_validate_attr_false_classvar_parameterized():
         x: str
 
     assert A.cls_attr == 42
-    a = A()
-    a.x = "hello"
+    a = A(x="hello")
+    a.x = "hello2"
     assert "cls_attr" not in dir(type(a).__ators_members__)
 
 
@@ -80,8 +80,8 @@ def test_validate_attr_false_classvar_bare():
         x: int
 
     assert A.cls_attr == "hello"
-    a = A()
-    a.x = 1
+    a = A(x=1)
+    a.x = 2
 
 
 # ---------------------------------------------------------------------------
@@ -98,13 +98,13 @@ def test_validate_attr_false_final_parameterized():
     a = A()
     assert a.x == 5
 
-    assert isinstance(A.x.pre_setattr, PreSetAttr.ReadOnly)
-    assert isinstance(A.x.delattr, DelAttr.Undeletable)
+    assert isinstance(get_member(A, "x").pre_setattr, PreSetAttr.ReadOnly)
+    assert isinstance(get_member(A, "x").delattr, DelAttr.Undeletable)
 
-    with pytest.raises(AttributeError):
-        a.x = 10
+    with pytest.raises(TypeError):
+        a.x = 10  # type: ignore
 
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         del a.x
 
 
@@ -117,11 +117,11 @@ def test_validate_attr_false_final_bare():
     a = A()
     assert a.x == 5
 
-    assert isinstance(A.x.pre_setattr, PreSetAttr.ReadOnly)
-    assert isinstance(A.x.delattr, DelAttr.Undeletable)
+    assert isinstance(get_member(A, "x").pre_setattr, PreSetAttr.ReadOnly)
+    assert isinstance(get_member(A, "x").delattr, DelAttr.Undeletable)
 
-    with pytest.raises(AttributeError):
-        a.x = 10
+    with pytest.raises(TypeError):
+        a.x = 10  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +168,9 @@ def test_validate_attr_true_default():
     class A(Ators):
         x: int
 
-    a = A()
+    a = A(x=10)
     with pytest.raises(TypeError):
-        a.x = "not an int"
+        a.x = "not an int"  # type: ignore
 
 
 def test_validate_attr_true_explicit():
@@ -179,9 +179,9 @@ def test_validate_attr_true_explicit():
     class A(Ators, validate_attr=True):
         x: int
 
-    a = A()
+    a = A(x=10)
     with pytest.raises(TypeError):
-        a.x = "not an int"
+        a.x = "not an int"  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +198,8 @@ def test_validate_attr_false_subclass():
     class Child(Base, validate_attr=False):
         y: str
 
-    a = Child()
-    a.x = "not validated"
-    a.y = 123
+    a = Child(x=1, y="hello")
+    a.x = "not validated"  # type: ignore
+    a.y = 123  # type: ignore
     assert a.x == "not validated"
     assert a.y == 123
