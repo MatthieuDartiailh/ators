@@ -1002,6 +1002,8 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
+            // Conflict detection: the first explicit call (transitioning from None to Some)
+            // is not a conflict. Only subsequent calls with a different value are flagged.
             if mself.pickle.is_some_and(|v| v != pickle) {
                 mself
                     .multiple_settings

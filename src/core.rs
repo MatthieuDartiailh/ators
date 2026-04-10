@@ -242,7 +242,9 @@ impl AtorsBase {
                 .cast_into::<Member>()?;
             let mb = member.get();
 
-            // For container members: restore metadata before slot assignment
+            // For container members: restore metadata before slot assignment.
+            // `item_bv` is a `BoxedValidator(Box<Validator>)`; `item_bv.0` is the
+            // inner `Box<Validator>`, and `*item_bv.0` dereferences it to `Validator`.
             match &mb.validator().type_validator {
                 TypeValidator::List { item: Some(item_bv) } => {
                     if let Ok(alist) = value.cast::<AtorsList>() {
