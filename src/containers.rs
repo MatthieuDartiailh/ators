@@ -155,7 +155,9 @@ impl AtorsList {
 impl AtorsList {
     #[new]
     #[classmethod]
-    pub fn py_new(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
+    #[pyo3(signature = (iterable=None))]
+    pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let _ = iterable;
         use crate::validators::types::TypeValidator;
         Ok(AtorsList {
             validator: UnsafeCell::new(Validator {
@@ -167,6 +169,24 @@ impl AtorsList {
             member_name: UnsafeCell::new(None),
             object: UnsafeCell::new(None),
         })
+    }
+
+    /// Initialize the underlying list with items from an iterable.
+    /// Used by pickle when reconstructing a standalone AtorsList.
+    #[pyo3(signature = (iterable=None))]
+    pub fn __init__<'py>(
+        self_: &Bound<'py, AtorsList>,
+        iterable: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<()> {
+        if let Some(items) = iterable {
+            let py = items.py();
+            for item in items.try_iter()? {
+                crate::utils::error_on_minusone(py, unsafe {
+                    ffi::PyList_Append(self_.as_ptr(), item?.as_ptr())
+                })?;
+            }
+        }
+        Ok(())
     }
 
     pub fn append<'py>(self_: PyRef<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
@@ -383,7 +403,9 @@ impl AtorsSet {
 impl AtorsSet {
     #[new]
     #[classmethod]
-    pub fn py_new(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
+    #[pyo3(signature = (iterable=None))]
+    pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let _ = iterable;
         use crate::validators::types::TypeValidator;
         Ok(AtorsSet {
             validator: UnsafeCell::new(Validator {
@@ -395,6 +417,24 @@ impl AtorsSet {
             member_name: UnsafeCell::new(None),
             object: UnsafeCell::new(None),
         })
+    }
+
+    /// Initialize the underlying set with items from an iterable.
+    /// Used by pickle when reconstructing a standalone AtorsSet.
+    #[pyo3(signature = (iterable=None))]
+    pub fn __init__<'py>(
+        self_: &Bound<'py, AtorsSet>,
+        iterable: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<()> {
+        if let Some(items) = iterable {
+            let py = items.py();
+            for item in items.try_iter()? {
+                crate::utils::error_on_minusone(py, unsafe {
+                    ffi::PySet_Add(self_.as_ptr(), item?.as_ptr())
+                })?;
+            }
+        }
+        Ok(())
     }
 
     pub fn add<'py>(self_: PyRef<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
@@ -628,7 +668,13 @@ fn dict_set_item<'py>(
 impl AtorsDict {
     #[new]
     #[classmethod]
-    pub fn py_new(_cls: &Bound<'_, PyType>) -> PyResult<Self> {
+    #[pyo3(signature = (other=None, **kwargs))]
+    pub fn py_new(
+        _cls: &Bound<'_, PyType>,
+        other: Option<&Bound<'_, PyAny>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        let _ = (other, kwargs);
         use crate::validators::types::TypeValidator;
         Ok(AtorsDict {
             key_validator: UnsafeCell::new(Validator {
@@ -646,6 +692,35 @@ impl AtorsDict {
             member_name: UnsafeCell::new(None),
             object: UnsafeCell::new(None),
         })
+    }
+
+    /// Initialize the underlying dict with items from a mapping or iterable of pairs.
+    /// Used by pickle when reconstructing a standalone AtorsDict.
+    #[pyo3(signature = (other=None, **kwargs))]
+    pub fn __init__<'py>(
+        self_: PyRef<'py, AtorsDict>,
+        other: Option<&Bound<'py, PyAny>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let py = self_.py();
+        if let Some(o) = other {
+            if let Ok(od) = o.cast::<PyDict>() {
+                for (k, v) in od.iter() {
+                    dict_set_item(py, self_.as_ptr(), k, v)?;
+                }
+            } else {
+                for t in o.try_iter()? {
+                    let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+                    dict_set_item(py, self_.as_ptr(), k, v)?;
+                }
+            }
+        }
+        if let Some(kw) = kwargs {
+            for (k, v) in kw.iter() {
+                dict_set_item(py, self_.as_ptr(), k, v)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn __setitem__<'py>(
