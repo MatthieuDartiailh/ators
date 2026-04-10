@@ -17,7 +17,9 @@ from ._ators import (
 )
 
 
-@dataclass_transform(field_descriptors=("member",), kw_only_default=True, frozen_default=False)
+@dataclass_transform(
+    field_descriptors=("member",), kw_only_default=True, frozen_default=False
+)
 class AtorsMeta(type):
     """The metaclass for classes derived from Ators.
 
@@ -48,6 +50,7 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
+        validate_attr: bool = True,
     ):
         # Ensure there is no weird mro calculation and that we can use our
         # re-implementation of C3
@@ -62,6 +65,7 @@ class AtorsMeta(type):
             observable,
             enable_weakrefs,
             type_containers,
+            validate_attr,
         )
 
     def __call__(self, *args, **kwds):
