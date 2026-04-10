@@ -22,6 +22,7 @@ pub static ATORS_MEMBERS: &str = "__ators_members__";
 pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
 pub static ATORS_OBSERVABLE: &str = "__ators_observable__";
+pub static ATORS_PICKLE_POLICY: &str = "__ators_pickle_policy__";
 
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
@@ -55,6 +56,20 @@ pub enum ClassMutability {
     Mutable {},
     #[pyo3(constructor = (values))]
     InspectValues { values: Vec<String> },
+}
+
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
+#[derive(Debug, Clone)]
+pub enum PicklePolicy {
+    /// Include all members in pickle state (default).
+    #[pyo3(constructor = ())]
+    All {},
+    /// Exclude all members from pickle state.
+    #[pyo3(constructor = ())]
+    None {},
+    /// Include only public members (those not starting with `_`) in pickle state.
+    #[pyo3(constructor = ())]
+    Public {},
 }
 
 #[pymethods]
@@ -148,6 +163,127 @@ impl AtorsBase {
                 }
             }?
         }
+        Ok(())
+    }
+
+    pub fn __getstate__<'py>(
+        slf: &Bound<'py, AtorsBase>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let py = slf.py();
+        let cls = slf.get_type();
+
+        let members = cls
+            .getattr(intern!(py, ATORS_MEMBERS))?
+            .cast_into::<PyDict>()?;
+
+        let policy: PicklePolicy = cls
+            .getattr(intern!(py, ATORS_PICKLE_POLICY))
+            .ok()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(PicklePolicy::All {});
+
+        let state = PyDict::new(py);
+        for (name, member_obj) in members.iter() {
+            let name_str: String = name.extract()?;
+            let member = member_obj.cast_into::<Member>()?;
+            let mb = member.get();
+
+            let should_pickle = match mb.pickle {
+                Some(true) => true,
+                Some(false) => false,
+                None => match &policy {
+                    PicklePolicy::All {} => true,
+                    PicklePolicy::None {} => false,
+                    PicklePolicy::Public {} => !name_str.starts_with('_'),
+                },
+            };
+
+            if should_pickle {
+                if let Some(value) = get_slot_owned(slf, mb.index()) {
+                    state.set_item(&name_str, value.into_bound(py))?;
+                }
+            }
+        }
+
+        Ok(state)
+    }
+
+    pub fn __setstate__<'py>(
+        slf: &Bound<'py, AtorsBase>,
+        state: &Bound<'py, PyDict>,
+    ) -> PyResult<()> {
+        use crate::containers::{AtorsDict, AtorsList, AtorsSet};
+        use crate::validators::types::TypeValidator;
+
+        let py = slf.py();
+        let cls = slf.get_type();
+
+        let members = cls
+            .getattr(intern!(py, ATORS_MEMBERS))?
+            .cast_into::<PyDict>()?;
+
+        // Validate all keys are known members
+        for (key, _) in state.iter() {
+            let key_str: String = key.extract()?;
+            if members.get_item(&key)?.is_none() {
+                return Err(pyo3::exceptions::PyKeyError::new_err(format!(
+                    "Unknown member '{}' for {}",
+                    key_str,
+                    cls.name()?
+                )));
+            }
+        }
+
+        // Restore values
+        for (key, value) in state.iter() {
+            let member = members
+                .get_item(&key)?
+                .expect("Key is known to be in members")
+                .cast_into::<Member>()?;
+            let mb = member.get();
+
+            // For container members: restore metadata before slot assignment
+            match &mb.validator().type_validator {
+                TypeValidator::List { item: Some(item_bv) } => {
+                    if let Ok(alist) = value.cast::<AtorsList>() {
+                        AtorsList::restore(
+                            &alist,
+                            (*item_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
+                TypeValidator::Set { item: Some(item_bv) } => {
+                    if let Ok(aset) = value.cast::<AtorsSet>() {
+                        AtorsSet::restore(
+                            &aset,
+                            (*item_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_bv, val_bv)),
+                } => {
+                    if let Ok(adict) = value.cast::<AtorsDict>() {
+                        AtorsDict::restore(
+                            &adict,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
+                _ => {}
+            }
+
+            // Write directly to slot, bypassing validation
+            set_slot(slf, mb.index(), &value);
+        }
+
         Ok(())
     }
 }

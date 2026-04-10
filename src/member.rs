@@ -93,6 +93,8 @@ pub struct Member {
     /// Defaults to `True` for public names (not starting with `_`) and
     /// `False` for private names, unless explicitly overridden via `member(init=...)`.
     pub init: bool,
+    /// Per-member pickle override. `None` means defer to the class-level `PicklePolicy`.
+    pub pickle: Option<bool>,
 }
 
 impl Member {
@@ -109,6 +111,7 @@ impl Member {
             validator: self.validator.clone(),
             metadata: clone_metadata(&self.metadata),
             init: self.init,
+            pickle: self.pickle,
         }
     }
 
@@ -141,21 +144,10 @@ impl Member {
             validator: self.validator.with_owner(py, owner),
             metadata: clone_metadata(&self.metadata),
             init: self.init,
+            pickle: self.pickle,
         }
     }
 }
-
-// FIXME determine pertinence when implementing pickling support
-// pub fn member_set_unpickled_value<'py>(
-//     member: &Bound<'py, Member>,
-//     object: &Bound<'py, AtorsBase>,
-//     value: &Bound<'py, PyAny>,
-// ) -> PyResult<()> {
-//     // XXX special case our own containers only
-//     // to restore valid member and object references
-//     set_slot(object, member.get().slot_index, value);
-//     Ok(())
-// }
 
 /// Helper function to apply the initial value coercer for a member if it exists.
 pub fn member_coerce_init<'py>(
@@ -712,7 +704,7 @@ pub struct MemberBuilder {
     coerce_init: Option<Coercer>,
     metadata: Option<HashMap<String, Py<PyAny>>>,
     forward_ref_environment_factory: Option<Py<PyAny>>,
-    pickle: bool,
+    pickle: Option<bool>,
     inherit: bool,
     // Only required when building a new member in the metaclass since the owner
     // should be scoped to the original class definition itself and not altered
@@ -1010,14 +1002,14 @@ impl MemberBuilder {
     ) -> PyResult<PyRefMut<'py, Self>> {
         {
             let mself = &mut *self_;
-            if mself.pickle != pickle {
+            if mself.pickle.is_some_and(|v| v != pickle) {
                 mself
                     .multiple_settings
                     .entry("pickle".into())
                     .and_modify(|e| *e += 1)
                     .or_insert(2);
             }
-            mself.pickle = pickle;
+            mself.pickle = Some(pickle);
         }
         Ok(self_)
     }
@@ -1139,7 +1131,7 @@ impl MemberBuilder {
     }
 
     #[inline]
-    pub fn pickle(&self) -> bool {
+    pub fn pickle(&self) -> Option<bool> {
         self.pickle
     }
 
@@ -1185,7 +1177,7 @@ impl MemberBuilder {
 
     #[inline]
     pub fn set_pickle(&mut self, new: bool) {
-        self.pickle = new;
+        self.pickle = Some(new);
     }
 
     /// Populate unset behaviors from an existing `Member` instance.
@@ -1228,6 +1220,9 @@ impl MemberBuilder {
         }
         if self.metadata.is_none() {
             self.metadata = clone_metadata(&member.metadata);
+        }
+        if self.pickle.is_none() {
+            self.pickle = member.pickle;
         }
     }
 
@@ -1327,6 +1322,7 @@ impl MemberBuilder {
             },
             metadata: self.metadata,
             init,
+            pickle: self.pickle,
         })
     }
 }

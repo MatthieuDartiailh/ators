@@ -28,7 +28,10 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, AtorsBase, ClassMutability},
+    core::{
+        ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, ATORS_PICKLE_POLICY, AtorsBase,
+        ClassMutability, PicklePolicy,
+    },
     member::PreGetattrBehavior,
 };
 
@@ -552,6 +555,7 @@ pub fn create_ators_subclass<'py>(
     observable: bool,
     enable_weakrefs: bool,
     type_containers: i64,
+    pickle_policy: Option<PicklePolicy>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = name.py();
 
@@ -575,6 +579,12 @@ pub fn create_ators_subclass<'py>(
                 .unwrap_or(false)
         });
     dct.set_item(ATORS_OBSERVABLE, is_observable)?;
+
+    // Store the pickle policy on the class.
+    dct.set_item(
+        ATORS_PICKLE_POLICY,
+        Bound::new(py, pickle_policy.unwrap_or(PicklePolicy::All {}))?,
+    )?;
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.

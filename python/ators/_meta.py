@@ -48,6 +48,7 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
+        pickle_policy=None,
     ):
         # Ensure there is no weird mro calculation and that we can use our
         # re-implementation of C3
@@ -62,6 +63,7 @@ class AtorsMeta(type):
             observable,
             enable_weakrefs,
             type_containers,
+            pickle_policy,
         )
 
     def __call__(self, *args, **kwds):
