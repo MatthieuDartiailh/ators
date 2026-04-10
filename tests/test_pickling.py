@@ -161,7 +161,7 @@ def test_explicit_policy_public():
 
 def test_explicit_policy_public_excludes_double_underscore():
     """Members starting with __ should also be excluded under 'public' policy."""
-    a = _PolicyPublicDunderClass(x=5, __hidden=7)
+    a = _PolicyPublicDunderClass(x=5, _hidden=7)
     state = a.__getstate__()
     assert "x" in state
     assert not any(k.startswith("_") for k in state)
@@ -197,7 +197,7 @@ def test_member_explicit_true_overrides_policy_public():
 
 
 # ---------------------------------------------------------------------------
-# __setstate__ – unknown key raises
+# __setstate__ - unknown key raises
 # ---------------------------------------------------------------------------
 
 
@@ -210,16 +210,16 @@ def test_unknown_key_raises():
 
 def test_setstate_valid_keys_restore():
     """__setstate__ writes values directly to slots."""
-    a = _SetStateClass()
+    a = _SetStateClass(x=1, y="hello")
     a.__setstate__({"x": 99, "y": "world"})
     assert a.x == 99
     assert a.y == "world"
 
 
 def test_setstate_bypasses_validation():
-    """__setstate__ must NOT validate – invalid types should be accepted."""
-    a = _SetStateBypassClass()
-    # Assign a string to an int member – would fail through normal setattr
+    """__setstate__ must NOT validate - invalid types should be accepted."""
+    a = _SetStateBypassClass(x=1)
+    # Assign a string to an int member - would fail through normal setattr
     a.__setstate__({"x": "not an int"})
     assert a.x == "not an int"
 

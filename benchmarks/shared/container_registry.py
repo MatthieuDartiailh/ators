@@ -23,6 +23,7 @@ INITIAL_LIST = [1, 2, 3, 4]
 INITIAL_SET = {1, 2, 3, 4}
 INITIAL_DICT = {"a": 1, "b": 2, "c": 3, "d": 4}
 
+
 def _ensure_int(value: Any) -> None:
     if not isinstance(value, int):
         raise TypeError(f"Expected int, got {type(value).__name__}")
@@ -208,7 +209,9 @@ def _list_implementations() -> dict[str, Callable[[], Any]]:
         "ators": lambda: AtorsListContainer(list_field=INITIAL_LIST.copy()),
     }
     if ATOM_AVAILABLE:
-        implementations["atom"] = lambda: AtomListContainer(list_field=INITIAL_LIST.copy())
+        implementations["atom"] = lambda: AtomListContainer(
+            list_field=INITIAL_LIST.copy()
+        )
     return implementations
 
 
@@ -230,7 +233,9 @@ def _dict_implementations() -> dict[str, Callable[[], Any]]:
         "ators": lambda: AtorsDictContainer(dict_field=INITIAL_DICT.copy()),
     }
     if ATOM_AVAILABLE:
-        implementations["atom"] = lambda: AtomDictContainer(dict_field=INITIAL_DICT.copy())
+        implementations["atom"] = lambda: AtomDictContainer(
+            dict_field=INITIAL_DICT.copy()
+        )
     return implementations
 
 
@@ -260,14 +265,21 @@ def _list_cases() -> list[BenchmarkCase]:
                     "append",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.list_field.append(9), obj.list_field.pop()),
+                    lambda obj: (
+                        lambda: (obj.list_field.append(9), obj.list_field.pop())
+                    ),
                 ),
                 _make_case(
                     "list",
                     "insert",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.list_field.insert(0, 9), obj.list_field.__delitem__(0)),
+                    lambda obj: (
+                        lambda: (
+                            obj.list_field.insert(0, 9),
+                            obj.list_field.__delitem__(0),
+                        )
+                    ),
                 ),
                 _make_case(
                     "list",
@@ -281,7 +293,12 @@ def _list_cases() -> list[BenchmarkCase]:
                     "extend",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.list_field.extend([9, 10]), obj.list_field.__delitem__(slice(-2, None))),
+                    lambda obj: (
+                        lambda: (
+                            obj.list_field.extend([9, 10]),
+                            obj.list_field.__delitem__(slice(-2, None)),
+                        )
+                    ),
                 ),
                 _make_case(
                     "list",
@@ -295,7 +312,12 @@ def _list_cases() -> list[BenchmarkCase]:
                     "delitem",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.list_field.__delitem__(0), obj.list_field.insert(0, 1)),
+                    lambda obj: (
+                        lambda: (
+                            obj.list_field.__delitem__(0),
+                            obj.list_field.insert(0, 1),
+                        )
+                    ),
                 ),
             ]
         )
@@ -330,7 +352,9 @@ def _set_cases() -> list[BenchmarkCase]:
                     "add",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.set_field.add(9), obj.set_field.discard(9)),
+                    lambda obj: (
+                        lambda: (obj.set_field.add(9), obj.set_field.discard(9))
+                    ),
                 ),
                 _make_case(
                     "set",
@@ -344,23 +368,35 @@ def _set_cases() -> list[BenchmarkCase]:
                     "update",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.set_field.update({9, 10}), obj.set_field.difference_update({9, 10})),
+                    lambda obj: (
+                        lambda: (
+                            obj.set_field.update({9, 10}),
+                            obj.set_field.difference_update({9, 10}),
+                        )
+                    ),
                 ),
                 _make_case(
                     "set",
                     "ixor",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.set_field.__ixor__({9, 10}), obj.set_field.__ixor__({9, 10})),
+                    lambda obj: (
+                        lambda: (
+                            obj.set_field.__ixor__({9, 10}),
+                            obj.set_field.__ixor__({9, 10}),
+                        )
+                    ),
                 ),
                 _make_case(
                     "set",
                     "symmetric_difference_update",
                     implementation,
                     factory,
-                    lambda obj: lambda: (
-                        obj.set_field.symmetric_difference_update({11, 12}),
-                        obj.set_field.symmetric_difference_update({11, 12}),
+                    lambda obj: (
+                        lambda: (
+                            obj.set_field.symmetric_difference_update({11, 12}),
+                            obj.set_field.symmetric_difference_update({11, 12}),
+                        )
                     ),
                 ),
             ]
@@ -393,10 +429,12 @@ def _dict_cases() -> list[BenchmarkCase]:
                     "update_dict",
                     implementation,
                     factory,
-                    lambda obj: lambda: (
-                        obj.dict_field.update({"x": 11, "y": 12}),
-                        obj.dict_field.pop("x"),
-                        obj.dict_field.pop("y"),
+                    lambda obj: (
+                        lambda: (
+                            obj.dict_field.update({"x": 11, "y": 12}),
+                            obj.dict_field.pop("x"),
+                            obj.dict_field.pop("y"),
+                        )
                     ),
                 ),
                 _make_case(
@@ -411,10 +449,12 @@ def _dict_cases() -> list[BenchmarkCase]:
                     "update_pairs",
                     implementation,
                     factory,
-                    lambda obj: lambda: (
-                        obj.dict_field.update([("x", 11), ("y", 12)]),
-                        obj.dict_field.pop("x"),
-                        obj.dict_field.pop("y"),
+                    lambda obj: (
+                        lambda: (
+                            obj.dict_field.update([("x", 11), ("y", 12)]),
+                            obj.dict_field.pop("x"),
+                            obj.dict_field.pop("y"),
+                        )
                     ),
                 ),
                 _make_case(
@@ -429,7 +469,12 @@ def _dict_cases() -> list[BenchmarkCase]:
                     "setdefault_missing",
                     implementation,
                     factory,
-                    lambda obj: lambda: (obj.dict_field.setdefault("z", 26), obj.dict_field.pop("z")),
+                    lambda obj: (
+                        lambda: (
+                            obj.dict_field.setdefault("z", 26),
+                            obj.dict_field.pop("z"),
+                        )
+                    ),
                 ),
                 _make_case(
                     "dict",
@@ -490,4 +535,6 @@ def select_container_cases(
         cases = [case for case in cases if case.group in groups]
     if implementations is not None:
         cases = [case for case in cases if case.implementation in implementations]
-    return sorted(cases, key=lambda case: (case.family, case.group, case.implementation))
+    return sorted(
+        cases, key=lambda case: (case.family, case.group, case.implementation)
+    )

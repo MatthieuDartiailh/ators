@@ -166,9 +166,7 @@ impl AtorsBase {
         Ok(())
     }
 
-    pub fn __getstate__<'py>(
-        slf: &Bound<'py, AtorsBase>,
-    ) -> PyResult<Bound<'py, PyDict>> {
+    pub fn __getstate__<'py>(slf: &Bound<'py, AtorsBase>) -> PyResult<Bound<'py, PyDict>> {
         let py = slf.py();
         let cls = slf.get_type();
 
@@ -246,7 +244,9 @@ impl AtorsBase {
             // `item_bv` is a `BoxedValidator(Box<Validator>)`; `item_bv.0` is the
             // inner `Box<Validator>`, and `*item_bv.0` dereferences it to `Validator`.
             match &mb.validator().type_validator {
-                TypeValidator::List { item: Some(item_bv) } => {
+                TypeValidator::List {
+                    item: Some(item_bv),
+                } => {
                     if let Ok(alist) = value.cast::<AtorsList>() {
                         AtorsList::restore(
                             &alist,
@@ -256,14 +256,11 @@ impl AtorsBase {
                         );
                     }
                 }
-                TypeValidator::Set { item: Some(item_bv) } => {
+                TypeValidator::Set {
+                    item: Some(item_bv),
+                } => {
                     if let Ok(aset) = value.cast::<AtorsSet>() {
-                        AtorsSet::restore(
-                            &aset,
-                            (*item_bv.0).clone(),
-                            Some(mb.name()),
-                            Some(slf),
-                        );
+                        AtorsSet::restore(&aset, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
                     }
                 }
                 TypeValidator::Dict {

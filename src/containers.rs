@@ -106,16 +106,13 @@ impl AtorsList {
         let list = source.get();
         // Safety: same as validate_item.
         let validator = unsafe { &*list.validator.get() }.clone();
-        let member_name = unsafe { &*list.member_name.get() }.as_deref().map(|s| s.to_string());
+        let member_name = unsafe { &*list.member_name.get() }
+            .as_deref()
+            .map(|s| s.to_string());
         let object = unsafe { &*list.object.get() }
             .as_ref()
             .map(|object| object.clone_ref(source.py()));
-        let alist = AtorsList::new_empty(
-            source.py(),
-            validator,
-            member_name.as_deref(),
-            object,
-        )?;
+        let alist = AtorsList::new_empty(source.py(), validator, member_name.as_deref(), object)?;
         // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
         let py_list = unsafe { source.cast_unchecked::<PyList>() };
         let alist_as_list = alist.cast::<PyList>()?;
@@ -357,16 +354,13 @@ impl AtorsSet {
         let set = source.get();
         // Safety: same as AtorsList::clone_for_assignment.
         let validator = unsafe { &*set.validator.get() }.clone();
-        let member_name = unsafe { &*set.member_name.get() }.as_deref().map(|s| s.to_string());
+        let member_name = unsafe { &*set.member_name.get() }
+            .as_deref()
+            .map(|s| s.to_string());
         let object = unsafe { &*set.object.get() }
             .as_ref()
             .map(|object| object.clone_ref(source.py()));
-        let aset = AtorsSet::new_empty(
-            source.py(),
-            validator,
-            member_name.as_deref(),
-            object,
-        )?;
+        let aset = AtorsSet::new_empty(source.py(), validator, member_name.as_deref(), object)?;
         // Safety: AtorsSet is declared as `extends=PySet`, so this cast is always valid.
         let py_set = unsafe { source.cast_unchecked::<PySet>() };
         let aset_as_set = aset.cast::<PySet>()?;
@@ -614,7 +608,9 @@ impl AtorsDict {
         // Safety: same as AtorsList::clone_for_assignment.
         let key_validator = unsafe { &*dict.key_validator.get() }.clone();
         let value_validator = unsafe { &*dict.value_validator.get() }.clone();
-        let member_name = unsafe { &*dict.member_name.get() }.as_deref().map(|s| s.to_string());
+        let member_name = unsafe { &*dict.member_name.get() }
+            .as_deref()
+            .map(|s| s.to_string());
         let object = unsafe { &*dict.object.get() }
             .as_ref()
             .map(|object| object.clone_ref(source.py()));

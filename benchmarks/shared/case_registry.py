@@ -73,4 +73,6 @@ def select_benchmark_cases(
             )
         )
 
-    return sorted(cases, key=lambda case: (case.family, case.group, case.implementation))
+    return sorted(
+        cases, key=lambda case: (case.family, case.group, case.implementation)
+    )
