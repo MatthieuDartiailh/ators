@@ -196,10 +196,8 @@ impl AtorsBase {
                 },
             };
 
-            if should_pickle {
-                if let Some(value) = get_slot_owned(slf, mb.index()) {
-                    state.set_item(&name_str, value.into_bound(py))?;
-                }
+            if should_pickle && let Some(value) = get_slot_owned(slf, mb.index()) {
+                state.set_item(&name_str, value.into_bound(py))?;
             }
         }
 
@@ -248,19 +246,14 @@ impl AtorsBase {
                     item: Some(item_bv),
                 } => {
                     if let Ok(alist) = value.cast::<AtorsList>() {
-                        AtorsList::restore(
-                            &alist,
-                            (*item_bv.0).clone(),
-                            Some(mb.name()),
-                            Some(slf),
-                        );
+                        AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
                     }
                 }
                 TypeValidator::Set {
                     item: Some(item_bv),
                 } => {
                     if let Ok(aset) = value.cast::<AtorsSet>() {
-                        AtorsSet::restore(&aset, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
+                        AtorsSet::restore(aset, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
                     }
                 }
                 TypeValidator::Dict {
@@ -268,7 +261,7 @@ impl AtorsBase {
                 } => {
                     if let Ok(adict) = value.cast::<AtorsDict>() {
                         AtorsDict::restore(
-                            &adict,
+                            adict,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
                             Some(mb.name()),

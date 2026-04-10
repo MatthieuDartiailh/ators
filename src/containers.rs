@@ -7,7 +7,8 @@
 |----------------------------------------------------------------------------*/
 /// Container types with validation and related utilities.
 use pyo3::{
-    Bound, Py, PyAny, PyErr, PyRef, PyResult, Python, ffi, intern, pyclass, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyRef, PyResult, Python, ffi, intern, pyclass,
+    pyfunction, pymethods,
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
@@ -144,71 +145,34 @@ impl AtorsList {
     }
 }
 
+// XXX remove __new__ and __init__ and use a custom reduce with a dedicated
+// constructor that takes no arg and rely on the 4th item of the tuple returned
+// by reduce to populate the list from the iterable, bypassing validation since the
+// implement reduce using a custom
 // __delitem__, remove, pop, clear, sort, reverse and __imul__ do not need
 // item validation since they only remove or rearrange existing items.
 // append, insert, __setitem__, extend and __iadd__ need item validation
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
-    #[new]
-    #[classmethod]
-    #[pyo3(signature = (iterable=None))]
-    pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
-        // `iterable` is accepted only for Python calling-convention compatibility:
-        // pickle reconstructs e.g. `AtorsList([items])`. The Rust struct is always
-        // initialized empty; `__init__` below populates the parent PyList from the iterable.
-        let _ = iterable;
-        use crate::validators::types::TypeValidator;
-        Ok(AtorsList {
-            validator: UnsafeCell::new(Validator {
-                type_validator: TypeValidator::Any {},
-                value_validators: Box::new([]),
-                coercer: None,
-                init_coercer: None,
-            }),
-            member_name: UnsafeCell::new(None),
-            object: UnsafeCell::new(None),
-        })
-    }
-
-    /// Initialize the underlying list with items from an iterable.
-    /// Used by pickle when reconstructing a standalone AtorsList.
-    #[pyo3(signature = (iterable=None))]
-    pub fn __init__<'py>(
-        self_: &Bound<'py, AtorsList>,
-        iterable: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<()> {
-        if let Some(items) = iterable {
-            let py = items.py();
-            for item in items.try_iter()? {
-                crate::utils::error_on_minusone(py, unsafe {
-                    ffi::PyList_Append(self_.as_ptr(), item?.as_ptr())
-                })?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn append<'py>(self_: PyRef<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn append<'py>(self_: &Bound<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.validate_item(py, value)?;
-        // Use direct PyList C API to avoid converting into bound to cast to PyList
-        crate::utils::error_on_minusone(py, unsafe {
-            ffi::PyList_Append(self_.as_ptr(), valid.as_ptr())
-        })
+        let valid = self_.get().validate_item(py, value)?;
+        // SAFETY: AtorsList is declared as `extends=PyList`, so this cast is
+        // always valid, and the resulting PyList is valid for calling append.
+        unsafe { self_.cast_unchecked::<PyList>() }.append(&valid)
     }
 
     pub fn insert<'py>(
-        self_: PyRef<'py, AtorsList>,
-        index: isize,
+        self_: &Bound<'py, AtorsList>,
+        index: usize,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.validate_item(py, value)?;
-        // Use direct PyList C API to avoid converting into bound to cast to PyList
-        crate::utils::error_on_minusone(py, unsafe {
-            ffi::PyList_Insert(self_.as_ptr(), index, valid.as_ptr())
-        })
+        let valid = self_.get().validate_item(py, value)?;
+        // SAFETY: AtorsList is declared as `extends=PyList`, so this cast is
+        // always valid, and the resulting PyList is valid for calling append.
+        unsafe { self_.cast_unchecked::<PyList>() }.insert(index, &valid)
     }
 
     pub fn __setitem__<'py>(
@@ -217,22 +181,25 @@ impl AtorsList {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = index.py();
-        let valid = if index.is_instance_of::<PySlice>() {
+        if let Ok(sl) = index.cast_exact::<PySlice>() {
             // For slice assignment, value is an iterable of items to validate
-            with_critical_section(self_.as_any(), || self_.get().validate_iterable(py, value))?
-                .into_any()
+            let valid = self_.get().validate_iterable(py, value)?;
+            self_.as_any().set_item(sl, &valid)
         } else {
-            // For single-index assignment, validate the single value
-            with_critical_section(self_.as_any(), || self_.get().validate_item(py, value))?
-        };
-        // Use py_super() to call the parent list's __setitem__ to avoid re-dispatching
-        // through our own override (which would cause infinite recursion with PyObject_SetItem)
-        self_
-            .py_super()?
-            .call_method1(intern!(py, "__setitem__"), (index, valid))
-            .map(|_| ())
+            let valid = self_.get().validate_item(py, value)?;
+            // SAFETY: AtorsList is declared as `extends=PyList`, so this cast is
+            // always valid, and the resulting PyList is valid for calling append.
+            let i: isize = index.extract()?;
+            if i < 0 {
+                // Let's not re-invent the wheel here
+                self_.as_any().set_item(index, &valid)
+            } else {
+                unsafe { self_.cast_unchecked::<PyList>() }.set_item(i as usize, &valid)
+            }
+        }
     }
 
+    // XXX add support for PyList_Extend in PyO3
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let valid = with_critical_section(self_.as_any(), || {
             self_.get().validate_iterable(other.py(), other)
@@ -276,6 +243,42 @@ impl AtorsList {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
+    }
+
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsList>> {
+        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsList
+        // without any meaningful metadata; the actual validator and related metadata will be
+        // populated by the restore method called from AtorsBase.__setstate__ after construction.
+        use crate::validators::types::TypeValidator;
+        Bound::new(
+            py,
+            AtorsList {
+                validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                member_name: UnsafeCell::new(None),
+                object: UnsafeCell::new(None),
+            },
+        )
+    }
+
+    //
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            py.None(),
+            unsafe { self_.cast_unchecked::<PyList>() }.try_iter()?,
+        )
+            .into_bound_py_any(py)
     }
 }
 
@@ -398,64 +401,29 @@ impl AtorsSet {
 // item validation since they can add items
 #[pymethods]
 impl AtorsSet {
-    #[new]
-    #[classmethod]
-    #[pyo3(signature = (iterable=None))]
-    pub fn py_new(_cls: &Bound<'_, PyType>, iterable: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
-        // `iterable` is accepted only for Python calling-convention compatibility:
-        // pickle reconstructs e.g. `AtorsSet([items])`. The Rust struct is always
-        // initialized empty; `__init__` below populates the parent PySet from the iterable.
-        let _ = iterable;
-        use crate::validators::types::TypeValidator;
-        Ok(AtorsSet {
-            validator: UnsafeCell::new(Validator {
-                type_validator: TypeValidator::Any {},
-                value_validators: Box::new([]),
-                coercer: None,
-                init_coercer: None,
-            }),
-            member_name: UnsafeCell::new(None),
-            object: UnsafeCell::new(None),
-        })
-    }
-
-    /// Initialize the underlying set with items from an iterable.
-    /// Used by pickle when reconstructing a standalone AtorsSet.
-    #[pyo3(signature = (iterable=None))]
-    pub fn __init__<'py>(
-        self_: &Bound<'py, AtorsSet>,
-        iterable: Option<&Bound<'py, PyAny>>,
-    ) -> PyResult<()> {
-        if let Some(items) = iterable {
-            let py = items.py();
-            for item in items.try_iter()? {
-                crate::utils::error_on_minusone(py, unsafe {
-                    ffi::PySet_Add(self_.as_ptr(), item?.as_ptr())
-                })?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn add<'py>(self_: PyRef<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn add<'py>(self_: &Bound<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         // Safety: validator and member_name are effectively immutable; object is not modified
         // while live references exist (see struct-level safety comment).
-        let valid = unsafe { &*self_.validator.get() }.validate(
-            unsafe { &*self_.member_name.get() }.as_deref(),
-            unsafe { &*self_.object.get() }.as_ref().map(|o| o.bind(py)),
+        let valid = unsafe { &*self_.get().validator.get() }.validate(
+            unsafe { &*self_.get().member_name.get() }.as_deref(),
+            unsafe { &*self_.get().object.get() }
+                .as_ref()
+                .map(|o| o.bind(py)),
             &value,
         )?;
-        // Use direct PySet C API to avoid converting into bound to cast to PySet
-        crate::utils::error_on_minusone(py, unsafe {
-            ffi::PySet_Add(self_.as_ptr(), valid.as_ptr())
-        })
+        // SAFETY: AtorsSet is declared as `extends=PySet`, so this cast is
+        // always valid, and the resulting PySet is valid for calling add.
+        let set = unsafe { self_.cast_unchecked::<PySet>() };
+        set.add(&valid)
     }
 
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
-        let set = self_.cast::<PySet>()?;
+        let valid = self_.get().validate_set(py, value)?;
+        // SAFETY: AtorsSet is declared as `extends=PySet`, so this cast is
+        // always valid, and the resulting PySet is valid for calling add.
+        let set = unsafe { self_.cast_unchecked::<PySet>() };
         for item in valid.iter() {
             set.add(&item)?;
         }
@@ -466,9 +434,9 @@ impl AtorsSet {
         AtorsSet::__ior__(self_, other)
     }
 
-    pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
+    pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = with_critical_section(self_.as_any(), || self_.get().validate_set(py, value))?;
+        let valid = self_.get().validate_set(py, value)?;
         let this = self_.cast::<PySet>()?;
         for item in valid.iter() {
             if this.contains(&item)? {
@@ -482,9 +450,9 @@ impl AtorsSet {
 
     pub fn symmetric_difference_update<'py>(
         self_: &Bound<'py, AtorsSet>,
-        other: Bound<'py, PyAny>,
+        other: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        AtorsSet::__ixor__(self_, other)
+        AtorsSet::__ixor__(self_, &other)
     }
 
     // The traverse method of the parent class (PySet) is called automatically and
@@ -504,6 +472,58 @@ impl AtorsSet {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
+    }
+
+    //
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsList>> {
+        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsList
+        // without any meaningful metadata; the actual validator and related metadata will be
+        // populated by the restore method called from AtorsBase.__setstate__ after construction.
+        use crate::validators::types::TypeValidator;
+        Bound::new(
+            py,
+            AtorsList {
+                validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                member_name: UnsafeCell::new(None),
+                object: UnsafeCell::new(None),
+            },
+        )
+        // #[pyo3(signature = (iterable=None))]
+        // pub fn __init__<'py>(
+        //     self_: &Bound<'py, AtorsSet>,
+        //     iterable: Option<&Bound<'py, PyAny>>,
+        // ) -> PyResult<()> {
+        //     if let Some(items) = iterable {
+        //         let py = items.py();
+        //         for item in items.try_iter()? {
+        //             crate::utils::error_on_minusone(py, unsafe {
+        //                 ffi::PySet_Add(self_.as_ptr(), item?.as_ptr())
+        //             })?;
+        //         }
+        //     }
+        //     Ok(())
+        // }
+    }
+
+    //
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            py.None(),
+            unsafe { self_.cast_unchecked::<PyList>() }.try_iter()?,
+        )
+            .into_bound_py_any(py)
     }
 }
 
