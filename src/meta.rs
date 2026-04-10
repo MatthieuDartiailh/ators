@@ -581,10 +581,20 @@ pub fn create_ators_subclass<'py>(
     dct.set_item(ATORS_OBSERVABLE, is_observable)?;
 
     // Store the pickle policy on the class.
-    dct.set_item(
-        ATORS_PICKLE_POLICY,
-        Bound::new(py, pickle_policy.unwrap_or(PicklePolicy::All {}))?,
-    )?;
+    // When no policy is explicitly provided, inherit from the first base class
+    // that defines one; fall back to `All` (the default) if none does.
+    let effective_policy = if let Some(p) = pickle_policy {
+        p
+    } else {
+        mro.iter()
+            .find_map(|base| {
+                base.getattr(ATORS_PICKLE_POLICY)
+                    .ok()
+                    .and_then(|v| v.extract::<PicklePolicy>().ok())
+            })
+            .unwrap_or(PicklePolicy::All {})
+    };
+    dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, effective_policy)?)?;
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
