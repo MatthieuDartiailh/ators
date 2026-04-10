@@ -9,7 +9,7 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyString, PyType, PyTypeMethods},
 };
 use std::cell::UnsafeCell;
 
@@ -126,14 +126,19 @@ impl AtorsBase {
         let Some(kwargs) = kwargs else {
             return Ok(());
         };
-        let members = slf.getattr(ATORS_MEMBERS)?;
+        let members = slf.getattr(ATORS_MEMBERS)?.cast_into::<PyMapping>()?;
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;
+            if !members.get_item(key)?.cast::<Member>()?.get().init {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Cannot pass an init value for member '{key}' because it is not marked as init."
+                )));
+            }
             match slf.setattr(key, v.clone()) {
                 Ok(_) => Ok(()),
                 Err(err) => {
                     // FIXME use cold_branch once Rust 1.95 is out
-                    let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
+                    let m = members.get_item(key)?.cast_into::<Member>()?;
                     if let Some(r) = member_coerce_init(&m, slf, &v) {
                         let coerced_v = r?;
                         slf.setattr(key, coerced_v).map(|_| ())

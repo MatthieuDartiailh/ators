@@ -749,6 +749,10 @@ pub fn create_ators_subclass<'py>(
         // which are on base classes but not on this one).
         specific_members.insert(k.clone());
 
+        // Resolve the init flag: honour an explicit user value, then fall back
+        // to the name-based default (public → true, private → false).
+        mb.init = Some(mb.init.unwrap_or_else(|| !k.starts_with('_')));
+
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
             mb.slot_index = Some(m.get().index());

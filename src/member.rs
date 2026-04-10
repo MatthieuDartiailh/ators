@@ -89,6 +89,10 @@ pub struct Member {
     // Optional metadata dictionary that can be used to store arbitrary information
     // about the member.
     metadata: Option<HashMap<String, Py<PyAny>>>,
+    /// Whether this member participates in `__init__`.
+    /// Defaults to `True` for public names (not starting with `_`) and
+    /// `False` for private names, unless explicitly overridden via `member(init=...)`.
+    pub init: bool,
 }
 
 impl Member {
@@ -104,6 +108,7 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.clone(),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
         }
     }
 
@@ -135,6 +140,7 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.with_owner(py, owner),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
         }
     }
 }
@@ -692,6 +698,8 @@ pub struct MemberBuilder {
     // `name` and `slot_index` are public for direct Rust-level access
     pub name: Option<String>,
     pub slot_index: Option<u8>,
+    /// User-specified init flag. None means "use the default" (resolved in the metaclass).
+    pub init: Option<bool>,
     pre_getattr: Option<PreGetattrBehavior>,
     post_getattr: Option<PostGetattrBehavior>,
     pre_setattr: Option<PreSetattrBehavior>,
@@ -715,10 +723,13 @@ pub struct MemberBuilder {
 
 #[pymethods]
 impl MemberBuilder {
-    // FIXME need to pass in args for customization (init)
     #[new]
-    pub fn py_new() -> Self {
-        MemberBuilder::default()
+    #[pyo3(signature = (*, init = None))]
+    pub fn py_new(init: Option<bool>) -> Self {
+        MemberBuilder {
+            init,
+            ..Default::default()
+        }
     }
 
     pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
@@ -1183,6 +1194,8 @@ impl MemberBuilder {
     /// the builder from the provided `member`, enabling inheritance of
     /// default behaviors during customization.
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
+        // Copy init behavior
+        self.init = Some(member.init);
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
         }
@@ -1231,6 +1244,11 @@ impl MemberBuilder {
         let Some(index) = self.slot_index else {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot build member {name} of {type_name} without an assigned slot."
+            )));
+        };
+        let Some(init) = self.init else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without a resolved init flag."
             )));
         };
         let py = type_name.py();
@@ -1308,6 +1326,7 @@ impl MemberBuilder {
                 init_coercer: self.coerce_init,
             },
             metadata: self.metadata,
+            init,
         })
     }
 }
@@ -1336,6 +1355,7 @@ impl Clone for MemberBuilder {
                 }
             },
             inherit: self.inherit,
+            init: self.init,
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
