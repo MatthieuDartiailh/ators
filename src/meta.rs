@@ -556,6 +556,7 @@ pub fn create_ators_subclass<'py>(
     enable_weakrefs: bool,
     type_containers: i64,
     pickle_policy: Option<PicklePolicy>,
+    validate_attr: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = name.py();
 
@@ -622,6 +623,7 @@ pub fn create_ators_subclass<'py>(
         &dct,
         type_containers,
         typevar_bindings.as_ref(),
+        validate_attr,
     )?;
 
     // Collect the new members defined in this class that require the owning
@@ -878,6 +880,33 @@ pub fn create_ators_subclass<'py>(
                     &meth_name,
                     &methods,
                 ));
+            }
+        }
+    }
+
+    // When validate_attr is False, coercion cannot function without a type
+    // validator.  Fail early if any member – whether newly defined or
+    // inherited from a base class – has a coercer configured.
+    if !validate_attr {
+        for (k, mb) in &member_builders {
+            if mb.coercer().is_some() || mb.init_coercer().is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Class creation failed: attribute '{}' requires coercion \
+                     but validate_attr is False",
+                    k
+                )));
+            }
+        }
+        for (k, m) in &members {
+            if !member_builders.contains_key(k) {
+                let mv = m.get();
+                if mv.validator().coercer.is_some() || mv.validator().init_coercer.is_some() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Class creation failed: attribute '{}' requires coercion \
+                         but validate_attr is False",
+                        k
+                    )));
+                }
             }
         }
     }

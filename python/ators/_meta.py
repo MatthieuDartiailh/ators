@@ -51,6 +51,7 @@ class AtorsMeta(type):
         enable_weakrefs: bool = False,
         type_containers: int = -1,
         pickle_policy=PicklePolicy.ALL
+        validate_attr: bool = True,
     ):
         # Ensure there is no weird mro calculation and that we can use our
         # re-implementation of C3
@@ -66,6 +67,7 @@ class AtorsMeta(type):
             enable_weakrefs,
             type_containers,
             pickle_policy,
+            validate_attr,
         )
 
     def __call__(self, *args, **kwds):
