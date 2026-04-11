@@ -365,7 +365,7 @@ impl AtorsSet {
     fn validate_set<'py>(
         &self,
         py: Python<'py>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PySet>> {
         if unsafe { pyo3::ffi::PyAnySet_Check(value.as_ptr()) } == 0 {
             return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -471,7 +471,7 @@ impl AtorsSet {
 
     pub fn __ior__<'py>(self_: &Bound<'py, Self>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.get().validate_set(py, value)?;
+        let valid = self_.get().validate_set(py, &value)?;
         // SAFETY: AtorsSet is declared as `extends=PySet`, so this cast is
         // always valid, and the resulting PySet is valid for calling add.
         let set = unsafe { self_.cast_unchecked::<PySet>() };
@@ -487,7 +487,7 @@ impl AtorsSet {
 
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.get().validate_set(py, value.clone())?;
+        let valid = self_.get().validate_set(py, value)?;
         let this = self_.cast::<PySet>()?;
         for item in valid.iter() {
             if this.contains(&item)? {
@@ -551,12 +551,12 @@ impl AtorsSet {
                 object: UnsafeCell::new(None),
             },
         )?;
-        let temp = unsafe { new.cast_unchecked::<PySet>() };
+        let py_set = unsafe { new.cast_unchecked::<PySet>() };
         for o in items.try_iter()? {
             // Safety: AtorsSet is declared as `extends=PySet`; this cast is always valid.
             // Items bypass validation here: they are already-valid values restored from pickle.
             crate::utils::error_on_minusone(py, unsafe {
-                ffi::PySet_Add(temp.as_ptr(), o?.as_ptr())
+                ffi::PySet_Add(py_set.as_ptr(), o?.as_ptr())
             })?;
         }
         Ok(new)
