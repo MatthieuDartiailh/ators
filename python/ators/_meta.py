@@ -50,7 +50,7 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
-        pickle_policy=None,
+        pickle_policy=PicklePolicy.ALL
     ):
         # Ensure there is no weird mro calculation and that we can use our
         # re-implementation of C3
