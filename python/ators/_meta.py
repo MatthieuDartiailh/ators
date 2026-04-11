@@ -11,6 +11,7 @@ from typing import Any, Mapping, dataclass_transform
 
 from ._ators import (
     Member,
+    PicklePolicy,
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
