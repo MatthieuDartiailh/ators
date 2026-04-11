@@ -592,7 +592,7 @@ pub fn create_ators_subclass<'py>(
                     .ok()
                     .and_then(|v| v.extract::<PicklePolicy>().ok())
             })
-            .unwrap_or(PicklePolicy::ALL {})
+            .unwrap_or(PicklePolicy::ALL)
     };
     dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, pickle_policy.clone())?)?;
 
@@ -772,17 +772,16 @@ pub fn create_ators_subclass<'py>(
 
         // Resolve the init flag: honour an explicit user value, then fall back
         // to the name-based default (public → true, private → false).
+        // Resolve the init flag: honour an explicit user value, then fall back
+        // to the name-based default (public → true, private → false).
         mb.init = Some(mb.init.unwrap_or_else(|| !k.starts_with('_')));
 
         // Resolve the pickle flag: honour an explicit user value, then fall back
         // to the class policy.
-        if mb.pickle().is_none() {
-            mb.set_pickle(match pickle_policy {
-                PicklePolicy::ALL {} => true,
-                PicklePolicy::NONE {} => false,
-                PicklePolicy::PUBLIC {} => !k.starts_with('_'),
-            });
-        }
+        mb.init = Some(mb.init.unwrap_or_else(|| match pickle_policy {
+           PicklePolicy::ALL => true,
+           PicklePolicy::NONE => false, 
+           PicklePolicy::PUBLIC => !k.starts_with('_')));
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
@@ -918,29 +917,6 @@ pub fn create_ators_subclass<'py>(
         .into_py_dict(py)?;
     let all_members = members.into_py_dict(py)?;
     all_members.update(new_members.as_mapping())?;
-
-    // Re-apply the class pickle policy to inherited members that did not have
-    // an explicit per-member `member().pickle(...)` override. This ensures that
-    // a subclass overriding `pickle_policy` takes effect for ALL members.
-    for (key, value) in all_members.iter() {
-        let k: String = key.extract()?;
-        if specific_members.contains(&k) {
-            continue; // already handled above via member_builders
-        }
-        let member = value.cast_into::<Member>()?;
-        let mb = member.get();
-        if !mb.pickle_explicit {
-            let new_pickle = match pickle_policy {
-                PicklePolicy::ALL {} => true,
-                PicklePolicy::NONE {} => false,
-                PicklePolicy::PUBLIC {} => !k.starts_with('_'),
-            };
-            if new_pickle != mb.pickle {
-                let updated = Bound::new(py, mb.with_pickle(new_pickle))?;
-                all_members.set_item(&key, updated)?;
-            }
-        }
-    }
 
     dct.update(new_members.as_mapping())?;
 

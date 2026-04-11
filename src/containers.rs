@@ -192,10 +192,6 @@ impl AtorsList {
     }
 }
 
-// XXX remove __new__ and __init__ and use a custom reduce with a dedicated
-// constructor that takes no arg and rely on the 4th item of the tuple returned
-// by reduce to populate the list from the iterable, bypassing validation since the
-// implement reduce using a custom
 // __delitem__, remove, pop, clear, sort, reverse and __imul__ do not need
 // item validation since they only remove or rearrange existing items.
 // append, insert, __setitem__, extend and __iadd__ need item validation
@@ -440,6 +436,7 @@ impl AtorsSet {
                 (*inner.member_name.get()) = member_name.map(|s| s.to_string());
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
             }
+            // Set cannot contain list/set/dict so we do not need to check the value validator to restore the value after unpickling.
         });
         // Set cannot contain list/set/dict (unhashable), so we do not need to
         // check the item validator to restore nested containers.
@@ -521,22 +518,13 @@ impl AtorsSet {
     // so we only need to visit our own references.
     pub fn __clear__(&self) {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
-        // no concurrent mutation (holds for both GIL and free-threaded builds).
-        unsafe { *self.object.get() = None };
-    }
 
-    /// Dummy constructor used solely for unpickling.
-    ///
-    /// Creates an empty `AtorsSet` without any Ators metadata. The validator and
-    /// related metadata will be populated by the `restore` method called from
-    /// `AtorsBase.__setstate__` after construction. Items are passed as an iterable
-    /// and stored directly (bypassing validation, since they were already valid before
-    /// pickling and the validator is not yet available).
+    //
     #[staticmethod]
-    pub fn _construct<'py>(
-        py: Python<'py>,
-        items: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, AtorsSet>> {
+    pub fn _construct<'py>(py: Python<'py>, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, AtorsSet>> {
+        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsSet
+        // without any meaningful metadata; the actual validator and related metadata will be
+        // populated by the restore method called from AtorsBase.__setstate__ after construction. Values are restored from the provided iterator.
         use crate::validators::types::TypeValidator;
         let new = Bound::new(
             py,
@@ -550,28 +538,26 @@ impl AtorsSet {
                 member_name: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
             },
-        )?;
-        let py_set = unsafe { new.cast_unchecked::<PySet>() };
-        for o in items.try_iter()? {
-            // Safety: AtorsSet is declared as `extends=PySet`; this cast is always valid.
-            // Items bypass validation here: they are already-valid values restored from pickle.
-            crate::utils::error_on_minusone(py, unsafe {
-                ffi::PySet_Add(py_set.as_ptr(), o?.as_ptr())
-            })?;
+        );
+        let temp = unsafe { new.cast_unchecked::<PySet>() };
+        for o in args.getitem(0)?.iter()? {
+          temp.add(o)?;
         }
-        Ok(new)
+        new
     }
 
+    //
     pub fn __reduce_ex__<'py>(
         self_: &Bound<'py, Self>,
         py: Python<'py>,
-        _protocol: usize,
+        protocol: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // Returns a 2-tuple (callable, args) so pickle calls `callable(*args)`.
-        // The set items are passed as a frozenset argument to `_construct`.
-        let items: Vec<Bound<'py, PyAny>> =
-            unsafe { self_.cast_unchecked::<PySet>() }.iter().collect();
-        (self_.getattr(intern!(py, "_construct"))?, (items,)).into_bound_py_any(py)
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            (unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?,
+        )
+            .into_bound_py_any(py))
     }
 }
 
@@ -722,6 +708,30 @@ impl AtorsDict {
                 (*inner.value_validator.get()) = value_validator;
                 (*inner.member_name.get()) = member_name.map(|s| s.to_string());
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
+            }
+            match &value_validator.type_validator {
+                TypeValidator::List {
+                    item: Some(item_v),
+                } => {
+                    for (_, v) in adict.iter() {
+                      AtorsList::restore(v.cast::<AtorsList>()?, item_v.clone(), Some(mb.name()), Some(slf))
+                    }
+                }
+                TypeValidator::Set {
+                    item: Some(item_v),
+                } => {
+                    for (_, v) in adict.iter() {
+                      AtorsSet::restore(v.cast::<AtorsSet>()?, item_v.clone(), Some(mb.name()), Some(slf))
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_v, val_v)),
+                } => {
+                    for (_, v) in adict.iter() {
+                      AtorsDict::restore(v.cast::<AtorsDict>()?, key_v.clone(), val_v.clone(), Some(mb.name()), Some(slf))
+                    }
+                }
+                _ => {}
             }
         });
 
@@ -900,6 +910,50 @@ impl AtorsDict {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
+     }
+
+
+    //
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, AtorsDict>> {
+        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsDict
+        // without any meaningful metadata; the actual validator and related metadata will be
+        // populated by the restore method called from AtorsBase.__setstate__ after construction.
+        use crate::validators::types::TypeValidator;
+        let new = Bound::new(
+            py,
+            AtorsDict {
+                validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                member_name: UnsafeCell::new(None),
+                object: UnsafeCell::new(None),
+            },
+        );
+        let temp = unsafe { new.cast_unchecked::<PySet>() };
+        for o in args.getitem(0)?.iter()? {
+          temp.add(o)?;
+        }
+        new
+    }
+
+    //
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            py.None(),
+            py.None(),
+            (unsafe { self_.cast_unchecked::<PyDict>() }.try_iter()?,
+        )
+            .into_bound_py_any(py))
     }
 
     /// Dummy constructor used solely for unpickling.

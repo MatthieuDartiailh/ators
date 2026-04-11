@@ -65,14 +65,11 @@ pub enum ClassMutability {
 #[derive(Debug, Clone)]
 pub enum PicklePolicy {
     /// Include all members in pickle state (default).
-    #[pyo3(constructor = ())]
-    ALL {},
+    ALL,
     /// Exclude all members from pickle state.
-    #[pyo3(constructor = ())]
-    NONE {},
+    NONE,
     /// Include only public members (those not starting with `_`) in pickle state.
-    #[pyo3(constructor = ())]
-    PUBLIC {},
+    PUBLIC,
 }
 
 #[pymethods]

@@ -86,12 +86,20 @@ class _ListNestedClass(Ators):
     items: list[list[int]]
 
 
+class _ListNestedClass(Ators):
+    items: list[list[int]]
+
+
 class _SetClass(Ators):
     s: set[int]
 
 
 class _DictClass(Ators):
     mapping: dict[str, int]
+
+
+class _DictNestedClass(Ators):
+    mapping: dict[str, list[int]]
 
 
 class _DictNestedClass(Ators):
@@ -277,6 +285,8 @@ def test_list_member_validates_after_restore():
     """After unpickling, a typed list must still enforce its validator."""
     a = _ListClass(items=[10, 20])
     a2 = pickle.loads(pickle.dumps(a))
+    a2.items.append(30)
+    assert a2.items == [10, 20, 30]
     with pytest.raises(TypeError):
         a2.items.append("not an int")
     a2.items.append(30)
@@ -299,6 +309,8 @@ def test_set_member_validates_after_restore():
     """After unpickling, a typed set must still enforce its validator."""
     a = _SetClass(s={1})
     a2 = pickle.loads(pickle.dumps(a))
+    a2.s.add(3)
+    assert 3 in a2.s
     with pytest.raises(TypeError):
         a2.s.add("not an int")
     a2.s.add(3)
@@ -321,6 +333,8 @@ def test_dict_member_validates_after_restore():
     """After unpickling, a typed dict must still enforce its validators."""
     a = _DictClass(mapping={"x": 10})
     a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["b"] = 2
+    assert a2.mapping["b"] == 2
     with pytest.raises(TypeError):
         a2.mapping[123] = 99  # int key not allowed
     a2.mapping["b"] = 2

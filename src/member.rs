@@ -97,10 +97,6 @@ pub struct Member {
     /// Resolved at class creation time from the class-level `PicklePolicy` or from an
     /// explicit `member().pickle(...)` call.
     pub pickle: bool,
-    /// `true` when the user explicitly called `member().pickle(...)` for this member.
-    /// Used by subclasses to decide whether to re-apply their own pickle policy
-    /// (inherited members without an explicit override will adopt the subclass policy).
-    pub pickle_explicit: bool,
 }
 
 impl Member {
@@ -118,7 +114,6 @@ impl Member {
             metadata: clone_metadata(&self.metadata),
             init: self.init,
             pickle: self.pickle,
-            pickle_explicit: self.pickle_explicit,
         }
     }
 
@@ -138,28 +133,6 @@ impl Member {
         &self.validator
     }
 
-    /// Create a copy of this member with the given pickle flag applied.
-    ///
-    /// Used by subclasses to re-apply a different class-level policy to inherited
-    /// members that did not have an explicit `member().pickle(...)` override.
-    pub fn with_pickle(&self, pickle: bool) -> Self {
-        Member {
-            name: self.name.clone(),
-            slot_index: self.slot_index,
-            pre_getattr: self.pre_getattr.clone(),
-            post_getattr: self.post_getattr.clone(),
-            pre_setattr: self.pre_setattr.clone(),
-            post_setattr: self.post_setattr.clone(),
-            delattr: self.delattr.clone(),
-            default: self.default.clone(),
-            validator: self.validator.clone(),
-            metadata: clone_metadata(&self.metadata),
-            init: self.init,
-            pickle,
-            pickle_explicit: false,
-        }
-    }
-
     pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         Member {
             name: self.name.clone(),
@@ -174,7 +147,6 @@ impl Member {
             metadata: clone_metadata(&self.metadata),
             init: self.init,
             pickle: self.pickle,
-            pickle_explicit: self.pickle_explicit,
         }
     }
 }
@@ -735,10 +707,6 @@ pub struct MemberBuilder {
     metadata: Option<HashMap<String, Py<PyAny>>>,
     forward_ref_environment_factory: Option<Py<PyAny>>,
     pickle: Option<bool>,
-    /// `true` if the user called `member().pickle(...)` explicitly.
-    /// Preserved into the built `Member` so subclasses can distinguish user overrides
-    /// from policy-derived values when re-applying a different pickle policy.
-    pickle_user_explicit: bool,
     inherit: bool,
     // Only required when building a new member in the metaclass since the owner
     // should be scoped to the original class definition itself and not altered
@@ -1035,7 +1003,6 @@ impl MemberBuilder {
         pickle: bool,
     ) -> PyResult<PyRefMut<'py, Self>> {
         self_.pickle = Some(pickle);
-        self_.pickle_user_explicit = true;
         Ok(self_)
     }
 
@@ -1248,7 +1215,6 @@ impl MemberBuilder {
         }
         if self.pickle.is_none() {
             self.pickle = Some(member.pickle);
-            self.pickle_user_explicit = member.pickle_explicit;
         }
     }
 
@@ -1270,6 +1236,11 @@ impl MemberBuilder {
         let Some(init) = self.init else {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot build member {name} of {type_name} without a resolved init flag."
+            )));
+        };
+        let Some(pickle) = self.pickle else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without a resolved pickle flag."
             )));
         };
         let Some(pickle) = self.pickle else {
@@ -1354,7 +1325,6 @@ impl MemberBuilder {
             metadata: self.metadata,
             init,
             pickle,
-            pickle_explicit: self.pickle_user_explicit,
         })
     }
 }
@@ -1387,7 +1357,6 @@ impl Clone for MemberBuilder {
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
-            pickle_user_explicit: self.pickle_user_explicit,
         }
     }
 }
