@@ -913,48 +913,6 @@ impl AtorsDict {
      }
 
 
-    //
-    #[staticmethod]
-    pub fn _construct<'py>(py: Python<'py>, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, AtorsDict>> {
-        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsDict
-        // without any meaningful metadata; the actual validator and related metadata will be
-        // populated by the restore method called from AtorsBase.__setstate__ after construction.
-        use crate::validators::types::TypeValidator;
-        let new = Bound::new(
-            py,
-            AtorsDict {
-                validator: UnsafeCell::new(Validator {
-                    type_validator: TypeValidator::Any {},
-                    value_validators: Box::new([]),
-                    coercer: None,
-                    init_coercer: None,
-                }),
-                member_name: UnsafeCell::new(None),
-                object: UnsafeCell::new(None),
-            },
-        );
-        let temp = unsafe { new.cast_unchecked::<PySet>() };
-        for o in args.getitem(0)?.iter()? {
-          temp.add(o)?;
-        }
-        new
-    }
-
-    //
-    pub fn __reduce_ex__<'py>(
-        self_: &Bound<'py, Self>,
-        py: Python<'py>,
-        protocol: usize,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        (
-            self_.getattr(intern!(py, "_construct"))?,
-            (),
-            py.None(),
-            py.None(),
-            (unsafe { self_.cast_unchecked::<PyDict>() }.try_iter()?,
-        )
-            .into_bound_py_any(py))
-    }
 
     /// Dummy constructor used solely for unpickling.
     ///
