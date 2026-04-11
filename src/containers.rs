@@ -11,7 +11,7 @@ use pyo3::{
     pymethods,
     sync::critical_section::with_critical_section,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
+         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice, PyTuple,
     },
 };
 use std::cell::UnsafeCell;
@@ -541,12 +541,12 @@ impl AtorsSet {
                 member_name: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
             },
-        );
+        )?;
         let temp = unsafe { new.cast_unchecked::<PySet>() };
         for o in args.getitem(0)?.iter()? {
           temp.add(o)?;
         }
-        new
+        Ok(new)
     }
 
     //
@@ -717,21 +717,21 @@ impl AtorsDict {
                     item: Some(item_v),
                 } => {
                     for (_, v) in adict.iter() {
-                      AtorsList::restore(v.cast::<AtorsList>()?, item_v.clone(), Some(mb.name()), Some(slf))
+                      AtorsList::restore(v.cast::<AtorsList>()?, item_v.clone(), member_name, object)
                     }
                 }
                 TypeValidator::Set {
                     item: Some(item_v),
                 } => {
                     for (_, v) in adict.iter() {
-                      AtorsSet::restore(v.cast::<AtorsSet>()?, item_v.clone(), Some(mb.name()), Some(slf))
+                      AtorsSet::restore(v.cast::<AtorsSet>()?, item_v.clone(), member_name, object)
                     }
                 }
                 TypeValidator::Dict {
                     items: Some((key_v, val_v)),
                 } => {
                     for (_, v) in adict.iter() {
-                      AtorsDict::restore(v.cast::<AtorsDict>()?, key_v.clone(), val_v.clone(), Some(mb.name()), Some(slf))
+                      AtorsDict::restore(v.cast::<AtorsDict>()?, key_v.clone(), val_v.clone(), member_name, object)
                     }
                 }
                 _ => {}
