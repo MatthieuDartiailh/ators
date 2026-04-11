@@ -518,6 +518,9 @@ impl AtorsSet {
     // so we only need to visit our own references.
     pub fn __clear__(&self) {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        unsafe { *self.object.get() = None };
+    }
 
     //
     #[staticmethod]
