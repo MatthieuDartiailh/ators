@@ -580,10 +580,9 @@ pub fn create_ators_subclass<'py>(
         });
     dct.set_item(ATORS_OBSERVABLE, is_observable)?;
 
-    // Store the pickle policy on the class.
-    // When no policy is explicitly provided, inherit from the first base class
-    // that defines one; fall back to `All` (the default) if none does.
-    let effective_policy = if let Some(p) = pickle_policy {
+    // Resolve the pickle policy: honour an explicit value, then inherit from the first
+    // base class that defines one; fall back to `ALL` (the default) if none does.
+    let pickle_policy = if let Some(p) = pickle_policy {
         p
     } else {
         mro.iter()
@@ -592,9 +591,9 @@ pub fn create_ators_subclass<'py>(
                     .ok()
                     .and_then(|v| v.extract::<PicklePolicy>().ok())
             })
-            .unwrap_or(PicklePolicy::All {})
+            .unwrap_or(PicklePolicy::ALL {})
     };
-    dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, effective_policy)?)?;
+    dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, pickle_policy.clone())?)?;
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
@@ -773,6 +772,16 @@ pub fn create_ators_subclass<'py>(
         // to the name-based default (public → true, private → false).
         mb.init = Some(mb.init.unwrap_or_else(|| !k.starts_with('_')));
 
+        // Resolve the pickle flag: honour an explicit user value, then fall back
+        // to the class policy.
+        if mb.pickle().is_none() {
+            mb.set_pickle(match pickle_policy {
+                PicklePolicy::ALL {} => true,
+                PicklePolicy::NONE {} => false,
+                PicklePolicy::PUBLIC {} => !k.starts_with('_'),
+            });
+        }
+
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
             mb.slot_index = Some(m.get().index());
@@ -880,6 +889,30 @@ pub fn create_ators_subclass<'py>(
         .into_py_dict(py)?;
     let all_members = members.into_py_dict(py)?;
     all_members.update(new_members.as_mapping())?;
+
+    // Re-apply the class pickle policy to inherited members that did not have
+    // an explicit per-member `member().pickle(...)` override. This ensures that
+    // a subclass overriding `pickle_policy` takes effect for ALL members.
+    for (key, value) in all_members.iter() {
+        let k: String = key.extract()?;
+        if specific_members.contains(&k) {
+            continue; // already handled above via member_builders
+        }
+        let member = value.cast_into::<Member>()?;
+        let mb = member.get();
+        if !mb.pickle_explicit {
+            let new_pickle = match pickle_policy {
+                PicklePolicy::ALL {} => true,
+                PicklePolicy::NONE {} => false,
+                PicklePolicy::PUBLIC {} => !k.starts_with('_'),
+            };
+            if new_pickle != mb.pickle {
+                let updated = Bound::new(py, mb.with_pickle(new_pickle))?;
+                all_members.set_item(&key, updated)?;
+            }
+        }
+    }
+
     dct.update(new_members.as_mapping())?;
 
     // Set the class level information as aggregated during the analysis

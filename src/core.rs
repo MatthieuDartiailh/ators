@@ -9,7 +9,10 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyString, PyType, PyTypeMethods},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyString, PyType,
+        PyTypeMethods,
+    },
 };
 use std::cell::UnsafeCell;
 
@@ -63,13 +66,13 @@ pub enum ClassMutability {
 pub enum PicklePolicy {
     /// Include all members in pickle state (default).
     #[pyo3(constructor = ())]
-    All {},
+    ALL {},
     /// Exclude all members from pickle state.
     #[pyo3(constructor = ())]
-    None {},
+    NONE {},
     /// Include only public members (those not starting with `_`) in pickle state.
     #[pyo3(constructor = ())]
-    Public {},
+    PUBLIC {},
 }
 
 #[pymethods]
@@ -172,31 +175,19 @@ impl AtorsBase {
 
         let members = cls
             .getattr(intern!(py, ATORS_MEMBERS))?
-            .cast_into::<PyDict>()?;
-
-        let policy: PicklePolicy = cls
-            .getattr(intern!(py, ATORS_PICKLE_POLICY))
-            .ok()
-            .and_then(|v| v.extract().ok())
-            .unwrap_or(PicklePolicy::All {});
+            .cast_into::<PyMapping>()?;
 
         let state = PyDict::new(py);
-        for (name, member_obj) in members.iter() {
+        for item in members.items()?.try_iter()? {
+            let item = item?;
+            let (name, member_obj) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
             let name_str: String = name.extract()?;
             let member = member_obj.cast_into::<Member>()?;
             let mb = member.get();
 
-            let should_pickle = match mb.pickle {
-                Some(true) => true,
-                Some(false) => false,
-                None => match &policy {
-                    PicklePolicy::All {} => true,
-                    PicklePolicy::None {} => false,
-                    PicklePolicy::Public {} => !name_str.starts_with('_'),
-                },
-            };
-
-            if should_pickle && let Some(value) = get_slot_owned(slf, mb.index()) {
+            if mb.pickle
+                && let Some(value) = get_slot_owned(slf, mb.index())
+            {
                 state.set_item(&name_str, value.into_bound(py))?;
             }
         }
@@ -216,12 +207,12 @@ impl AtorsBase {
 
         let members = cls
             .getattr(intern!(py, ATORS_MEMBERS))?
-            .cast_into::<PyDict>()?;
+            .cast_into::<PyMapping>()?;
 
         // Validate all keys are known members
         for (key, _) in state.iter() {
             let key_str: String = key.extract()?;
-            if members.get_item(&key)?.is_none() {
+            if !members.contains(&key)? {
                 return Err(pyo3::exceptions::PyKeyError::new_err(format!(
                     "Unknown member '{}' for {}",
                     key_str,
@@ -232,10 +223,7 @@ impl AtorsBase {
 
         // Restore values
         for (key, value) in state.iter() {
-            let member = members
-                .get_item(&key)?
-                .expect("Key is known to be in members")
-                .cast_into::<Member>()?;
+            let member = members.get_item(&key)?.cast_into::<Member>()?;
             let mb = member.get();
 
             // For container members: restore metadata before slot assignment.

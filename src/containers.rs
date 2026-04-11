@@ -8,11 +8,10 @@
 /// Container types with validation and related utilities.
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyRef, PyResult, Python, ffi, intern, pyclass,
-    pyfunction, pymethods,
+    pymethods,
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
-        PyType,
     },
 };
 use std::cell::UnsafeCell;
@@ -131,6 +130,17 @@ impl AtorsList {
         member_name: Option<&str>,
         object: Option<&Bound<'py, AtorsBase>>,
     ) {
+        use crate::validators::types::TypeValidator;
+
+        // Capture the item validator before the critical section so we can use it
+        // afterwards to restore any nested containers within the list.
+        let item_v = match &validator.type_validator {
+            TypeValidator::List {
+                item: Some(item_bv),
+            } => Some((*item_bv.0).clone()),
+            _ => None,
+        };
+
         with_critical_section(alist.as_any(), || {
             let inner = alist.get();
             // Safety: we hold the critical section lock. These fields are only written
@@ -142,6 +152,43 @@ impl AtorsList {
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
             }
         });
+
+        // Restore any nested containers within the list items.
+        if let Some(item_validator) = item_v {
+            // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
+            let py_list = unsafe { alist.cast_unchecked::<PyList>() };
+            for list_item in py_list.iter() {
+                match &item_validator.type_validator {
+                    TypeValidator::List {
+                        item: Some(nested_bv),
+                    } => {
+                        if let Ok(nested) = list_item.cast::<AtorsList>() {
+                            AtorsList::restore(
+                                &nested,
+                                (*nested_bv.0).clone(),
+                                member_name,
+                                object,
+                            );
+                        }
+                    }
+                    TypeValidator::Dict {
+                        items: Some((key_bv, val_bv)),
+                    } => {
+                        if let Ok(nested) = list_item.cast::<AtorsDict>() {
+                            AtorsDict::restore(
+                                &nested,
+                                (*key_bv.0).clone(),
+                                (*val_bv.0).clone(),
+                                member_name,
+                                object,
+                            );
+                        }
+                    }
+                    // Set cannot contain list/set/dict (unhashable), no nested restore needed.
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
@@ -246,7 +293,10 @@ impl AtorsList {
     }
 
     #[staticmethod]
-    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsList>> {
+    pub fn _construct<'py>(
+        py: Python<'py>,
+        _args: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, AtorsList>> {
         // This is a dummy constructor used solely for unpickling. It creates an empty AtorsList
         // without any meaningful metadata; the actual validator and related metadata will be
         // populated by the restore method called from AtorsBase.__setstate__ after construction.
@@ -266,15 +316,14 @@ impl AtorsList {
         )
     }
 
-    //
     pub fn __reduce_ex__<'py>(
         self_: &Bound<'py, Self>,
         py: Python<'py>,
-        protocol: usize,
+        _protocol: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
         (
             self_.getattr(intern!(py, "_construct"))?,
-            (),
+            (py.None(),),
             py.None(),
             unsafe { self_.cast_unchecked::<PyList>() }.try_iter()?,
         )
@@ -392,6 +441,8 @@ impl AtorsSet {
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
             }
         });
+        // Set cannot contain list/set/dict (unhashable), so we do not need to
+        // check the item validator to restore nested containers.
     }
 }
 
@@ -436,7 +487,7 @@ impl AtorsSet {
 
     pub fn __ixor__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.get().validate_set(py, value)?;
+        let valid = self_.get().validate_set(py, value.clone())?;
         let this = self_.cast::<PySet>()?;
         for item in valid.iter() {
             if this.contains(&item)? {
@@ -474,16 +525,22 @@ impl AtorsSet {
         unsafe { *self.object.get() = None };
     }
 
-    //
+    /// Dummy constructor used solely for unpickling.
+    ///
+    /// Creates an empty `AtorsSet` without any Ators metadata. The validator and
+    /// related metadata will be populated by the `restore` method called from
+    /// `AtorsBase.__setstate__` after construction. Items are passed as an iterable
+    /// and stored directly (bypassing validation, since they were already valid before
+    /// pickling and the validator is not yet available).
     #[staticmethod]
-    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsList>> {
-        // This is a dummy constructor used solely for unpickling. It creates an empty AtorsList
-        // without any meaningful metadata; the actual validator and related metadata will be
-        // populated by the restore method called from AtorsBase.__setstate__ after construction.
+    pub fn _construct<'py>(
+        py: Python<'py>,
+        items: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, AtorsSet>> {
         use crate::validators::types::TypeValidator;
-        Bound::new(
+        let new = Bound::new(
             py,
-            AtorsList {
+            AtorsSet {
                 validator: UnsafeCell::new(Validator {
                     type_validator: TypeValidator::Any {},
                     value_validators: Box::new([]),
@@ -493,37 +550,28 @@ impl AtorsSet {
                 member_name: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
             },
-        )
-        // #[pyo3(signature = (iterable=None))]
-        // pub fn __init__<'py>(
-        //     self_: &Bound<'py, AtorsSet>,
-        //     iterable: Option<&Bound<'py, PyAny>>,
-        // ) -> PyResult<()> {
-        //     if let Some(items) = iterable {
-        //         let py = items.py();
-        //         for item in items.try_iter()? {
-        //             crate::utils::error_on_minusone(py, unsafe {
-        //                 ffi::PySet_Add(self_.as_ptr(), item?.as_ptr())
-        //             })?;
-        //         }
-        //     }
-        //     Ok(())
-        // }
+        )?;
+        let temp = unsafe { new.cast_unchecked::<PySet>() };
+        for o in items.try_iter()? {
+            // Safety: AtorsSet is declared as `extends=PySet`; this cast is always valid.
+            // Items bypass validation here: they are already-valid values restored from pickle.
+            crate::utils::error_on_minusone(py, unsafe {
+                ffi::PySet_Add(temp.as_ptr(), o?.as_ptr())
+            })?;
+        }
+        Ok(new)
     }
 
-    //
     pub fn __reduce_ex__<'py>(
         self_: &Bound<'py, Self>,
         py: Python<'py>,
-        protocol: usize,
+        _protocol: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
-        (
-            self_.getattr(intern!(py, "_construct"))?,
-            (),
-            py.None(),
-            unsafe { self_.cast_unchecked::<PyList>() }.try_iter()?,
-        )
-            .into_bound_py_any(py)
+        // Returns a 2-tuple (callable, args) so pickle calls `callable(*args)`.
+        // The set items are passed as a frozenset argument to `_construct`.
+        let items: Vec<Bound<'py, PyAny>> =
+            unsafe { self_.cast_unchecked::<PySet>() }.iter().collect();
+        (self_.getattr(intern!(py, "_construct"))?, (items,)).into_bound_py_any(py)
     }
 }
 
@@ -659,6 +707,11 @@ impl AtorsDict {
         member_name: Option<&str>,
         object: Option<&Bound<'py, AtorsBase>>,
     ) {
+        use crate::validators::types::TypeValidator;
+
+        // Capture the value validator type before the critical section for nested restore.
+        let value_v = value_validator.clone();
+
         with_critical_section(adict.as_any(), || {
             let inner = adict.get();
             // Safety: we hold the critical section lock. These fields are only written
@@ -671,6 +724,46 @@ impl AtorsDict {
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
             }
         });
+
+        // Restore any nested containers in the dict values.
+        // Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+        let py_dict = unsafe { adict.cast_unchecked::<PyDict>() };
+        match &value_v.type_validator {
+            TypeValidator::List {
+                item: Some(item_bv),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsList>() {
+                        AtorsList::restore(&nested, (*item_bv.0).clone(), member_name, object);
+                    }
+                }
+            }
+            TypeValidator::Set {
+                item: Some(item_bv),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsSet>() {
+                        AtorsSet::restore(&nested, (*item_bv.0).clone(), member_name, object);
+                    }
+                }
+            }
+            TypeValidator::Dict {
+                items: Some((key_bv, val_bv)),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsDict>() {
+                        AtorsDict::restore(
+                            &nested,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            member_name,
+                            object,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -688,66 +781,6 @@ fn dict_set_item<'py>(
 
 #[pymethods]
 impl AtorsDict {
-    #[new]
-    #[classmethod]
-    #[pyo3(signature = (other=None, **kwargs))]
-    pub fn py_new(
-        _cls: &Bound<'_, PyType>,
-        other: Option<&Bound<'_, PyAny>>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<Self> {
-        // `other` and `kwargs` are accepted only for Python calling-convention compatibility:
-        // pickle reconstructs e.g. `AtorsDict({items})`. The Rust struct is always
-        // initialized empty; `__init__` below populates the parent PyDict from the mapping.
-        let _ = (other, kwargs);
-        use crate::validators::types::TypeValidator;
-        Ok(AtorsDict {
-            key_validator: UnsafeCell::new(Validator {
-                type_validator: TypeValidator::Any {},
-                value_validators: Box::new([]),
-                coercer: None,
-                init_coercer: None,
-            }),
-            value_validator: UnsafeCell::new(Validator {
-                type_validator: TypeValidator::Any {},
-                value_validators: Box::new([]),
-                coercer: None,
-                init_coercer: None,
-            }),
-            member_name: UnsafeCell::new(None),
-            object: UnsafeCell::new(None),
-        })
-    }
-
-    /// Initialize the underlying dict with items from a mapping or iterable of pairs.
-    /// Used by pickle when reconstructing a standalone AtorsDict.
-    #[pyo3(signature = (other=None, **kwargs))]
-    pub fn __init__<'py>(
-        self_: PyRef<'py, AtorsDict>,
-        other: Option<&Bound<'py, PyAny>>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<()> {
-        let py = self_.py();
-        if let Some(o) = other {
-            if let Ok(od) = o.cast::<PyDict>() {
-                for (k, v) in od.iter() {
-                    dict_set_item(py, self_.as_ptr(), k, v)?;
-                }
-            } else {
-                for t in o.try_iter()? {
-                    let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-                    dict_set_item(py, self_.as_ptr(), k, v)?;
-                }
-            }
-        }
-        if let Some(kw) = kwargs {
-            for (k, v) in kw.iter() {
-                dict_set_item(py, self_.as_ptr(), k, v)?;
-            }
-        }
-        Ok(())
-    }
-
     pub fn __setitem__<'py>(
         self_: PyRef<'py, AtorsDict>,
         key: Bound<'py, PyAny>,
@@ -867,5 +900,55 @@ impl AtorsDict {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
+    }
+
+    /// Dummy constructor used solely for unpickling.
+    ///
+    /// Creates an empty `AtorsDict` without any Ators metadata. The validators and
+    /// related metadata will be populated by the `restore` method called from
+    /// `AtorsBase.__setstate__` after construction. Dict items are restored via the
+    /// 5th slot of the pickle reduce tuple (dict items iterator).
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsDict>> {
+        use crate::validators::types::TypeValidator;
+        Bound::new(
+            py,
+            AtorsDict {
+                key_validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                value_validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                member_name: UnsafeCell::new(None),
+                object: UnsafeCell::new(None),
+            },
+        )
+    }
+
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        _protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Returns a 5-tuple (callable, args, state, list_items, dict_items).
+        // The 5th element must be an iterator yielding (key, value) 2-tuples.
+        let py_dict = unsafe { self_.cast_unchecked::<PyDict>() };
+        let items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> = py_dict.iter().collect();
+        let items_iter = items.into_bound_py_any(py)?.try_iter()?;
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            py.None(),
+            py.None(),
+            items_iter,
+        )
+            .into_bound_py_any(py)
     }
 }

@@ -17,7 +17,7 @@ from ators import Ators, PicklePolicy, member
 # Module-level class definitions (pickle requires a findable qualified name)
 # ---------------------------------------------------------------------------
 
-_PN = getattr(PicklePolicy, "None")
+_PN = PicklePolicy.NONE
 
 
 class _ScalarClass(Ators):
@@ -26,7 +26,7 @@ class _ScalarClass(Ators):
     z: float
 
 
-class _PolicyAllClass(Ators, pickle_policy=PicklePolicy.All()):
+class _PolicyAllClass(Ators, pickle_policy=PicklePolicy.ALL()):
     x: int
     y: int
 
@@ -40,12 +40,12 @@ class _PolicyNoneWithDefaultClass(Ators, pickle_policy=_PN()):
     x: int = member().default(42)
 
 
-class _PolicyPublicClass(Ators, pickle_policy=PicklePolicy.Public()):
+class _PolicyPublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
     x: int
     _private: int = member(init=True)
 
 
-class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.Public()):
+class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
     x: int
     _hidden: int = member(init=True)
 
@@ -55,12 +55,12 @@ class _MemberOverrideTrueClass(Ators, pickle_policy=_PN()):
     y: int
 
 
-class _MemberOverrideFalseClass(Ators, pickle_policy=PicklePolicy.All()):
+class _MemberOverrideFalseClass(Ators, pickle_policy=PicklePolicy.ALL()):
     x: int = member().pickle(False)
     y: int
 
 
-class _MemberOverrideTruePublicClass(Ators, pickle_policy=PicklePolicy.Public()):
+class _MemberOverrideTruePublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
     x: int
     _private: int = member(init=True).pickle(True)
 
@@ -82,12 +82,20 @@ class _ListClass(Ators):
     items: list[int]
 
 
+class _ListNestedClass(Ators):
+    items: list[list[int]]
+
+
 class _SetClass(Ators):
     s: set[int]
 
 
 class _DictClass(Ators):
     mapping: dict[str, int]
+
+
+class _DictNestedClass(Ators):
+    mapping: dict[str, list[int]]
 
 
 class _InheritanceBase(Ators):
@@ -106,7 +114,7 @@ class _PolicyNoneChild(_PolicyNoneBase):
     y: int
 
 
-class _PolicyNoneChildOverride(_PolicyNoneBase, pickle_policy=PicklePolicy.All()):
+class _PolicyNoneChildOverride(_PolicyNoneBase, pickle_policy=PicklePolicy.ALL()):
     y: int
 
 
@@ -126,9 +134,9 @@ class _MultiProtocol(Ators):
 
 def test_pickle_policy_variants_exist():
     """All three policy variants must be accessible."""
-    assert PicklePolicy.All() is not None
-    assert PicklePolicy.Public() is not None
-    assert getattr(PicklePolicy, "None")() is not None
+    assert PicklePolicy.ALL() is not None
+    assert PicklePolicy.PUBLIC() is not None
+    assert PicklePolicy.NONE() is not None
 
 
 def test_default_policy_is_all():
@@ -271,27 +279,8 @@ def test_list_member_validates_after_restore():
     a2 = pickle.loads(pickle.dumps(a))
     with pytest.raises(TypeError):
         a2.items.append("not an int")
-
-
-def test_list_member_append_after_restore():
-    """After unpickling, valid appends to a typed list should work."""
-    a = _ListClass(items=[1])
-    a2 = pickle.loads(pickle.dumps(a))
-    a2.items.append(2)
-    assert list(a2.items) == [1, 2]
-
-
-def test_container_restored_before_slot_assignment():
-    """The container's metadata must be rebound BEFORE it is stored in the slot.
-
-    Verified indirectly: after unpickling, mutations that go through the
-    validator (e.g. append) work correctly, confirming that the validator
-    and owner reference were set before the container was placed in the slot.
-    """
-    a = _ListClass(items=[5])
-    a2 = pickle.loads(pickle.dumps(a))
-    a2.items.append(6)
-    assert list(a2.items) == [5, 6]
+    a2.items.append(30)
+    assert list(a2.items) == [10, 20, 30]
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +301,6 @@ def test_set_member_validates_after_restore():
     a2 = pickle.loads(pickle.dumps(a))
     with pytest.raises(TypeError):
         a2.s.add("not an int")
-
-
-def test_set_member_add_after_restore():
-    """After unpickling, valid adds to a typed set should work."""
-    a = _SetClass(s={1, 2})
-    a2 = pickle.loads(pickle.dumps(a))
     a2.s.add(3)
     assert 3 in a2.s
 
@@ -340,12 +323,6 @@ def test_dict_member_validates_after_restore():
     a2 = pickle.loads(pickle.dumps(a))
     with pytest.raises(TypeError):
         a2.mapping[123] = 99  # int key not allowed
-
-
-def test_dict_member_setitem_after_restore():
-    """After unpickling, valid setitem on a typed dict should work."""
-    a = _DictClass(mapping={"a": 1})
-    a2 = pickle.loads(pickle.dumps(a))
     a2.mapping["b"] = 2
     assert a2.mapping["b"] == 2
 
