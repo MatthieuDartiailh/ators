@@ -781,7 +781,8 @@ pub fn create_ators_subclass<'py>(
         mb.init = Some(mb.init.unwrap_or_else(|| match pickle_policy {
            PicklePolicy::ALL => true,
            PicklePolicy::NONE => false, 
-           PicklePolicy::PUBLIC => !k.starts_with('_')));
+           PicklePolicy::PUBLIC => !k.starts_with('_')
+           }));
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
