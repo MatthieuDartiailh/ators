@@ -91,7 +91,7 @@ jobs:
           export CARGO_INCREMENTAL=1
           cargo llvm-cov clean --workspace
           uv run -- maturin develop --uv
-          uv run -- pytest tests --cov --cov-report xml
+          uv run -- pytest tests --cov --cov-report xml -v
           cargo llvm-cov report --lcov --output-path coverage.lcov
         if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
       - name: Run coverage
