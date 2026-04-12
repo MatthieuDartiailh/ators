@@ -26,7 +26,7 @@ class _ScalarClass(Ators):
     z: float
 
 
-class _PolicyAllClass(Ators, pickle_policy=PicklePolicy.ALL()):
+class _PolicyAllClass(Ators, pickle_policy=PicklePolicy.ALL):
     x: int
     y: int
 
@@ -40,12 +40,12 @@ class _PolicyNoneWithDefaultClass(Ators, pickle_policy=_PN()):
     x: int = member().default(42)
 
 
-class _PolicyPublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
+class _PolicyPublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
     x: int
     _private: int = member(init=True)
 
 
-class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
+class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
     x: int
     _hidden: int = member(init=True)
 
@@ -55,12 +55,12 @@ class _MemberOverrideTrueClass(Ators, pickle_policy=_PN()):
     y: int
 
 
-class _MemberOverrideFalseClass(Ators, pickle_policy=PicklePolicy.ALL()):
+class _MemberOverrideFalseClass(Ators, pickle_policy=PicklePolicy.ALL):
     x: int = member().pickle(False)
     y: int
 
 
-class _MemberOverrideTruePublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC()):
+class _MemberOverrideTruePublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
     x: int
     _private: int = member(init=True).pickle(True)
 
@@ -122,7 +122,7 @@ class _PolicyNoneChild(_PolicyNoneBase):
     y: int
 
 
-class _PolicyNoneChildOverride(_PolicyNoneBase, pickle_policy=PicklePolicy.ALL()):
+class _PolicyNoneChildOverride(_PolicyNoneBase, pickle_policy=PicklePolicy.ALL):
     y: int
 
 
@@ -142,9 +142,9 @@ class _MultiProtocol(Ators):
 
 def test_pickle_policy_variants_exist():
     """All three policy variants must be accessible."""
-    assert PicklePolicy.ALL() is not None
-    assert PicklePolicy.PUBLIC() is not None
-    assert PicklePolicy.NONE() is not None
+    assert PicklePolicy.ALL is not None
+    assert PicklePolicy.PUBLIC is not None
+    assert PicklePolicy.NONE is not None
 
 
 def test_default_policy_is_all():
