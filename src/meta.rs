@@ -778,7 +778,7 @@ pub fn create_ators_subclass<'py>(
 
         // Resolve the pickle flag: honour an explicit user value, then fall back
         // to the class policy.
-        mb.init = Some(mb.init.unwrap_or_else(|| match pickle_policy {
+        mb.pickle = Some(mb.init.unwrap_or_else(|| match pickle_policy {
             PicklePolicy::All => true,
             PicklePolicy::None => false,
             PicklePolicy::Public => !k.starts_with('_'),

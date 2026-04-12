@@ -706,7 +706,7 @@ pub struct MemberBuilder {
     coerce_init: Option<Coercer>,
     metadata: Option<HashMap<String, Py<PyAny>>>,
     forward_ref_environment_factory: Option<Py<PyAny>>,
-    pickle: Option<bool>,
+    pub pickle: Option<bool>,
     inherit: bool,
     // Only required when building a new member in the metaclass since the owner
     // should be scoped to the original class definition itself and not altered
@@ -1123,11 +1123,6 @@ impl MemberBuilder {
     }
 
     #[inline]
-    pub fn pickle(&self) -> Option<bool> {
-        self.pickle
-    }
-
-    #[inline]
     pub fn metadata(&self) -> &Option<HashMap<String, Py<PyAny>>> {
         &self.metadata
     }
@@ -1165,11 +1160,6 @@ impl MemberBuilder {
     #[inline]
     pub fn set_value_validators(&mut self, v: Vec<ValueValidator>) {
         self.value_validators = Some(v);
-    }
-
-    #[inline]
-    pub fn set_pickle(&mut self, new: bool) {
-        self.pickle = Some(new);
     }
 
     /// Populate unset behaviors from an existing `Member` instance.
