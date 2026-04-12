@@ -17,7 +17,7 @@ use pyo3::{
 };
 use std::cell::UnsafeCell;
 
-use crate::{core::AtorsBase, validators::Validator};
+use crate::{core::AtorsBase, utils::error_on_minusone, validators::Validator};
 
 #[pyclass(module = "ators._ators", extends=PyList, frozen)]
 pub struct AtorsList {
@@ -238,16 +238,17 @@ impl AtorsList {
         }
     }
 
-    // XXX add support for PyList_Extend in PyO3
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let valid = with_critical_section(self_.as_any(), || {
             self_.get().validate_iterable(other.py(), other)
         })?;
-        let list = self_.cast::<PyList>()?;
-        for item in valid.iter() {
-            list.append(&item)?;
+        let list = unsafe { self_.cast_unchecked::<PyList>() };
+        unsafe {
+            error_on_minusone(
+                self_.py(),
+                ffi::PyList_Extend(list.as_ptr(), valid.as_ptr()),
+            )
         }
-        Ok(())
     }
 
     pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
