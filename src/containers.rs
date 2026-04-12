@@ -246,7 +246,7 @@ impl AtorsList {
         unsafe {
             error_on_minusone(
                 self_.py(),
-                ffi::PyList_Extend(list.as_ptr(), valid.as_ptr()),
+                ffi::compat::PyList_Extend(list.as_ptr(), valid.as_ptr()),
             )
         }
     }
