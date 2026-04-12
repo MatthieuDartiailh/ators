@@ -341,7 +341,7 @@ def test_dict_member_validates_after_restore():
         a2.mapping["c"] = "99"
 
 
-def test_dict_nested<member_validates_after_restore():
+def test_dict_nested_member_validates_after_restore():
     """After unpickling, a typed dict must still enforce its validators."""
     a = _DictNestedClass(mapping={"x": [10]})
     a2 = pickle.loads(pickle.dumps(a))
