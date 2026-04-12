@@ -1243,11 +1243,6 @@ impl MemberBuilder {
                 "Cannot build member {name} of {type_name} without a resolved pickle flag."
             )));
         };
-        let Some(pickle) = self.pickle else {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot build member {name} of {type_name} without a resolved pickle flag."
-            )));
-        };
         let py = type_name.py();
         let mut warnings_warn: Option<Py<PyAny>> = None;
         let mut get_warnings_warn = || -> PyResult<Bound<'py, PyAny>> {

@@ -61,15 +61,18 @@ pub enum ClassMutability {
     InspectValues { values: Vec<String> },
 }
 
-#[pyclass(module = "ators._ators", frozen, from_py_object)]
-#[derive(Debug, Clone)]
+#[pyclass(module = "ators._ators", frozen, from_py_object, eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PicklePolicy {
     /// Include all members in pickle state (default).
-    ALL,
+    #[pyo3(name = "ALL")]
+    All,
     /// Exclude all members from pickle state.
-    NONE,
+    #[pyo3(name = "NONE")]
+    None,
     /// Include only public members (those not starting with `_`) in pickle state.
-    PUBLIC,
+    #[pyo3(name = "PUBLIC")]
+    Public,
 }
 
 #[pymethods]

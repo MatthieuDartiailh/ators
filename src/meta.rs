@@ -592,7 +592,7 @@ pub fn create_ators_subclass<'py>(
                     .ok()
                     .and_then(|v| v.extract::<PicklePolicy>().ok())
             })
-            .unwrap_or(PicklePolicy::ALL)
+            .unwrap_or(PicklePolicy::All)
     };
     dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, pickle_policy.clone())?)?;
 
@@ -779,10 +779,10 @@ pub fn create_ators_subclass<'py>(
         // Resolve the pickle flag: honour an explicit user value, then fall back
         // to the class policy.
         mb.init = Some(mb.init.unwrap_or_else(|| match pickle_policy {
-           PicklePolicy::ALL => true,
-           PicklePolicy::NONE => false, 
-           PicklePolicy::PUBLIC => !k.starts_with('_')
-           }));
+            PicklePolicy::All => true,
+            PicklePolicy::None => false,
+            PicklePolicy::Public => !k.starts_with('_'),
+        }));
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {

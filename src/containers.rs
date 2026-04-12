@@ -11,7 +11,8 @@ use pyo3::{
     pymethods,
     sync::critical_section::with_critical_section,
     types::{
-         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice, PyTuple,
+        PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
+        PyTuple,
     },
 };
 use std::cell::UnsafeCell;
@@ -163,12 +164,7 @@ impl AtorsList {
                         item: Some(nested_bv),
                     } => {
                         if let Ok(nested) = list_item.cast::<AtorsList>() {
-                            AtorsList::restore(
-                                &nested,
-                                (*nested_bv.0).clone(),
-                                member_name,
-                                object,
-                            );
+                            AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
                         }
                     }
                     TypeValidator::Dict {
@@ -176,7 +172,7 @@ impl AtorsList {
                     } => {
                         if let Ok(nested) = list_item.cast::<AtorsDict>() {
                             AtorsDict::restore(
-                                &nested,
+                                nested,
                                 (*key_bv.0).clone(),
                                 (*val_bv.0).clone(),
                                 member_name,
@@ -500,7 +496,7 @@ impl AtorsSet {
         self_: &Bound<'py, AtorsSet>,
         other: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        AtorsSet::__ixor__(self_, &other)
+        AtorsSet::__ixor__(self_, other)
     }
 
     // The traverse method of the parent class (PySet) is called automatically and
@@ -524,7 +520,10 @@ impl AtorsSet {
 
     //
     #[staticmethod]
-    pub fn _construct<'py>(py: Python<'py>, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, AtorsSet>> {
+    pub fn _construct<'py>(
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+    ) -> PyResult<Bound<'py, AtorsSet>> {
         // This is a dummy constructor used solely for unpickling. It creates an empty AtorsSet
         // without any meaningful metadata; the actual validator and related metadata will be
         // populated by the restore method called from AtorsBase.__setstate__ after construction. Values are restored from the provided iterator.
@@ -543,8 +542,8 @@ impl AtorsSet {
             },
         )?;
         let temp = unsafe { new.cast_unchecked::<PySet>() };
-        for o in args.getitem(0)?.iter()? {
-          temp.add(o)?;
+        for o in args.get_item(0)?.try_iter()? {
+            temp.add(o?)?;
         }
         Ok(new)
     }
@@ -553,14 +552,14 @@ impl AtorsSet {
     pub fn __reduce_ex__<'py>(
         self_: &Bound<'py, Self>,
         py: Python<'py>,
-        protocol: usize,
+        _protocol: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
         (
             self_.getattr(intern!(py, "_construct"))?,
             (),
-            (unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?,
+            unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?,
         )
-            .into_bound_py_any(py))
+            .into_bound_py_any(py)
     }
 }
 
@@ -702,6 +701,44 @@ impl AtorsDict {
         let value_v = value_validator.clone();
 
         with_critical_section(adict.as_any(), || {
+            // SAFETY: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+            let pydict = unsafe { adict.cast_unchecked::<PyDict>() };
+            match &value_validator.type_validator {
+                TypeValidator::List { item: Some(item_v) } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsList::restore(
+                            unsafe { v.cast_unchecked::<AtorsList>() },
+                            (*item_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                TypeValidator::Set { item: Some(item_v) } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsSet::restore(
+                            unsafe { v.cast_unchecked::<AtorsSet>() },
+                            (*item_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_v, val_v)),
+                } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsDict::restore(
+                            unsafe { v.cast_unchecked::<AtorsDict>() },
+                            (*key_v.0).clone(),
+                            (*val_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                _ => {}
+            }
             let inner = adict.get();
             // Safety: we hold the critical section lock. These fields are only written
             // here (during restore) and during construction; after restore they are
@@ -711,30 +748,6 @@ impl AtorsDict {
                 (*inner.value_validator.get()) = value_validator;
                 (*inner.member_name.get()) = member_name.map(|s| s.to_string());
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
-            }
-            match &value_validator.type_validator {
-                TypeValidator::List {
-                    item: Some(item_v),
-                } => {
-                    for (_, v) in adict.iter() {
-                      AtorsList::restore(v.cast::<AtorsList>()?, item_v.clone(), member_name, object)
-                    }
-                }
-                TypeValidator::Set {
-                    item: Some(item_v),
-                } => {
-                    for (_, v) in adict.iter() {
-                      AtorsSet::restore(v.cast::<AtorsSet>()?, item_v.clone(), member_name, object)
-                    }
-                }
-                TypeValidator::Dict {
-                    items: Some((key_v, val_v)),
-                } => {
-                    for (_, v) in adict.iter() {
-                      AtorsDict::restore(v.cast::<AtorsDict>()?, key_v.clone(), val_v.clone(), member_name, object)
-                    }
-                }
-                _ => {}
             }
         });
 
@@ -747,7 +760,7 @@ impl AtorsDict {
             } => {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsList>() {
-                        AtorsList::restore(&nested, (*item_bv.0).clone(), member_name, object);
+                        AtorsList::restore(nested, (*item_bv.0).clone(), member_name, object);
                     }
                 }
             }
@@ -756,7 +769,7 @@ impl AtorsDict {
             } => {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsSet>() {
-                        AtorsSet::restore(&nested, (*item_bv.0).clone(), member_name, object);
+                        AtorsSet::restore(nested, (*item_bv.0).clone(), member_name, object);
                     }
                 }
             }
@@ -766,7 +779,7 @@ impl AtorsDict {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsDict>() {
                         AtorsDict::restore(
-                            &nested,
+                            nested,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
                             member_name,
@@ -913,9 +926,7 @@ impl AtorsDict {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation (holds for both GIL and free-threaded builds).
         unsafe { *self.object.get() = None };
-     }
-
-
+    }
 
     /// Dummy constructor used solely for unpickling.
     ///

@@ -142,9 +142,9 @@ class _MultiProtocol(Ators):
 
 def test_pickle_policy_variants_exist():
     """All three policy variants must be accessible."""
-    assert PicklePolicy.ALL() is not None
-    assert PicklePolicy.PUBLIC() is not None
-    assert PicklePolicy.NONE() is not None
+    assert PicklePolicy.All() is not None
+    assert PicklePolicy.Public() is not None
+    assert PicklePolicy.None() is not None
 
 
 def test_default_policy_is_all():
