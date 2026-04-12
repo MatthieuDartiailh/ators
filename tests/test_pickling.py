@@ -31,12 +31,12 @@ class _PolicyAllClass(Ators, pickle_policy=PicklePolicy.ALL):
     y: int
 
 
-class _PolicyNoneClass(Ators, pickle_policy=_PN()):
+class _PolicyNoneClass(Ators, pickle_policy=_PN):
     x: int
     y: int
 
 
-class _PolicyNoneWithDefaultClass(Ators, pickle_policy=_PN()):
+class _PolicyNoneWithDefaultClass(Ators, pickle_policy=_PN):
     x: int = member().default(42)
 
 
@@ -50,7 +50,7 @@ class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
     _hidden: int = member(init=True)
 
 
-class _MemberOverrideTrueClass(Ators, pickle_policy=_PN()):
+class _MemberOverrideTrueClass(Ators, pickle_policy=_PN):
     x: int = member().pickle(True)
     y: int
 
@@ -86,20 +86,12 @@ class _ListNestedClass(Ators):
     items: list[list[int]]
 
 
-class _ListNestedClass(Ators):
-    items: list[list[int]]
-
-
 class _SetClass(Ators):
     s: set[int]
 
 
 class _DictClass(Ators):
     mapping: dict[str, int]
-
-
-class _DictNestedClass(Ators):
-    mapping: dict[str, list[int]]
 
 
 class _DictNestedClass(Ators):
@@ -114,7 +106,7 @@ class _InheritanceChild(_InheritanceBase):
     y: str
 
 
-class _PolicyNoneBase(Ators, pickle_policy=_PN()):
+class _PolicyNoneBase(Ators, pickle_policy=_PN):
     x: int
 
 
@@ -289,8 +281,16 @@ def test_list_member_validates_after_restore():
     assert a2.items == [10, 20, 30]
     with pytest.raises(TypeError):
         a2.items.append("not an int")
-    a2.items.append(30)
-    assert list(a2.items) == [10, 20, 30]
+
+
+def test_nested_list_member_validates_after_restore():
+    """After unpickling, a typed list must still enforce its validator."""
+    a = _ListNestedClass(items=[[10, 20]])
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.items[0].append(30)
+    assert a2.items == [[10, 20, 30]]
+    with pytest.raises(TypeError):
+        a2.items[0].append("not an int")
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +337,24 @@ def test_dict_member_validates_after_restore():
     assert a2.mapping["b"] == 2
     with pytest.raises(TypeError):
         a2.mapping[123] = 99  # int key not allowed
-    a2.mapping["b"] = 2
-    assert a2.mapping["b"] == 2
+    with pytest.raises(TypeError):
+        a2.mapping["c"] = "99"
+
+
+def test_dict_nested<member_validates_after_restore():
+    """After unpickling, a typed dict must still enforce its validators."""
+    a = _DictNestedClass(mapping={"x": [10]})
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["b"] = [2]
+    assert a2.mapping["b"] == [2]
+    with pytest.raises(TypeError):
+        a2.mapping[123] = [99]
+    with pytest.raises(TypeError):
+        a2.mapping["23"] = 99
+    a2.mapping["b"].append(3)
+    assert a2.mapping["b"] == [2, 3]
+    with pytest.raises(TypeError):
+        a2.mapping["b"].append("a")
 
 
 # ---------------------------------------------------------------------------
