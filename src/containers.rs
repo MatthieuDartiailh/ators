@@ -228,7 +228,7 @@ impl AtorsList {
     // Slice assignment path
     if index.is_instance_of::<PySlice>() {
          // SAFETY cast validity guaranteed by instance check
-        let slice = unsafe { index.cast_unchecked::<PySlice>()? };
+        let slice = unsafe { index.cast_unchecked::<PySlice>() };
         // Use high-level indices normalization (handles negative indices)
         let (mut start, mut stop, step) = slice
             .indices(list.len() as isize)?;
