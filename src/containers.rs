@@ -215,28 +215,77 @@ impl AtorsList {
     }
 
     pub fn __setitem__<'py>(
-        self_: &Bound<'py, AtorsList>,
-        index: &Bound<'py, PyAny>,
-        value: &Bound<'py, PyAny>,
-    ) -> PyResult<()> {
-        let py = index.py();
-        if let Ok(sl) = index.cast_exact::<PySlice>() {
-            // For slice assignment, value is an iterable of items to validate
-            let valid = self_.get().validate_iterable(py, value)?;
-            self_.as_any().set_item(sl, &valid)
+    self_: &Bound<'py, AtorsList>,
+    index: &Bound<'py, PyAny>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = index.py();
+
+    // Cast once to PyList (AtorsList extends PyList). Use unchecked cast to avoid
+    // an extra runtime check and to get access to PyList helper methods.
+    let list = unsafe { self_.cast_unchecked::<PyList>() };
+
+    // Slice assignment path
+    if index.is_instance_of::<PySlice>() {
+         // SAFETY cast validity guaranteed by instance check
+        let slice = unsafe { index.cast_unchecked::<PySlice>()? };
+        // Use high-level indices normalization (handles negative indices)
+        let (mut start, mut stop, step) = slice
+            .indices(list.len() as isize)?;
+
+        // Compute slicelength following CPython semantics
+        let slicelength = if step > 0 {
+            if start >= stop { 0 } else { ((stop - start) + step - 1) / step }
         } else {
-            let valid = self_.get().validate_item(py, value)?;
-            // SAFETY: AtorsList is declared as `extends=PyList`, so this cast is
-            // always valid, and the resulting PyList is valid for calling append.
-            let i: isize = index.extract()?;
-            if i < 0 {
-                // Let's not re-invent the wheel here
-                self_.as_any().set_item(index, &valid)
-            } else {
-                unsafe { self_.cast_unchecked::<PyList>() }.set_item(i as usize, &valid)
-            }
+            if start <= stop { 0 } else { ((start - stop) + (-step) - 1) / (-step) }
+        };
+
+        let validated_list = self_.get().validate_iterable(py, value)?;
+
+        // contiguous slice replacement fast-path
+        if step == 1 {
+            // Use high-level PyList::set_slice
+            list.set_slice(start, stop, validated_list.as_any())?;
+            return Ok(());
         }
+
+        // Extended-slice assignment: lengths must match
+        if validated_list.len() != slicelength {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "attempt to assign sequence of size {} to extended slice of size {}",
+                validated_list.len(), slicelength
+            )));
+        }
+
+        // Assign element-by-element using high-level set_item
+        for (i, item) in validated_list.iter().enumerate() {
+            let target_idx = start + i * step;
+            list.set_item(target_idx, item.as_any())?;
+        }
+
+        return Ok(());
     }
+
+    // Non-slice: single-index assignment
+    // Validate the new value under critical section
+    let valid = self_.get().validate_item(py, value)?;
+
+    // Convert index to integer using PyO3's extract (honours __index__/index-like subclasses)
+    let idx = index
+        .as_any()
+        .extract::<isize>();
+
+    // Normalize negative indices relative to list length
+    let len = list.len() as isize;
+    let normalized = if idx < 0 { idx + len } else { idx };
+    if normalized < 0 || normalized >= len {
+        return Err(pyo3::exceptions::PyIndexError::new_err("list assignment index out of range"));
+    }
+
+    // Use high-level set_item (no ffi)
+    list.set_item(normalized, valid.as_any())?;
+    Ok(())
+}
 
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let valid = with_critical_section(self_.as_any(), || {
@@ -253,17 +302,6 @@ impl AtorsList {
 
     pub fn __iadd__<'py>(self_: &Bound<'py, Self>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         AtorsList::extend(self_, value)
-    }
-
-    pub fn __delitem__<'py>(
-        self_: &Bound<'py, AtorsList>,
-        index: &Bound<'py, PyAny>,
-    ) -> PyResult<()> {
-        let py = index.py();
-        self_
-            .py_super()?
-            .call_method1(intern!(py, "__delitem__"), (index,))
-            .map(|_| ())
     }
 
     // The traverse method of the parent class (PyList) is called automatically and
