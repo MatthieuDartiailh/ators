@@ -230,34 +230,30 @@ impl AtorsList {
             // SAFETY cast validity guaranteed by instance check
             let slice = unsafe { index.cast_unchecked::<PySlice>() };
             // Use high-level indices normalization (handles negative indices)
-            let (mut start, mut stop, step) = slice
+            let slice_indices = slice
                 .indices(list.len() as isize)?;
-
-            // Compute slicelength following CPython semantics
-            let slicelength = if step > 0 {
-                if start >= stop { 0 } else { ((stop - start) + step - 1) / step }
-            } else {
-                if start <= stop { 0 } else { ((start - stop) + (-step) - 1) / (-step) }
-            };
 
             let validated_list = self_.get().validate_iterable(py, value)?;
 
             // contiguous slice replacement fast-path
-            if step == 1 {
+            if slice_indices.step == 1 {
                 // Use high-level PyList::set_slice
-                list.set_slice(start, stop, validated_list.as_any())?;
+                list.set_slice(slices_indices.start, slice_indices.stop, validated_list.as_any())?;
                 return Ok(());
              }
 
             // Extended-slice assignment: lengths must match
-            if validated_list.len() != slicelength {
+            if validated_list.len() != slice_indices.slicelength {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "attempt to assign sequence of size {} to extended slice of size {}",
-                validated_list.len(), slicelength
+                validated_list.len(), slice_indices.slicelength
                 )));
             }
 
             // Assign element-by-element using high-level set_item
+            // XXX handle negative step
+            let start = slice_indices.start;
+            let step = slice_indices.step;
             for (i, item) in validated_list.iter().enumerate() {
                 let target_idx = start + i * step;
                 list.set_item(target_idx, item.as_any())?;
@@ -282,8 +278,8 @@ impl AtorsList {
             return Err(pyo3::exceptions::PyIndexError::new_err("list assignment index out of range"));
         }
 
-        // Use high-level set_item (no ffi)
-        list.set_item(normalized, valid.as_any())?;
+        // Use high-level set_item (no ffi), conversion is safe since normalized is > 0
+        list.set_item(normalized as usize, valid.as_any())?;
         Ok(())
     }
 
