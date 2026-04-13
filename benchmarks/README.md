@@ -17,6 +17,7 @@ and two frontends:
 - `test_set_untyped.py`: untyped `__set__` writes.
 - `test_set_untyped_alternating.py`: alternating untyped writes.
 - `test_get_descriptor.py`: class-level descriptor reads.
+- `test_init.py`: object construction (`no_validators` and `init_coercion` groups).
 - `validators/test_validation_*.py`: typed validation families.
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
@@ -29,6 +30,7 @@ and two frontends:
 - `bench_set_untyped.py`: convenience runner for `set_untyped`.
 - `bench_set_untyped_alternating.py`: convenience runner for alternating set.
 - `bench_get_descriptor.py`: convenience runner for `get_descriptor`.
+- `bench_init.py`: convenience runner for the `init` family.
 - `bench_validation.py`: convenience runner for validation families.
 - `containers/bench_list.py`: convenience runner for list method family.
 - `containers/bench_set.py`: convenience runner for set method family.
