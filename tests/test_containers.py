@@ -32,8 +32,16 @@ def ators_list_object():
         ("insert", (0, "e"), [1, 2, 3], TypeError),
         ("__setitem__", (0, 10), [10, 2, 3], None),
         ("__setitem__", (0, "e"), [1, 2, 3], TypeError),
+        ("__setitem__", (-1, 10), [1, 2, 10], None),
+        ("__setitem__", (3, 10), [1, 2, 3], IndexError),
         ("__setitem__", (slice(0, 2), [10, 20]), [10, 20, 3], None),
         ("__setitem__", (slice(0, 2), [10, "e"]), [1, 2, 3], TypeError),
+        # Extended slice (step != 1)
+        ("__setitem__", (slice(0, 3, 2), [9, 10]), [9, 2, 10], None),
+        ("__setitem__", (slice(0, 3, 2), [9]), [1, 2, 3], ValueError),
+        ("__setitem__", (slice(0, 3, 2), [9, "e"]), [1, 2, 3], TypeError),
+        # Negative step
+        ("__setitem__", (slice(2, None, -2), [9, 10]), [10, 2, 9], None),
         ("extend", ([4, 5],), [1, 2, 3, 4, 5], None),
         ("extend", ([4, "5"],), [1, 2, 3], TypeError),
         ("__iadd__", ([4, 5],), [1, 2, 3, 4, 5], None),
