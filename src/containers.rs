@@ -271,15 +271,15 @@ impl AtorsList {
         let valid = self_.get().validate_item(py, value)?;
 
         // Convert index to integer using PyO3's extract (honours __index__/index-like subclasses)
-        let idx = index
-            .as_any()
-            .extract::<isize>()?;
+        let idx = index.as_any().extract::<isize>()?;
 
         // Normalize negative indices relative to list length
         let len = list.len() as isize;
         let normalized = if idx < 0 { idx + len } else { idx };
         if normalized < 0 || normalized >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("list assignment index out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "list assignment index out of range")
+            );
         }
 
         // Use high-level set_item (no ffi), conversion is safe since normalized is > 0
