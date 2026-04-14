@@ -290,6 +290,20 @@ def _list_cases() -> list[BenchmarkCase]:
                 ),
                 _make_case(
                     "list",
+                    "setitem_slice",
+                    implementation,
+                    factory,
+                    _build_list_setitem_slice_op,
+                ),
+                _make_case(
+                    "list",
+                    "setitem_slice_extended",
+                    implementation,
+                    factory,
+                    _build_list_setitem_slice_extended_op,
+                ),
+                _make_case(
+                    "list",
                     "extend",
                     implementation,
                     factory,
@@ -330,6 +344,28 @@ def _build_list_setitem_op(obj: Any) -> Callable[[], None]:
     def op() -> None:
         obj.list_field[0] = next_value[0]
         next_value[0] = 1 if next_value[0] == 9 else 9
+
+    return op
+
+
+def _build_list_setitem_slice_op(obj: Any) -> Callable[[], None]:
+    """Contiguous slice assignment (step == 1)."""
+    state = [[9, 10]]
+
+    def op() -> None:
+        obj.list_field[0:2] = state[0]
+        state[0] = [1, 2] if state[0] == [9, 10] else [9, 10]
+
+    return op
+
+
+def _build_list_setitem_slice_extended_op(obj: Any) -> Callable[[], None]:
+    """Extended slice assignment (step == 2, indices 0 and 2)."""
+    state = [[9, 10]]
+
+    def op() -> None:
+        obj.list_field[::2] = state[0]
+        state[0] = [1, 3] if state[0] == [9, 10] else [9, 10]
 
     return op
 
