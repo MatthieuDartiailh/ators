@@ -237,10 +237,11 @@ impl AtorsList {
 
             // contiguous slice replacement fast-path
             if slice_indices.step == 1 {
-                // Use high-level PyList::set_slice
-                list.set_slice(slices_indices.start, slice_indices.stop, validated_list.as_any())?;
+                // When step == 1, PySlice::indices guarantees start >= 0 and stop >= 0,
+                // so the casts to usize are safe.
+                list.set_slice(slice_indices.start as usize, slice_indices.stop as usize, validated_list.as_any())?;
                 return Ok(());
-             }
+            }
 
             // Extended-slice assignment: lengths must match
             if validated_list.len() != slice_indices.slicelength {
@@ -250,12 +251,15 @@ impl AtorsList {
                 )));
             }
 
-            // Assign element-by-element using high-level set_item
-            // XXX handle negative step
+            // Assign element-by-element using high-level set_item.
+            // Works for both positive and negative step values.
+            // PySlice::indices guarantees that for each i in 0..slicelength the value
+            // `start + i * step` is a valid list index (0 <= idx < len), so the cast
+            // to usize is safe.
             let start = slice_indices.start;
             let step = slice_indices.step;
             for (i, item) in validated_list.iter().enumerate() {
-                let target_idx = start + i * step;
+                let target_idx = (start + (i as isize) * step) as usize;
                 list.set_item(target_idx, item.as_any())?;
             }
 
