@@ -218,6 +218,7 @@ impl AtorsList {
                 )?;
             } else {
                 // Extended slice: delete in reverse order so earlier indices stay valid.
+                // XXX this could be done without allocation 
                 let start = slice_indices.start;
                 let step = slice_indices.step;
                 let slicelength = slice_indices.slicelength;
@@ -228,7 +229,7 @@ impl AtorsList {
                 // Sort descending so deleting one index doesn't shift the others.
                 indices.sort_unstable_by(|a, b| b.cmp(a));
                 for idx in indices {
-                    error_on_minusone(py, unsafe { ffi::PySequence_DelItem(list.as_ptr(), idx) })?;
+                    list.del_item(idx);
                 }
             }
         } else {
