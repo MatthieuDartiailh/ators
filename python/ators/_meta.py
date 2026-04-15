@@ -11,6 +11,7 @@ from typing import Any, Mapping, dataclass_transform
 
 from ._ators import (
     Member,
+    PicklePolicy,
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
@@ -50,6 +51,7 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
+        pickle_policy: PicklePolicy | None = None,
         validate_attr: bool = True,
     ):
         # Ensure there is no weird mro calculation and that we can use our
@@ -65,6 +67,7 @@ class AtorsMeta(type):
             observable,
             enable_weakrefs,
             type_containers,
+            pickle_policy,
             validate_attr,
         )
 

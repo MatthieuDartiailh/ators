@@ -75,7 +75,11 @@ def _print_case_listing(cases) -> None:
     previous_group = None
     for case in cases:
         family = case.family if case.family != previous_family else ""
-        group = case.group if (case.family, case.group) != (previous_family, previous_group) else ""
+        group = (
+            case.group
+            if (case.family, case.group) != (previous_family, previous_group)
+            else ""
+        )
         table.add_row(family, group, case.implementation, case.benchmark_name)
         previous_family = case.family
         previous_group = case.group
@@ -88,9 +92,13 @@ def main() -> None:
     from benchmarks.shared.pyperf_frontend import run_benchmark_cases
 
     parser = argparse.ArgumentParser(description="Run grouped benchmarks with pyperf.")
-    parser.add_argument("--list", action="store_true", help="List matching benchmark cases and exit.")
+    parser.add_argument(
+        "--list", action="store_true", help="List matching benchmark cases and exit."
+    )
     parser.add_argument("--family", action="append", help="Filter by benchmark family.")
-    parser.add_argument("--group", action="append", help="Filter by benchmark group or method name.")
+    parser.add_argument(
+        "--group", action="append", help="Filter by benchmark group or method name."
+    )
     parser.add_argument("--method", action="append", help="Alias for --group.")
     parser.add_argument(
         "--implementation",
