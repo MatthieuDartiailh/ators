@@ -132,14 +132,9 @@ impl AtorsList {
     ) {
         use crate::validators::types::TypeValidator;
 
-        // Capture the item validator before the critical section so we can use it
-        // afterwards to restore any nested containers within the list.
-        let item_v = match &validator.type_validator {
-            TypeValidator::List {
-                item: Some(item_bv),
-            } => Some((*item_bv.0).clone()),
-            _ => None,
-        };
+        // Capture the validator so we can restore nested containers after
+        // rebinding this list metadata.
+        let item_v = validator.clone();
 
         with_critical_section(alist.as_any(), || {
             let inner = alist.get();
@@ -154,34 +149,38 @@ impl AtorsList {
         });
 
         // Restore any nested containers within the list items.
-        if let Some(item_validator) = item_v {
-            // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
-            let py_list = unsafe { alist.cast_unchecked::<PyList>() };
-            for list_item in py_list.iter() {
-                match &item_validator.type_validator {
-                    TypeValidator::List {
-                        item: Some(nested_bv),
-                    } => {
-                        if let Ok(nested) = list_item.cast::<AtorsList>() {
-                            AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
-                        }
+        // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
+        let py_list = unsafe { alist.cast_unchecked::<PyList>() };
+        for list_item in py_list.iter() {
+            match &item_v.type_validator {
+                TypeValidator::List {
+                    item: Some(nested_bv),
+                } => {
+                    if let Ok(nested) = list_item.cast::<AtorsList>() {
+                        AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
                     }
-                    TypeValidator::Dict {
-                        items: Some((key_bv, val_bv)),
-                    } => {
-                        if let Ok(nested) = list_item.cast::<AtorsDict>() {
-                            AtorsDict::restore(
-                                nested,
-                                (*key_bv.0).clone(),
-                                (*val_bv.0).clone(),
-                                member_name,
-                                object,
-                            );
-                        }
-                    }
-                    // Set cannot contain list/set/dict (unhashable), no nested restore needed.
-                    _ => {}
                 }
+                TypeValidator::Set {
+                    item: Some(nested_bv),
+                } => {
+                    if let Ok(nested) = list_item.cast::<AtorsSet>() {
+                        AtorsSet::restore(nested, (*nested_bv.0).clone(), member_name, object);
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_bv, val_bv)),
+                } => {
+                    if let Ok(nested) = list_item.cast::<AtorsDict>() {
+                        AtorsDict::restore(
+                            nested,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            member_name,
+                            object,
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
