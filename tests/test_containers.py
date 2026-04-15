@@ -32,8 +32,16 @@ def ators_list_object():
         ("insert", (0, "e"), [1, 2, 3], TypeError),
         ("__setitem__", (0, 10), [10, 2, 3], None),
         ("__setitem__", (0, "e"), [1, 2, 3], TypeError),
+        ("__setitem__", (-1, 10), [1, 2, 10], None),
+        ("__setitem__", (3, 10), [1, 2, 3], IndexError),
         ("__setitem__", (slice(0, 2), [10, 20]), [10, 20, 3], None),
         ("__setitem__", (slice(0, 2), [10, "e"]), [1, 2, 3], TypeError),
+        # Extended slice (step != 1)
+        ("__setitem__", (slice(0, 3, 2), [9, 10]), [9, 2, 10], None),
+        ("__setitem__", (slice(0, 3, 2), [9]), [1, 2, 3], ValueError),
+        ("__setitem__", (slice(0, 3, 2), [9, "e"]), [1, 2, 3], TypeError),
+        # Negative step
+        ("__setitem__", (slice(2, None, -2), [9, 10]), [10, 2, 9], None),
         ("extend", ([4, 5],), [1, 2, 3, 4, 5], None),
         ("extend", ([4, "5"],), [1, 2, 3], TypeError),
         ("__iadd__", ([4, 5],), [1, 2, 3, 4, 5], None),
@@ -41,7 +49,24 @@ def ators_list_object():
         # Operations that don't add items don't need validation
         ("pop", (), [1, 2], None),
         ("remove", (1,), [2, 3], None),
+        # __delitem__: positive index
         ("__delitem__", (0,), [2, 3], None),
+        # __delitem__: negative index
+        ("__delitem__", (-1,), [1, 2], None),
+        # __delitem__: out-of-range index
+        ("__delitem__", (3,), [1, 2, 3], IndexError),
+        # __delitem__: out-of-range negative index
+        ("__delitem__", (-4,), [1, 2, 3], IndexError),
+        # __delitem__: contiguous slice
+        ("__delitem__", (slice(0, 2),), [3], None),
+        # __delitem__: extended slice (step != 1) — deletes indices 0 and 2 from [1,2,3]
+        ("__delitem__", (slice(None, None, 2),), [2], None),
+        # __delitem__: negative step — deletes indices 2 and 0 from [1,2,3]
+        ("__delitem__", (slice(2, 0, -1),), [1], None),
+        # __delitem__: empty slice is a no-op
+        ("__delitem__", (slice(1, 1),), [1, 2, 3], None),
+        # __delitem__: invalid index type raises TypeError
+        ("__delitem__", ("0",), [1, 2, 3], TypeError),
         ("reverse", (), [3, 2, 1], None),
         ("sort", (), [1, 2, 3], None),
     ],
@@ -95,13 +120,6 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
-# def test_ators_set_pickling(ators_set_object):
-#     dumped = pickle.dumps(ators_set_object.a)
-#     loaded = pickle.loads(dumped)
-#     assert loaded == ators_set_object.a
-#     assert type(loaded) is set
-
-
 @pytest.fixture()
 def ators_dict_object():
     from ators import Ators
@@ -119,6 +137,7 @@ def ators_dict_object():
         ("__setitem__", ("a", 3), None, {"a": 3}, None),
         ("__setitem__", (2, 3), None, {"a": 2}, TypeError),
         ("__setitem__", ("2", "1"), None, {"a": 2}, TypeError),
+        ("__delitem__", ("a",), None, {}, None),
         ("setdefault", ("b", 3), None, {"a": 2, "b": 3}, None),
         ("setdefault", ("a", 3), None, {"a": 2}, None),
         # Value does not need to be validated
@@ -215,11 +234,4 @@ def test_list_reassignment_to_other_member_still_validates():
     obj = A(ints=[1, 2], strs=["x", "y"])
 
     with pytest.raises(TypeError):
-        obj.strs = obj.ints
-
-
-# def test_ators_dict_pickling(ators_dict_object):
-#     dumped = pickle.dumps(ators_dict_object.a)
-#     loaded = pickle.loads(dumped)
-#     assert loaded == ators_dict_object.a
-#     assert type(loaded) is dict
+        obj.strs = obj.ints  # type: ignore

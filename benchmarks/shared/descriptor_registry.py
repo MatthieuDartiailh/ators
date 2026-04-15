@@ -11,7 +11,6 @@ import importlib.util
 from typing import Any, Callable
 
 from ators import Ators, freeze, member
-
 from benchmarks.shared.registry_types import BenchmarkCase
 
 ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
@@ -198,7 +197,9 @@ def _set_untyped_alternating_cases() -> list[BenchmarkCase]:
                     "write",
                     implementation,
                     factory,
-                    lambda obj: _build_alternating_setter(lambda value: setattr(obj, "field", value)),
+                    lambda obj: _build_alternating_setter(
+                        lambda value: setattr(obj, "field", value)
+                    ),
                 )
             )
         elif implementation.startswith("py_"):
@@ -208,7 +209,9 @@ def _set_untyped_alternating_cases() -> list[BenchmarkCase]:
                     "write",
                     implementation,
                     factory,
-                    lambda obj: _build_alternating_setter(lambda value: setattr(obj, "_field", value)),
+                    lambda obj: _build_alternating_setter(
+                        lambda value: setattr(obj, "_field", value)
+                    ),
                 )
             )
         else:
@@ -218,7 +221,9 @@ def _set_untyped_alternating_cases() -> list[BenchmarkCase]:
                     "write",
                     implementation,
                     factory,
-                    lambda obj: _build_alternating_setter(lambda value: setattr(obj, "field", value)),
+                    lambda obj: _build_alternating_setter(
+                        lambda value: setattr(obj, "field", value)
+                    ),
                 )
             )
     return cases
@@ -267,4 +272,6 @@ def select_descriptor_cases(
         cases = [case for case in cases if case.group in groups]
     if implementations is not None:
         cases = [case for case in cases if case.implementation in implementations]
-    return sorted(cases, key=lambda case: (case.family, case.group, case.implementation))
+    return sorted(
+        cases, key=lambda case: (case.family, case.group, case.implementation)
+    )

@@ -13,6 +13,7 @@ on:
       - "python/**"
       - "src/**"
       - "tests/**"
+      - "benchmarks/**"
       - pyproject.toml
   workflow_dispatch:
 
@@ -33,10 +34,10 @@ jobs:
         run: python -m pip install --upgrade pip && pip install --group lint
       - name: Ruff check
         if: always()
-        run: ruff check python tests
+        run: ruff check python tests benchmarks
       - name: Ruff format (check)
         if: always()
-        run: ruff format --check python tests || true
+        run: ruff format --check python tests benchmarks || true
 
   rust-checks:
     name: Rust fmt & clippy
@@ -90,7 +91,7 @@ jobs:
           export CARGO_INCREMENTAL=1
           cargo llvm-cov clean --workspace
           uv run -- maturin develop --uv
-          uv run -- pytest tests --cov --cov-report xml
+          uv run -- pytest tests --cov --cov-report xml -v
           cargo llvm-cov report --lcov --output-path coverage.lcov
         if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
       - name: Run coverage

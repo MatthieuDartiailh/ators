@@ -12,7 +12,6 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from ators import Ators, member
-
 from benchmarks.shared.registry_types import BenchmarkCase
 
 ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
@@ -65,7 +64,7 @@ def _validate_dict_str_int(value):
 
 
 class PyContainerClass:
-    __slots__ = ("list_field", "set_field", "dict_field")
+    __slots__ = ("dict_field", "list_field", "set_field")
 
     def __init__(self):
         self.list_field = []
@@ -189,14 +188,69 @@ def _make_atom_container() -> Any:
 
 def _assignment_cases_for_group(group: str, value: Any) -> list[BenchmarkCase]:
     cases = [
-        _make_case(group, "py", _make_py_container, lambda obj: lambda: setattr(obj, f"{group}_field", value.copy() if hasattr(value, "copy") else list(value))),
-        _make_case(group, "property", _make_property_container, lambda obj: lambda: setattr(obj, f"{group}_field", value.copy() if hasattr(value, "copy") else list(value))),
-        _make_case(group, "property_typed", _make_typed_property_container, lambda obj: lambda: setattr(obj, f"{group}_field", value.copy() if hasattr(value, "copy") else list(value))),
-        _make_case(group, "ators", _make_ators_container, lambda obj: lambda: setattr(obj, f"{group}_field", value.copy() if hasattr(value, "copy") else list(value))),
+        _make_case(
+            group,
+            "py",
+            _make_py_container,
+            lambda obj: (
+                lambda: setattr(
+                    obj,
+                    f"{group}_field",
+                    value.copy() if hasattr(value, "copy") else list(value),
+                )
+            ),
+        ),
+        _make_case(
+            group,
+            "property",
+            _make_property_container,
+            lambda obj: (
+                lambda: setattr(
+                    obj,
+                    f"{group}_field",
+                    value.copy() if hasattr(value, "copy") else list(value),
+                )
+            ),
+        ),
+        _make_case(
+            group,
+            "property_typed",
+            _make_typed_property_container,
+            lambda obj: (
+                lambda: setattr(
+                    obj,
+                    f"{group}_field",
+                    value.copy() if hasattr(value, "copy") else list(value),
+                )
+            ),
+        ),
+        _make_case(
+            group,
+            "ators",
+            _make_ators_container,
+            lambda obj: (
+                lambda: setattr(
+                    obj,
+                    f"{group}_field",
+                    value.copy() if hasattr(value, "copy") else list(value),
+                )
+            ),
+        ),
     ]
     if ATOM_AVAILABLE:
         cases.append(
-            _make_case(group, "atom", _make_atom_container, lambda obj: lambda: setattr(obj, f"{group}_field", value.copy() if hasattr(value, "copy") else list(value)))
+            _make_case(
+                group,
+                "atom",
+                _make_atom_container,
+                lambda obj: (
+                    lambda: setattr(
+                        obj,
+                        f"{group}_field",
+                        value.copy() if hasattr(value, "copy") else list(value),
+                    )
+                ),
+            )
         )
     return cases
 
@@ -222,4 +276,6 @@ def select_assignment_cases(
         cases = [case for case in cases if case.group in groups]
     if implementations is not None:
         cases = [case for case in cases if case.implementation in implementations]
-    return sorted(cases, key=lambda case: (case.family, case.group, case.implementation))
+    return sorted(
+        cases, key=lambda case: (case.family, case.group, case.implementation)
+    )

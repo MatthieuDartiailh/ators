@@ -179,4 +179,6 @@ def select_validation_cases(
         cases = [case for case in cases if case.group in groups]
     if implementations is not None:
         cases = [case for case in cases if case.implementation in implementations]
-    return sorted(cases, key=lambda case: (case.family, case.group, case.implementation))
+    return sorted(
+        cases, key=lambda case: (case.family, case.group, case.implementation)
+    )
