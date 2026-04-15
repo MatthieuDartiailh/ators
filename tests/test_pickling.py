@@ -86,6 +86,14 @@ class _ListNestedClass(Ators):
     items: list[list[int]]
 
 
+class _ListSetClass(Ators):
+    items: list[set[int]]
+
+
+class _ListDictClass(Ators):
+    items: list[dict[str, int]]
+
+
 class _SetClass(Ators):
     s: set[int]
 
@@ -96,6 +104,14 @@ class _DictClass(Ators):
 
 class _DictNestedClass(Ators):
     mapping: dict[str, list[int]]
+
+
+class _DictSetValueClass(Ators):
+    mapping: dict[str, set[int]]
+
+
+class _DictDictValueClass(Ators):
+    mapping: dict[str, dict[str, int]]
 
 
 class _InheritanceBase(Ators):
@@ -285,6 +301,26 @@ def test_nested_list_member_validates_after_restore():
         a2.items[0].append("not an int")
 
 
+def test_list_of_set_member_validates_after_restore():
+    """After unpickling, a list[set[int]] must still enforce its validators."""
+    a = _ListSetClass(items=[{1, 2}])
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.items[0].add(3)
+    assert 3 in a2.items[0]
+    with pytest.raises(TypeError):
+        a2.items[0].add("not an int")
+
+
+def test_list_of_dict_member_validates_after_restore():
+    """After unpickling, a list[dict[str, int]] must still enforce its validators."""
+    a = _ListDictClass(items=[{"x": 1}])
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.items[0]["y"] = 2
+    assert a2.items[0]["y"] == 2
+    with pytest.raises(TypeError):
+        a2.items[0]["z"] = "not an int"
+
+
 # ---------------------------------------------------------------------------
 # Roundtrip: typed set members (AtorsSet)
 # ---------------------------------------------------------------------------
@@ -347,6 +383,38 @@ def test_dict_nested_member_validates_after_restore():
     assert a2.mapping["b"] == [2, 3]
     with pytest.raises(TypeError):
         a2.mapping["b"].append("a")
+
+
+def test_dict_set_value_member_validates_after_restore():
+    """After unpickling, a dict[str, set[int]] must still enforce its validators."""
+    a = _DictSetValueClass(mapping={"x": {1, 2}})
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["y"] = {3}
+    assert a2.mapping["y"] == {3}
+    with pytest.raises(TypeError):
+        a2.mapping[123] = {99}
+    with pytest.raises(TypeError):
+        a2.mapping["z"] = "not a set"
+    a2.mapping["y"].add(4)
+    assert 4 in a2.mapping["y"]
+    with pytest.raises(TypeError):
+        a2.mapping["y"].add("not an int")
+
+
+def test_dict_dict_value_member_validates_after_restore():
+    """After unpickling, a dict[str, dict[str, int]] must still enforce its validators."""
+    a = _DictDictValueClass(mapping={"x": {"a": 1}})
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["y"] = {"b": 2}
+    assert a2.mapping["y"] == {"b": 2}
+    with pytest.raises(TypeError):
+        a2.mapping[123] = {"c": 3}
+    with pytest.raises(TypeError):
+        a2.mapping["z"] = "not a dict"
+    a2.mapping["y"]["c"] = 3
+    assert a2.mapping["y"]["c"] == 3
+    with pytest.raises(TypeError):
+        a2.mapping["y"]["d"] = "not an int"
 
 
 # ---------------------------------------------------------------------------
