@@ -188,7 +188,7 @@ impl AtorsList {
     }
 }
 
-// __delitem__, remove, pop, clear, sort, reverse and __imul__ do not need
+// remove, pop, clear, sort, reverse and __imul__ do not need
 // item validation since they only remove or rearrange existing items.
 // append, insert, __setitem__, extend and __iadd__ need item validation
 // since they can add new items.
@@ -212,13 +212,10 @@ impl AtorsList {
 
             if slice_indices.step == 1 {
                 // Contiguous slice: replace the slice range with an empty list.
-                list.del_slice(
-                    slice_indices.start as usize,
-                    slice_indices.stop as usize,
-                )?;
+                list.del_slice(slice_indices.start as usize, slice_indices.stop as usize)?;
             } else {
                 // Extended slice: delete in reverse order so earlier indices stay valid.
-                // XXX this could be done without allocation 
+                // XXX this could be done without allocation
                 let start = slice_indices.start;
                 let step = slice_indices.step;
                 let slicelength = slice_indices.slicelength;
