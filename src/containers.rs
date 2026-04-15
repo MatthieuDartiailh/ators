@@ -11,8 +11,8 @@ use pyo3::{
     pymethods,
     sync::critical_section::with_critical_section,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice, PySliceMethods,
-        PyTuple,
+        PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
+        PySliceMethods, PyTuple,
     },
 };
 use std::cell::UnsafeCell;
@@ -194,6 +194,61 @@ impl AtorsList {
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
+    // Required since CPython uses a single slot for setitem/delitem which prevents
+    // inheriting the delitem behavior from PyList when __setitem__ is overridden.
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, AtorsList>,
+        index: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let py = index.py();
+        // SAFETY: AtorsList is declared as `extends=PyList`, so this unchecked cast
+        // is valid and gives us access to high-level PyList helpers.
+        let list = unsafe { self_.cast_unchecked::<PyList>() };
+
+        if index.is_instance_of::<PySlice>() {
+            // SAFETY: instance check guarantees this is a PySlice.
+            let slice = unsafe { index.cast_unchecked::<PySlice>() };
+            let slice_indices = slice.indices(list.len() as isize)?;
+
+            if slice_indices.step == 1 {
+                // Contiguous slice: replace the slice range with an empty list.
+                list.set_slice(
+                    slice_indices.start as usize,
+                    slice_indices.stop as usize,
+                    PyList::empty(py).as_any(),
+                )?;
+            } else {
+                // Extended slice: delete in reverse order so earlier indices stay valid.
+                let start = slice_indices.start;
+                let step = slice_indices.step;
+                let slicelength = slice_indices.slicelength;
+                // Collect indices to delete, then remove from largest to smallest.
+                let mut indices: Vec<isize> = (0..slicelength)
+                    .map(|i| start + i as isize * step)
+                    .collect();
+                // Sort descending so deleting one index doesn't shift the others.
+                indices.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in indices {
+                    error_on_minusone(py, unsafe { ffi::PySequence_DelItem(list.as_ptr(), idx) })?;
+                }
+            }
+        } else {
+            // Single integer index.
+            let idx = index.extract::<isize>()?;
+            let len = list.len() as isize;
+            let normalized = if idx < 0 { idx + len } else { idx };
+            if normalized < 0 || normalized >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "list assignment index out of range",
+                ));
+            }
+            error_on_minusone(py, unsafe {
+                ffi::PySequence_DelItem(list.as_ptr(), normalized)
+            })?;
+        }
+        Ok(())
+    }
+
     pub fn append<'py>(self_: &Bound<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.get().validate_item(py, value)?;
@@ -230,8 +285,7 @@ impl AtorsList {
             // SAFETY cast validity guaranteed by instance check
             let slice = unsafe { index.cast_unchecked::<PySlice>() };
             // Use high-level indices normalization (handles negative indices)
-            let slice_indices = slice
-                .indices(list.len() as isize)?;
+            let slice_indices = slice.indices(list.len() as isize)?;
 
             let validated_list = self_.get().validate_iterable(py, value)?;
 
@@ -239,15 +293,20 @@ impl AtorsList {
             if slice_indices.step == 1 {
                 // When step == 1, PySlice::indices guarantees start >= 0 and stop >= 0,
                 // so the casts to usize are safe.
-                list.set_slice(slice_indices.start as usize, slice_indices.stop as usize, validated_list.as_any())?;
+                list.set_slice(
+                    slice_indices.start as usize,
+                    slice_indices.stop as usize,
+                    validated_list.as_any(),
+                )?;
                 return Ok(());
             }
 
             // Extended-slice assignment: lengths must match
             if validated_list.len() != slice_indices.slicelength {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "attempt to assign sequence of size {} to extended slice of size {}",
-                validated_list.len(), slice_indices.slicelength
+                    "attempt to assign sequence of size {} to extended slice of size {}",
+                    validated_list.len(),
+                    slice_indices.slicelength
                 )));
             }
 
@@ -278,8 +337,8 @@ impl AtorsList {
         let normalized = if idx < 0 { idx + len } else { idx };
         if normalized < 0 || normalized >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                "list assignment index out of range")
-            );
+                "list assignment index out of range",
+            ));
         }
 
         // Use high-level set_item (no ffi), conversion is safe since normalized is > 0
