@@ -226,7 +226,7 @@ impl AtorsList {
                 // Sort descending so deleting one index doesn't shift the others.
                 indices.sort_unstable_by(|a, b| b.cmp(a));
                 for idx in indices {
-                    list.del_item(idx);
+                    list.del_item(idx as usize);
                 }
             }
         } else {
