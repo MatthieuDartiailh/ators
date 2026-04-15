@@ -97,6 +97,9 @@ pub struct Member {
     /// Resolved at class creation time from the class-level `PicklePolicy` or from an
     /// explicit `member().pickle(...)` call.
     pub pickle: bool,
+    /// Whether the pickle behavior was explicitly configured by the user
+    /// through `member().pickle(...)`.
+    pub pickle_explicit: bool,
 }
 
 impl Member {
@@ -114,6 +117,25 @@ impl Member {
             metadata: clone_metadata(&self.metadata),
             init: self.init,
             pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
+        }
+    }
+
+    pub fn clone_with_pickle(&self, new_pickle: bool) -> Self {
+        Member {
+            name: self.name.clone(),
+            slot_index: self.slot_index,
+            pre_getattr: self.pre_getattr.clone(),
+            post_getattr: self.post_getattr.clone(),
+            pre_setattr: self.pre_setattr.clone(),
+            post_setattr: self.post_setattr.clone(),
+            delattr: self.delattr.clone(),
+            default: self.default.clone(),
+            validator: self.validator.clone(),
+            metadata: clone_metadata(&self.metadata),
+            init: self.init,
+            pickle: new_pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 
@@ -147,6 +169,7 @@ impl Member {
             metadata: clone_metadata(&self.metadata),
             init: self.init,
             pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 }
@@ -707,6 +730,7 @@ pub struct MemberBuilder {
     metadata: Option<HashMap<String, Py<PyAny>>>,
     forward_ref_environment_factory: Option<Py<PyAny>>,
     pub pickle: Option<bool>,
+    pub pickle_explicit: bool,
     inherit: bool,
     // Only required when building a new member in the metaclass since the owner
     // should be scoped to the original class definition itself and not altered
@@ -1003,6 +1027,7 @@ impl MemberBuilder {
         pickle: bool,
     ) -> PyResult<PyRefMut<'py, Self>> {
         self_.pickle = Some(pickle);
+        self_.pickle_explicit = true;
         Ok(self_)
     }
 
@@ -1205,6 +1230,7 @@ impl MemberBuilder {
         }
         if self.pickle.is_none() {
             self.pickle = Some(member.pickle);
+            self.pickle_explicit = member.pickle_explicit;
         }
     }
 
@@ -1310,6 +1336,7 @@ impl MemberBuilder {
             metadata: self.metadata,
             init,
             pickle,
+            pickle_explicit: self.pickle_explicit,
         })
     }
 }
@@ -1342,6 +1369,7 @@ impl Clone for MemberBuilder {
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 }

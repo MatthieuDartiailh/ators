@@ -583,6 +583,7 @@ pub fn create_ators_subclass<'py>(
 
     // Resolve the pickle policy: honour an explicit value, then inherit from the first
     // base class that defines one; fall back to `ALL` (the default) if none does.
+    let pickle_policy_overridden = pickle_policy.is_some();
     let pickle_policy = if let Some(p) = pickle_policy {
         p
     } else {
@@ -700,6 +701,30 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
+    // If this class explicitly overrides `pickle_policy`, re-evaluate inherited
+    // members that did not opt in/out explicitly via `member().pickle(...)`.
+    if pickle_policy_overridden {
+        let mut updated_members = HashMap::new();
+        for (name, member) in &members {
+            let m = member.get();
+            if m.pickle_explicit {
+                continue;
+            }
+            let new_pickle = match pickle_policy {
+                PicklePolicy::All => true,
+                PicklePolicy::None => false,
+                PicklePolicy::Public => !name.starts_with('_'),
+            };
+            if m.pickle != new_pickle {
+                updated_members.insert(
+                    name.clone(),
+                    Bound::new(py, m.clone_with_pickle(new_pickle))?,
+                );
+            }
+        }
+        members.extend(updated_members);
+    }
+
     // Collect the used indexes and existing conflict
     let mut occupied = HashSet::new();
     if is_observable {
@@ -778,11 +803,13 @@ pub fn create_ators_subclass<'py>(
 
         // Resolve the pickle flag: honour an explicit user value, then fall back
         // to the class policy.
-        mb.pickle = Some(mb.init.unwrap_or_else(|| match pickle_policy {
-            PicklePolicy::All => true,
-            PicklePolicy::None => false,
-            PicklePolicy::Public => !k.starts_with('_'),
-        }));
+        if !mb.pickle_explicit {
+            mb.pickle = Some(match pickle_policy {
+                PicklePolicy::All => true,
+                PicklePolicy::None => false,
+                PicklePolicy::Public => !k.starts_with('_'),
+            });
+        }
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {

@@ -51,7 +51,7 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
-        pickle_policy: PicklePolicy = PicklePolicy.ALL,
+        pickle_policy: PicklePolicy | None = None,
         validate_attr: bool = True,
     ):
         # Ensure there is no weird mro calculation and that we can use our
