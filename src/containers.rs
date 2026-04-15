@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Container types with validation and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyRef, PyResult, Python, ffi, intern, pyclass,
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, ffi, intern, pyclass,
     pymethods,
     sync::critical_section::with_critical_section,
     types::{
@@ -694,13 +694,13 @@ impl AtorsDict {
     fn validate_key<'py>(
         &self,
         py: Python<'py>,
-        key: Bound<'py, PyAny>,
+        key: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         // Safety: same as AtorsList::validate_item.
         let key_validator = unsafe { &*self.key_validator.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        key_validator.validate(m, o, &key)
+        key_validator.validate(m, o, key)
     }
 
     /// Validate a value for insertion into the dict
@@ -720,16 +720,16 @@ impl AtorsDict {
     fn validate_item<'py>(
         &self,
         py: Python<'py>,
-        key: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
+        key: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         // Safety: same as AtorsList::validate_item.
         let key_validator = unsafe { &*self.key_validator.get() };
         let value_validator = unsafe { &*self.value_validator.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        let valid_key = key_validator.validate(m, o, &key)?;
-        let valid_value = value_validator.validate(m, o, &value)?;
+        let valid_key = key_validator.validate(m, o, key)?;
+        let valid_value = value_validator.validate(m, o, value)?;
         Ok((valid_key, valid_value))
     }
 
@@ -925,7 +925,7 @@ impl AtorsDict {
             // Shortcut for dicts for which we can safely iterate over
             if let Ok(od) = o.cast::<PyDict>() {
                 for (k, v) in od.iter() {
-                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
                     valid.set_item(valid_key, valid_value)?;
                 }
             }
@@ -937,7 +937,7 @@ impl AtorsDict {
                     let v = o
                         .getattr(intern!(self_.py(), "__getitem__"))?
                         .call1((&k,))?;
-                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
                     valid.set_item(valid_key, valid_value)?;
                 }
             }
@@ -945,7 +945,7 @@ impl AtorsDict {
             else {
                 for t in o.try_iter()? {
                     let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
                     valid.set_item(valid_key, valid_value)?;
                 }
             }
@@ -954,7 +954,7 @@ impl AtorsDict {
         // Handle keyword arguments
         if let Some(kw) = kwargs {
             for (k, v) in kw.iter() {
-                let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
                 valid.set_item(valid_key, valid_value)?;
             }
         }
