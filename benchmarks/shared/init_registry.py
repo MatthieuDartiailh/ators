@@ -18,6 +18,7 @@ per-attribute overhead can be distinguished.
 """
 
 import importlib.util
+from functools import partial
 from typing import Any, Callable
 
 from ators import Ators, member
@@ -30,6 +31,14 @@ if ATOM_AVAILABLE:
 
 #: Attribute counts used to parameterise each group.
 N_ATTRS = (1, 10, 100)
+
+# Pre-computed kwargs dicts for each attribute count, created once at import time.
+_NO_VAL_KWARGS: dict[int, dict[str, int]] = {
+    n: {f"attr_{i}": 123 for i in range(n)} for n in N_ATTRS
+}
+_COERCE_KWARGS: dict[int, dict[str, str]] = {
+    n: {f"attr_{i}": "123" for i in range(n)} for n in N_ATTRS
+}
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +132,8 @@ def _make_case(
 def iter_init_cases() -> list[BenchmarkCase]:
     cases: list[BenchmarkCase] = []
     for n in N_ATTRS:
-        no_val_kwargs: dict[str, int] = {f"attr_{i}": 123 for i in range(n)}
-        coerce_kwargs: dict[str, str] = {f"attr_{i}": "123" for i in range(n)}
+        no_val_kwargs = _NO_VAL_KWARGS[n]
+        coerce_kwargs = _COERCE_KWARGS[n]
         group_no_val = f"no_validators_{n}"
         group_coerce = f"init_coercion_{n}"
 
@@ -134,13 +143,13 @@ def iter_init_cases() -> list[BenchmarkCase]:
                 _make_case(
                     group_no_val,
                     "py",
-                    lambda n=n: _make_py_no_validators(n),
+                    partial(_make_py_no_validators, n),
                     lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
                 ),
                 _make_case(
                     group_no_val,
                     "ators",
-                    lambda n=n: _make_ators_no_validators(n),
+                    partial(_make_ators_no_validators, n),
                     lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
                 ),
             ]
@@ -150,7 +159,7 @@ def iter_init_cases() -> list[BenchmarkCase]:
                 _make_case(
                     group_no_val,
                     "atom",
-                    lambda n=n: _make_atom_no_validators(n),
+                    partial(_make_atom_no_validators, n),
                     lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
                 )
             )
@@ -161,13 +170,13 @@ def iter_init_cases() -> list[BenchmarkCase]:
                 _make_case(
                     group_coerce,
                     "py",
-                    lambda n=n: _make_py_init_coercion(n),
+                    partial(_make_py_init_coercion, n),
                     lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
                 ),
                 _make_case(
                     group_coerce,
                     "ators",
-                    lambda n=n: _make_ators_init_coercion(n),
+                    partial(_make_ators_init_coercion, n),
                     lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
                 ),
             ]
@@ -177,7 +186,7 @@ def iter_init_cases() -> list[BenchmarkCase]:
                 _make_case(
                     group_coerce,
                     "atom",
-                    lambda n=n: _make_atom_init_coercion(n),
+                    partial(_make_atom_init_coercion, n),
                     lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
                 )
             )
