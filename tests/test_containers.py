@@ -49,7 +49,7 @@ def ators_list_object():
         # Operations that don't add items don't need validation
         ("pop", (), [1, 2], None),
         ("remove", (1,), [2, 3], None),
-        # ("__delitem__", (0,), [2, 3], None),
+        ("__delitem__", (0,), [2, 3], None),
         # [1, 2, 3], 0, [2, 3], None),
         #         ([1, 2, 3], -1, [1, 2], None),
         #         ([1, 2, 3], 3, None, IndexError),
