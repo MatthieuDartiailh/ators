@@ -50,6 +50,21 @@ def ators_list_object():
         ("pop", (), [1, 2], None),
         ("remove", (1,), [2, 3], None),
         # ("__delitem__", (0,), [2, 3], None),
+        # [1, 2, 3], 0, [2, 3], None),
+        #         ([1, 2, 3], -1, [1, 2], None),
+        #         ([1, 2, 3], 3, None, IndexError),
+        #         ([1, 2, 3], -4, None, IndexError),
+        #         ([0, 1, 2, 3, 4, 5], slice(1, 4), [0, 4, 5], None),  # contiguous slice
+        #         (
+        #             [0, 1, 2, 3, 4, 5],
+        #             slice(None, None, 2),
+        #             [1, 3, 5],
+        #             None,
+        #         ),  # extended slice step=2
+        #         ([10, 11, 12, 13, 14], slice(3, None, -2), [10, 12, 14], None),  # negative step
+        #         ([0, 1, 2, 3, 4], slice(4, 0, -2), [0, 1, 3], None),
+        #         ([1, 2, 3], slice(1, 1), [1, 2, 3], None),  # empty slice no-op
+        #         ([1, 2, 3], "0", None, TypeError),  # invalid index type
         ("reverse", (), [3, 2, 1], None),
         ("sort", (), [1, 2, 3], None),
     ],

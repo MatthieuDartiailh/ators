@@ -7,8 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Container types with validation and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, ffi, intern, pyclass,
-    pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, ffi, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
@@ -194,56 +193,6 @@ impl AtorsList {
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
-    // Required since CPython uses a single slot for setitem/delitem which prevents
-    // inheriting the delitem behavior from PyList when __setitem__ is overridden.
-    pub fn __delitem__<'py>(
-        self_: &Bound<'py, AtorsList>,
-        index: &Bound<'py, PyAny>,
-    ) -> PyResult<()> {
-        // SAFETY: AtorsList is declared as `extends=PyList`, so this unchecked cast
-        // is valid and gives us access to high-level PyList helpers.
-        let list = unsafe { self_.cast_unchecked::<PyList>() };
-
-        if index.is_instance_of::<PySlice>() {
-            // SAFETY: instance check guarantees this is a PySlice.
-            let slice = unsafe { index.cast_unchecked::<PySlice>() };
-            let slice_indices = slice.indices(list.len() as isize)?;
-
-            if slice_indices.step == 1 {
-                // Contiguous slice: replace the slice range with an empty list.
-                list.del_slice(slice_indices.start as usize, slice_indices.stop as usize)?;
-            } else {
-                // Extended slice: delete in reverse order so earlier indices stay valid.
-                // XXX this could be done without allocation
-                let start = slice_indices.start;
-                let step = slice_indices.step;
-                let slicelength = slice_indices.slicelength;
-                // Collect indices to delete, then remove from largest to smallest.
-                let mut indices: Vec<isize> = (0..slicelength)
-                    .map(|i| start + i as isize * step)
-                    .collect();
-                // Sort descending so deleting one index doesn't shift the others.
-                indices.sort_unstable_by(|a, b| b.cmp(a));
-                for idx in indices {
-                    list.del_item(idx as usize)?;
-                }
-            }
-        } else {
-            // Single integer index.
-            let idx = index.extract::<isize>()?;
-            let len = list.len() as isize;
-            let normalized = if idx < 0 { idx + len } else { idx };
-            if normalized < 0 || normalized >= len {
-                return Err(pyo3::exceptions::PyIndexError::new_err(
-                    "list assignment index out of range",
-                ));
-            }
-            // Above check make casting safe
-            list.del_item(normalized as usize)?;
-        }
-        Ok(())
-    }
-
     pub fn append<'py>(self_: &Bound<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.get().validate_item(py, value)?;
@@ -338,6 +287,56 @@ impl AtorsList {
 
         // Use high-level set_item (no ffi), conversion is safe since normalized is > 0
         list.set_item(normalized as usize, valid.as_any())?;
+        Ok(())
+    }
+
+    // Required since CPython uses a single slot for setitem/delitem which prevents
+    // inheriting the delitem behavior from PyList when __setitem__ is overridden.
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, AtorsList>,
+        index: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        // SAFETY: AtorsList is declared as `extends=PyList`, so this unchecked cast
+        // is valid and gives us access to high-level PyList helpers.
+        let list = unsafe { self_.cast_unchecked::<PyList>() };
+
+        if index.is_instance_of::<PySlice>() {
+            // SAFETY: instance check guarantees this is a PySlice.
+            let slice = unsafe { index.cast_unchecked::<PySlice>() };
+            let slice_indices = slice.indices(list.len() as isize)?;
+
+            if slice_indices.step == 1 {
+                // Contiguous slice: replace the slice range with an empty list.
+                list.del_slice(slice_indices.start as usize, slice_indices.stop as usize)?;
+            } else {
+                // Extended slice: delete in reverse order so earlier indices stay valid.
+                // XXX this could be done without allocation
+                let start = slice_indices.start;
+                let step = slice_indices.step;
+                let slicelength = slice_indices.slicelength;
+                // Collect indices to delete, then remove from largest to smallest.
+                let mut indices: Vec<isize> = (0..slicelength)
+                    .map(|i| start + i as isize * step)
+                    .collect();
+                // Sort descending so deleting one index doesn't shift the others.
+                indices.sort_unstable_by(|a, b| b.cmp(a));
+                for idx in indices {
+                    list.del_slice(idx as usize, (idx + 1) as usize)?;
+                }
+            }
+        } else {
+            // Single integer index.
+            let idx = index.extract::<isize>()?;
+            let len = list.len() as isize;
+            let normalized = if idx < 0 { idx + len } else { idx };
+            if normalized < 0 || normalized >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    "list assignment index out of range",
+                ));
+            }
+            // Above check make casting safe
+            list.del_slice(normalized as usize, (normalized + 1) as usize)?;
+        }
         Ok(())
     }
 
@@ -615,7 +614,7 @@ impl AtorsSet {
     #[staticmethod]
     pub fn _construct<'py>(
         py: Python<'py>,
-        args: &Bound<'py, PyTuple>,
+        args: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, AtorsSet>> {
         // This is a dummy constructor used solely for unpickling. It creates an empty AtorsSet
         // without any meaningful metadata; the actual validator and related metadata will be
@@ -635,13 +634,12 @@ impl AtorsSet {
             },
         )?;
         let temp = unsafe { new.cast_unchecked::<PySet>() };
-        for o in args.get_item(0)?.try_iter()? {
+        for o in args.try_iter()? {
             temp.add(o?)?;
         }
         Ok(new)
     }
 
-    //
     pub fn __reduce_ex__<'py>(
         self_: &Bound<'py, Self>,
         py: Python<'py>,
@@ -649,7 +647,7 @@ impl AtorsSet {
     ) -> PyResult<Bound<'py, PyAny>> {
         (
             self_.getattr(intern!(py, "_construct"))?,
-            (unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?),
+            (unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?,),
         )
             .into_bound_py_any(py)
     }
