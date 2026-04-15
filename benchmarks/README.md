@@ -26,9 +26,6 @@ and two frontends:
 ### Shared pyperf entrypoints
 
 - `run_pyperf.py`: suite-wide case listing and execution frontend.
-- `containers/bench_list.py`: convenience runner for list method family.
-- `containers/bench_set.py`: convenience runner for set method family.
-- `containers/bench_dict.py`: convenience runner for dict method family.
 
 ## Running Benchmarks
 
