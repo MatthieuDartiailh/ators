@@ -26,12 +26,6 @@ and two frontends:
 ### Shared pyperf entrypoints
 
 - `run_pyperf.py`: suite-wide case listing and execution frontend.
-- `bench_get_untyped.py`: convenience runner for `get_untyped`.
-- `bench_set_untyped.py`: convenience runner for `set_untyped`.
-- `bench_set_untyped_alternating.py`: convenience runner for alternating set.
-- `bench_get_descriptor.py`: convenience runner for `get_descriptor`.
-- `bench_init.py`: convenience runner for the `init` family.
-- `bench_validation.py`: convenience runner for validation families.
 - `containers/bench_list.py`: convenience runner for list method family.
 - `containers/bench_set.py`: convenience runner for set method family.
 - `containers/bench_dict.py`: convenience runner for dict method family.
@@ -80,20 +74,6 @@ python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
 ```
 
-Run convenience pyperf scripts:
-
-```bash
-python benchmarks/bench_validation.py
-python benchmarks/bench_containers_assignment.py
-python benchmarks/bench_get_untyped.py
-python benchmarks/bench_set_untyped.py
-python benchmarks/bench_set_untyped_alternating.py
-python benchmarks/bench_get_descriptor.py
-python benchmarks/containers/bench_list.py
-python benchmarks/containers/bench_set.py
-python benchmarks/containers/bench_dict.py
-```
-
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
 with summary counts.
 
@@ -116,8 +96,6 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
    `benchmarks/shared/pytest_frontend.py`.
 
 4. Add a pyperf wrapper when useful.
-   Prefer `python benchmarks/run_pyperf.py --family <name>` for general use.
-   Add a `bench_*.py` helper only if it improves local ergonomics.
 
 5. Verify both frontends.
    Run pytest smoke checks:

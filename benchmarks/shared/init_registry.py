@@ -12,6 +12,9 @@ Measures object construction (initialization) cost for:
 - ``init_coercion``: construction where a value is coerced to ``int`` in
   ``__init__``.  A string ``"123"`` is passed so the coercion path is always
   exercised.
+
+Each group is parameterised over 1, 10 and 100 attributes so that fixed and
+per-attribute overhead can be distinguished.
 """
 
 import importlib.util
@@ -25,71 +28,76 @@ ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
 if ATOM_AVAILABLE:
     from atom.api import Atom, Value
 
-
-# ---------------------------------------------------------------------------
-# Pure-Python baselines
-# ---------------------------------------------------------------------------
-
-
-class PyNoValidators:
-    """Plain Python class - stores value as-is, no validation."""
-
-    def __init__(self, value: Any = 0) -> None:
-        self.value = value
-
-
-class PyInitCoercion:
-    """Plain Python class - coerces *value* to ``int`` inside ``__init__``."""
-
-    def __init__(self, value: Any = 0) -> None:
-        if not isinstance(value, int):
-            value = int(value)
-        self.value = value
+#: Attribute counts used to parameterise each group.
+N_ATTRS = (1, 10, 100)
 
 
 # ---------------------------------------------------------------------------
-# Ators implementations
+# Class factories
 # ---------------------------------------------------------------------------
 
 
-class AtorsNoValidators(Ators):
-    """Ators class with an untyped member - no coercion, no validation."""
+def _make_py_no_validators(n: int) -> type:
+    """Return a plain Python class with *n* attributes and no coercion."""
 
-    value: Any = member()
+    def __init__(self, **kwargs: Any) -> None:
+        self.__dict__.update(kwargs)
 
-
-class AtorsInitCoercion(Ators):
-    """Ators class that coerces *value* to ``int`` in ``__init__``."""
-
-    value: Any = member()
-
-    def __init__(self, value: Any = 0) -> None:
-        if not isinstance(value, int):
-            value = int(value)
-        super().__init__(value=value)
+    return type(f"PyNoValidators_{n}", (), {"__init__": __init__})
 
 
-# ---------------------------------------------------------------------------
-# Atom implementations (only when atom is installed)
-# ---------------------------------------------------------------------------
+def _make_py_init_coercion(n: int) -> type:
+    """Return a plain Python class with *n* attributes, coercing each to ``int``."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        for k, v in kwargs.items():
+            if not isinstance(v, int):
+                v = int(v)
+            self.__dict__[k] = v
+
+    return type(f"PyInitCoercion_{n}", (), {"__init__": __init__})
+
+
+def _make_ators_no_validators(n: int) -> type:
+    """Return an Ators class with *n* untyped members and no coercion."""
+    attrs: dict[str, Any] = {f"attr_{i}": member() for i in range(n)}
+    return type(f"AtorsNoValidators_{n}", (Ators,), attrs)
+
+
+def _make_ators_init_coercion(n: int) -> type:
+    """Return an Ators class with *n* members, coercing each to ``int``."""
+    attrs: dict[str, Any] = {f"attr_{i}": member() for i in range(n)}
+
+    def __init__(self, **kwargs: Any) -> None:
+        coerced = {
+            k: int(v) if not isinstance(v, int) else v for k, v in kwargs.items()
+        }
+        Ators.__init__(self, **coerced)
+
+    attrs["__init__"] = __init__
+    return type(f"AtorsInitCoercion_{n}", (Ators,), attrs)
+
 
 if ATOM_AVAILABLE:
 
-    class AtomNoValidators(Atom):
-        """Atom class with a ``Value`` member - no coercion, no validation."""
+    def _make_atom_no_validators(n: int) -> type:
+        """Return an Atom class with *n* ``Value`` members and no coercion."""
+        attrs: dict[str, Any] = {f"attr_{i}": Value() for i in range(n)}
+        return type(f"AtomNoValidators_{n}", (Atom,), attrs)
 
-        value = Value()
+    def _make_atom_init_coercion(n: int) -> type:
+        """Return an Atom class with *n* ``Value`` members, coercing each to ``int``."""
+        attrs: dict[str, Any] = {f"attr_{i}": Value() for i in range(n)}
 
-    class AtomInitCoercion(Atom):
-        """Atom class that coerces *value* to ``int`` in ``__init__``."""
+        def __init__(self, **kwargs: Any) -> None:
+            Atom.__init__(self)
+            for k, v in kwargs.items():
+                if not isinstance(v, int):
+                    v = int(v)
+                setattr(self, k, v)
 
-        value = Value()
-
-        def __init__(self, value: Any = 0) -> None:
-            if not isinstance(value, int):
-                value = int(value)
-            super().__init__()
-            self.value = value
+        attrs["__init__"] = __init__
+        return type(f"AtomInitCoercion_{n}", (Atom,), attrs)
 
 
 # ---------------------------------------------------------------------------
@@ -113,51 +121,67 @@ def _make_case(
 
 
 def iter_init_cases() -> list[BenchmarkCase]:
-    cases: list[BenchmarkCase] = [
-        # no_validators - pass a plain int, nothing to coerce
-        _make_case(
-            "no_validators",
-            "py",
-            lambda: PyNoValidators,
-            lambda cls: lambda: cls(123),
-        ),
-        _make_case(
-            "no_validators",
-            "ators",
-            lambda: AtorsNoValidators,
-            lambda cls: lambda: cls(123),
-        ),
-        # init_coercion - pass a string so coercion is always triggered
-        _make_case(
-            "init_coercion",
-            "py",
-            lambda: PyInitCoercion,
-            lambda cls: lambda: cls("123"),
-        ),
-        _make_case(
-            "init_coercion",
-            "ators",
-            lambda: AtorsInitCoercion,
-            lambda cls: lambda: cls("123"),
-        ),
-    ]
-    if ATOM_AVAILABLE:
+    cases: list[BenchmarkCase] = []
+    for n in N_ATTRS:
+        no_val_kwargs: dict[str, int] = {f"attr_{i}": 123 for i in range(n)}
+        coerce_kwargs: dict[str, str] = {f"attr_{i}": "123" for i in range(n)}
+        group_no_val = f"no_validators_{n}"
+        group_coerce = f"init_coercion_{n}"
+
+        # no_validators: pass plain ints, nothing to coerce
         cases.extend(
             [
                 _make_case(
-                    "no_validators",
-                    "atom",
-                    lambda: AtomNoValidators,
-                    lambda cls: lambda: cls(123),
+                    group_no_val,
+                    "py",
+                    lambda n=n: _make_py_no_validators(n),
+                    lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
                 ),
                 _make_case(
-                    "init_coercion",
-                    "atom",
-                    lambda: AtomInitCoercion,
-                    lambda cls: lambda: cls("123"),
+                    group_no_val,
+                    "ators",
+                    lambda n=n: _make_ators_no_validators(n),
+                    lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
                 ),
             ]
         )
+        if ATOM_AVAILABLE:
+            cases.append(
+                _make_case(
+                    group_no_val,
+                    "atom",
+                    lambda n=n: _make_atom_no_validators(n),
+                    lambda cls, kw=no_val_kwargs: lambda: cls(**kw),
+                )
+            )
+
+        # init_coercion: pass strings so coercion is always triggered
+        cases.extend(
+            [
+                _make_case(
+                    group_coerce,
+                    "py",
+                    lambda n=n: _make_py_init_coercion(n),
+                    lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
+                ),
+                _make_case(
+                    group_coerce,
+                    "ators",
+                    lambda n=n: _make_ators_init_coercion(n),
+                    lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
+                ),
+            ]
+        )
+        if ATOM_AVAILABLE:
+            cases.append(
+                _make_case(
+                    group_coerce,
+                    "atom",
+                    lambda n=n: _make_atom_init_coercion(n),
+                    lambda cls, kw=coerce_kwargs: lambda: cls(**kw),
+                )
+            )
+
     return cases
 
 
