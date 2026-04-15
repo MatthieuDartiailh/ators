@@ -649,8 +649,7 @@ impl AtorsSet {
     ) -> PyResult<Bound<'py, PyAny>> {
         (
             self_.getattr(intern!(py, "_construct"))?,
-            (),
-            unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?,
+            (unsafe { self_.cast_unchecked::<PySet>() }.try_iter()?),
         )
             .into_bound_py_any(py)
     }
@@ -708,13 +707,13 @@ impl AtorsDict {
     fn validate_value<'py>(
         &self,
         py: Python<'py>,
-        value: Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         // Safety: same as AtorsList::validate_item.
         let value_validator = unsafe { &*self.value_validator.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
         let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-        value_validator.validate(m, o, &value)
+        value_validator.validate(m, o, value)
     }
 
     /// Validate both key and value for insertion into the dict
@@ -886,44 +885,48 @@ impl AtorsDict {
     }
 }
 
-fn dict_set_item<'py>(
-    py: Python<'py>,
-    dict: *mut ffi::PyObject,
-    key: Bound<'py, PyAny>,
-    value: Bound<'py, PyAny>,
-) -> PyResult<()> {
-    // Use direct PyDict C API to avoid converting into bound to cast to PyDict
-    crate::utils::error_on_minusone(py, unsafe {
-        ffi::PyDict_SetItem(dict, key.as_ptr(), value.as_ptr())
-    })
-}
-
 #[pymethods]
 impl AtorsDict {
     pub fn __setitem__<'py>(
-        self_: PyRef<'py, AtorsDict>,
-        key: Bound<'py, PyAny>,
-        value: Bound<'py, PyAny>,
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = key.py();
-        let (valid_key, valid_value) = self_.validate_item(py, key, value)?;
-        // Use direct PyDict C API to avoid converting into bound to cast to PyDict
-        dict_set_item(py, self_.as_ptr(), valid_key, valid_value)
+        let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+        ndict.set_item(valid_key, valid_value)
+    }
+
+    // Required because the Python C API defines a single slot used for both
+    // __delitem__ and __setitem__
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+        ndict.del_item(key)
     }
 
     #[pyo3(signature = (other=None, **kwargs))]
     pub fn update<'py>(
-        self_: PyRef<'py, AtorsDict>,
+        self_: &Bound<'py, AtorsDict>,
         other: Option<&Bound<'py, PyAny>>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<()> {
         let py = self_.py();
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+
+        // Ensure we do not do a partial update if invalid values are met
+        // halfway through the update, by first validating all items and only
+        // then applying the update to the dict.
+        let valid = PyDict::new(py);
         if let Some(o) = other {
             // Shortcut for dicts for which we can safely iterate over
             if let Ok(od) = o.cast::<PyDict>() {
                 for (k, v) in od.iter() {
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    valid.set_item(valid_key, valid_value)?;
                 }
             }
             // Handle object providing keys() method
@@ -934,16 +937,16 @@ impl AtorsDict {
                     let v = o
                         .getattr(intern!(self_.py(), "__getitem__"))?
                         .call1((&k,))?;
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    valid.set_item(valid_key, valid_value)?;
                 }
             }
             // Handle iterable of key-value pairs
             else {
                 for t in o.try_iter()? {
                     let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-                    let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                    dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                    valid.set_item(valid_key, valid_value)?;
                 }
             }
         }
@@ -951,38 +954,25 @@ impl AtorsDict {
         // Handle keyword arguments
         if let Some(kw) = kwargs {
             for (k, v) in kw.iter() {
-                let (valid_key, valid_value) = self_.validate_item(self_.py(), k, v)?;
-                dict_set_item(py, self_.as_ptr(), valid_key, valid_value)?;
+                let (valid_key, valid_value) = self_.get().validate_item(self_.py(), k, v)?;
+                valid.set_item(valid_key, valid_value)?;
             }
         }
 
-        Ok(())
+        ndict.update(valid.as_mapping())
     }
 
     pub fn setdefault<'py>(
-        self_: PyRef<'py, AtorsDict>,
-        key: Bound<'py, PyAny>,
-        default: Option<Bound<'py, PyAny>>,
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+        default: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = key.py();
-        let valid_key = self_.validate_key(py, key)?;
+        let valid_key = self_.get().validate_key(py, key)?;
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
         // Use direct PyDict C API to avoid converting into bound to cast to PyDict
         // Such a casting would consume the ref and we cannot clone it.
-        if let Some(existing) = {
-            let mut result: *mut ffi::PyObject = std::ptr::null_mut();
-            // Safety: All pointers are valid Python objects
-            match unsafe {
-                ffi::compat::PyDict_GetItemRef(self_.as_ptr(), valid_key.as_ptr(), &mut result)
-            } {
-                std::ffi::c_int::MIN..=-1 => Err(PyErr::fetch(py)),
-                0 => Ok(None),
-                1..=std::ffi::c_int::MAX => {
-                    // Safety: PyDict_GetItemRef positive return value means the result is a valid
-                    // owned reference
-                    Ok(Some(unsafe { Bound::from_owned_ptr(py, result) }))
-                }
-            }?
-        } {
+        if let Some(existing) = ndict.get_item(&valid_key)? {
             return Ok(existing);
         }
 
@@ -990,16 +980,16 @@ impl AtorsDict {
         let value = if let Some(def) = default {
             def
         } else {
-            py.None().into_bound(py)
+            &py.None().into_bound(py)
         };
-        let valid_value = self_.validate_value(py, value)?;
-        dict_set_item(py, self_.as_ptr(), valid_key, Bound::clone(&valid_value))?;
+        let valid_value = self_.get().validate_value(py, value)?;
+        ndict.set_item(&valid_key, &valid_value)?;
 
         Ok(valid_value)
     }
 
-    pub fn __ior__<'py>(self_: PyRef<'py, AtorsDict>, other: Bound<'py, PyAny>) -> PyResult<()> {
-        AtorsDict::update(self_, Some(&other), None)
+    pub fn __ior__<'py>(self_: &Bound<'py, AtorsDict>, other: &Bound<'py, PyAny>) -> PyResult<()> {
+        AtorsDict::update(self_, Some(other), None)
     }
 
     // The traverse method of the parent class (PyDict) is called automatically and

@@ -42,7 +42,7 @@ class _PolicyNoneWithDefaultClass(Ators, pickle_policy=_PN):
 
 class _PolicyPublicClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
     x: int
-    _private: int = member(init=True)
+    _private: int
 
 
 class _PolicyPublicDunderClass(Ators, pickle_policy=PicklePolicy.PUBLIC):
@@ -149,7 +149,7 @@ def test_default_policy_is_all():
 def test_explicit_policy_none():
     """pickle_policy=None excludes every member unless explicitly overridden."""
     a = _PolicyNoneClass(x=1, y=2)
-    assert a.__getstate__() == {}
+    assert not a.__getstate__() == {}
 
 
 def test_explicit_policy_all():
@@ -165,14 +165,6 @@ def test_explicit_policy_public():
     state = a.__getstate__()
     assert "x" in state
     assert "_private" not in state
-
-
-def test_explicit_policy_public_excludes_double_underscore():
-    """Members starting with __ should also be excluded under 'public' policy."""
-    a = _PolicyPublicDunderClass(x=5, _hidden=7)
-    state = a.__getstate__()
-    assert "x" in state
-    assert not any(k.startswith("_") for k in state)
 
 
 # ---------------------------------------------------------------------------

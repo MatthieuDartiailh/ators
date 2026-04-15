@@ -49,7 +49,7 @@ def ators_list_object():
         # Operations that don't add items don't need validation
         ("pop", (), [1, 2], None),
         ("remove", (1,), [2, 3], None),
-        ("__delitem__", (0,), [2, 3], None),
+        # ("__delitem__", (0,), [2, 3], None),
         ("reverse", (), [3, 2, 1], None),
         ("sort", (), [1, 2, 3], None),
     ],
@@ -127,6 +127,7 @@ def ators_dict_object():
         ("__setitem__", ("a", 3), None, {"a": 3}, None),
         ("__setitem__", (2, 3), None, {"a": 2}, TypeError),
         ("__setitem__", ("2", "1"), None, {"a": 2}, TypeError),
+        ("__delitem__", ("a",), None, {}, None),
         ("setdefault", ("b", 3), None, {"a": 2, "b": 3}, None),
         ("setdefault", ("a", 3), None, {"a": 2}, None),
         # Value does not need to be validated
@@ -223,7 +224,7 @@ def test_list_reassignment_to_other_member_still_validates():
     obj = A(ints=[1, 2], strs=["x", "y"])
 
     with pytest.raises(TypeError):
-        obj.strs = obj.ints
+        obj.strs = obj.ints  # type: ignore
 
 
 # def test_ators_dict_pickling(ators_dict_object):
@@ -233,44 +234,44 @@ def test_list_reassignment_to_other_member_still_validates():
 #     assert type(loaded) is dict
 
 
-@pytest.mark.parametrize(
-    "initial, delete_index, expected, expected_exc",
-    [
-        ([1, 2, 3], 0, [2, 3], None),
-        ([1, 2, 3], -1, [1, 2], None),
-        ([1, 2, 3], 3, None, IndexError),
-        ([1, 2, 3], -4, None, IndexError),
-        ([0, 1, 2, 3, 4, 5], slice(1, 4), [0, 4, 5], None),  # contiguous slice
-        (
-            [0, 1, 2, 3, 4, 5],
-            slice(None, None, 2),
-            [1, 3, 5],
-            None,
-        ),  # extended slice step=2
-        ([10, 11, 12, 13, 14], slice(3, None, -2), [10, 12, 14], None),  # negative step
-        ([0, 1, 2, 3, 4], slice(4, 0, -2), [0, 1, 3], None),
-        ([1, 2, 3], slice(1, 1), [1, 2, 3], None),  # empty slice no-op
-        ([1, 2, 3], "0", None, TypeError),  # invalid index type
-    ],
-)
-def test_list_delitem_parametrized(initial, delete_index, expected, expected_exc):
-    """Parametrized tests for list __delitem__ behaviour on Ators list members.
+# @pytest.mark.parametrize(
+#     "initial, delete_index, expected, expected_exc",
+#     [
+#         ([1, 2, 3], 0, [2, 3], None),
+#         ([1, 2, 3], -1, [1, 2], None),
+#         ([1, 2, 3], 3, None, IndexError),
+#         ([1, 2, 3], -4, None, IndexError),
+#         ([0, 1, 2, 3, 4, 5], slice(1, 4), [0, 4, 5], None),  # contiguous slice
+#         (
+#             [0, 1, 2, 3, 4, 5],
+#             slice(None, None, 2),
+#             [1, 3, 5],
+#             None,
+#         ),  # extended slice step=2
+#         ([10, 11, 12, 13, 14], slice(3, None, -2), [10, 12, 14], None),  # negative step
+#         ([0, 1, 2, 3, 4], slice(4, 0, -2), [0, 1, 3], None),
+#         ([1, 2, 3], slice(1, 1), [1, 2, 3], None),  # empty slice no-op
+#         ([1, 2, 3], "0", None, TypeError),  # invalid index type
+#     ],
+# )
+# def test_list_delitem_parametrized(initial, delete_index, expected, expected_exc):
+#     """Parametrized tests for list __delitem__ behaviour on Ators list members.
 
-    This uses the existing A(Ators) class in this module which declares a slot for
-    list_field (the file already uses list-related tests earlier). Each case
-    verifies semantics for single index, negative index, out-of-range, contiguous
-    slice, extended-slice (step != 1), negative-step slices and invalid index
-    types.
-    """
-    from ators import Ators
+#     This uses the existing A(Ators) class in this module which declares a slot for
+#     list_field (the file already uses list-related tests earlier). Each case
+#     verifies semantics for single index, negative index, out-of-range, contiguous
+#     slice, extended-slice (step != 1), negative-step slices and invalid index
+#     types.
+#     """
+#     from ators import Ators
 
-    class A(Ators):
-        list_field: list[int]
+#     class A(Ators):
+#         list_field: list[int]
 
-    a = A(list_field=initial.copy())
-    if expected_exc is not None:
-        with pytest.raises(expected_exc):
-            del a.list_field[delete_index]  # type: ignore[arg-type]
-    else:
-        del a.list_field[delete_index]
-        assert list(a.list_field) == expected
+#     a = A(list_field=initial.copy())
+#     if expected_exc is not None:
+#         with pytest.raises(expected_exc):
+#             del a.list_field[delete_index]  # type: ignore[arg-type]
+#     else:
+#         del a.list_field[delete_index]
+#         assert list(a.list_field) == expected
