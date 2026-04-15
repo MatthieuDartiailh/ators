@@ -12,10 +12,9 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods, PySet, PySetMethods, PySlice,
-        PySliceMethods, PyTuple,
     },
 };
-use std::{cell::UnsafeCell, ptr::null};
+use std::cell::UnsafeCell;
 
 use crate::{core::AtorsBase, utils::error_on_minusone, validators::Validator};
 
@@ -268,11 +267,15 @@ impl AtorsList {
         index: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
-        return error_on_minusone(py, unsafe {
+        error_on_minusone(py, unsafe {
             (*(*PyList::type_object_raw(py)).tp_as_mapping)
                 .mp_ass_subscript
-                .unwrap()(self_.as_ptr(), index.as_ptr(), 0 as *mut ffi::PyObject)
-        });
+                .unwrap()(
+                self_.as_ptr(),
+                index.as_ptr(),
+                std::ptr::null_mut::<ffi::PyObject>(),
+            )
+        })
     }
 
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
