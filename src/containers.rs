@@ -200,7 +200,6 @@ impl AtorsList {
         self_: &Bound<'py, AtorsList>,
         index: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        let py = index.py();
         // SAFETY: AtorsList is declared as `extends=PyList`, so this unchecked cast
         // is valid and gives us access to high-level PyList helpers.
         let list = unsafe { self_.cast_unchecked::<PyList>() };
@@ -226,7 +225,7 @@ impl AtorsList {
                 // Sort descending so deleting one index doesn't shift the others.
                 indices.sort_unstable_by(|a, b| b.cmp(a));
                 for idx in indices {
-                    list.del_item(idx as usize);
+                    list.del_item(idx as usize)?;
                 }
             }
         } else {
