@@ -212,10 +212,9 @@ impl AtorsList {
 
             if slice_indices.step == 1 {
                 // Contiguous slice: replace the slice range with an empty list.
-                list.set_slice(
+                list.del_slice(
                     slice_indices.start as usize,
                     slice_indices.stop as usize,
-                    PyList::empty(py).as_any(),
                 )?;
             } else {
                 // Extended slice: delete in reverse order so earlier indices stay valid.
