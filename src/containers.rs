@@ -242,9 +242,8 @@ impl AtorsList {
                     "list assignment index out of range",
                 ));
             }
-            error_on_minusone(py, unsafe {
-                ffi::PySequence_DelItem(list.as_ptr(), normalized)
-            })?;
+            // Above check make casting safe
+            list.del_item(normalized as usize)?;
         }
         Ok(())
     }
