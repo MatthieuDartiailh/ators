@@ -28,7 +28,10 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 use crate::{
-    core::{ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, AtorsBase, ClassMutability},
+    core::{
+        ATORS_MEMBER_CUSTOMIZER, ATORS_MEMBERS, ATORS_OBSERVABLE, ATORS_PICKLE_POLICY, AtorsBase,
+        ClassMutability, PicklePolicy,
+    },
     member::PreGetattrBehavior,
 };
 
@@ -762,6 +765,8 @@ pub fn create_ators_subclass<'py>(
     observable: bool,
     enable_weakrefs: bool,
     type_containers: i64,
+    pickle_policy: Option<PicklePolicy>,
+    validate_attr: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = name.py();
 
@@ -785,6 +790,22 @@ pub fn create_ators_subclass<'py>(
                 .unwrap_or(false)
         });
     dct.set_item(ATORS_OBSERVABLE, is_observable)?;
+
+    // Resolve the pickle policy: honour an explicit value, then inherit from the first
+    // base class that defines one; fall back to `ALL` (the default) if none does.
+    let pickle_policy_overridden = pickle_policy.is_some();
+    let pickle_policy = if let Some(p) = pickle_policy {
+        p
+    } else {
+        mro.iter()
+            .find_map(|base| {
+                base.getattr(ATORS_PICKLE_POLICY)
+                    .ok()
+                    .and_then(|v| v.extract::<PicklePolicy>().ok())
+            })
+            .unwrap_or(PicklePolicy::All)
+    };
+    dct.set_item(ATORS_PICKLE_POLICY, Bound::new(py, pickle_policy.clone())?)?;
 
     // Since all classes deriving from Ators are slotted, we only need to check
     // for non-empty slots to know if a base class supports weakrefs.
@@ -813,6 +834,7 @@ pub fn create_ators_subclass<'py>(
         &dct,
         type_containers,
         typevar_bindings.as_ref(),
+        validate_attr,
     )?;
 
     // Collect the new members defined in this class that require the owning
@@ -889,6 +911,30 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
+    // If this class explicitly overrides `pickle_policy`, re-evaluate inherited
+    // members that did not opt in/out explicitly via `member().pickle(...)`.
+    if pickle_policy_overridden {
+        let mut updated_members = HashMap::new();
+        for (name, member) in &members {
+            let m = member.get();
+            if m.pickle_explicit {
+                continue;
+            }
+            let new_pickle = match pickle_policy {
+                PicklePolicy::All => true,
+                PicklePolicy::None => false,
+                PicklePolicy::Public => !name.starts_with('_'),
+            };
+            if m.pickle != new_pickle {
+                updated_members.insert(
+                    name.clone(),
+                    Bound::new(py, m.clone_with_pickle(new_pickle))?,
+                );
+            }
+        }
+        members.extend(updated_members);
+    }
+
     // Collect the used indexes and existing conflict
     let mut occupied = HashSet::new();
     if is_observable {
@@ -958,6 +1004,22 @@ pub fn create_ators_subclass<'py>(
         // Track members specific to this class (per opposition to members
         // which are on base classes but not on this one).
         specific_members.insert(k.clone());
+
+        // Resolve the init flag: honour an explicit user value, then fall back
+        // to the name-based default (public → true, private → false).
+        // Resolve the init flag: honour an explicit user value, then fall back
+        // to the name-based default (public → true, private → false).
+        mb.init = Some(mb.init.unwrap_or_else(|| !k.starts_with('_')));
+
+        // Resolve the pickle flag: honour an explicit user value, then fall back
+        // to the class policy.
+        if !mb.pickle_explicit {
+            mb.pickle = Some(match pickle_policy {
+                PicklePolicy::All => true,
+                PicklePolicy::None => false,
+                PicklePolicy::Public => !k.starts_with('_'),
+            });
+        }
 
         // Assign indexes to member builders and inherit behaviors if requested.
         if let Some(m) = members.get(k) {
@@ -1059,6 +1121,33 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
+    // When validate_attr is False, coercion cannot function without a type
+    // validator.  Fail early if any member – whether newly defined or
+    // inherited from a base class – has a coercer configured.
+    if !validate_attr {
+        for (k, mb) in &member_builders {
+            if mb.coercer().is_some() || mb.init_coercer().is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Class creation failed: attribute '{}' requires coercion \
+                     but validate_attr is False",
+                    k
+                )));
+            }
+        }
+        for (k, m) in &members {
+            if !member_builders.contains_key(k) {
+                let mv = m.get();
+                if mv.validator().coercer.is_some() || mv.validator().init_coercer.is_some() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Class creation failed: attribute '{}' requires coercion \
+                         but validate_attr is False",
+                        k
+                    )));
+                }
+            }
+        }
+    }
+
     let new_members = member_builders
         .into_iter()
         .map(|(k, v)| v.build(&name).map(|v| (k, v)))
@@ -1066,6 +1155,7 @@ pub fn create_ators_subclass<'py>(
         .into_py_dict(py)?;
     let all_members = members.into_py_dict(py)?;
     all_members.update(new_members.as_mapping())?;
+
     dct.update(new_members.as_mapping())?;
 
     // Set the class level information as aggregated during the analysis

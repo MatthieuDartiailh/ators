@@ -7,7 +7,10 @@
 # --------------------------------------------------------------------------------------
 import pytest
 
-from benchmarks.shared.pytest_frontend import benchmark_case_params, run_pytest_benchmark
+from benchmarks.shared.pytest_frontend import (
+    benchmark_case_params,
+    run_pytest_benchmark,
+)
 
 
 @pytest.mark.benchmark(group="set_untyped")

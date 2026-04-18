@@ -7,7 +7,10 @@
 # --------------------------------------------------------------------------------------
 """Shared pytest adapters for validation benchmark families."""
 
-from benchmarks.shared.pytest_frontend import benchmark_case_params, run_pytest_benchmark
+from benchmarks.shared.pytest_frontend import (
+    benchmark_case_params,
+    run_pytest_benchmark,
+)
 
 
 def validation_case_params(family: str) -> list[object]:

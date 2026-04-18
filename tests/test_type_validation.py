@@ -421,6 +421,7 @@ def test_constrained_typevar_matches_union_behavior():
 # Constrained TypeVar generic class specialization tests
 # ---------------------------------------------------------------------------
 
+
 # PEP 695 syntax: [T: (int, str)] creates a constrained TypeVar
 class ConstrainedGenericBox[T: (int, str)](Ators):
     item: T = member()

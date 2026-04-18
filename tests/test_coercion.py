@@ -39,13 +39,28 @@ from ators.behaviors import Coercer, coerce, coerce_init
         (tuple[int, int], True, [["1", "2"], (3, "4")], [(1, 2), TypeError("")]),
         # var-tuple (tuple[int, ...])
         (tuple[int, ...], False, [["1", "2", "3"], (4, "5")], [(1, 2, 3), (4, 5)]),
-        (tuple[int, ...], True, [["1", "2", "3"], ("4", 5)], [(1, 2, 3), TypeError("")]),
+        (
+            tuple[int, ...],
+            True,
+            [["1", "2", "3"], ("4", 5)],
+            [(1, 2, 3), TypeError("")],
+        ),
         # list coercion from sequence
         (list[int], False, [("1", "2"), [3, "4"]], [[1, 2], [3, 4]]),
         (list[int], True, [("1", "2"), ["3", 4]], [[1, 2], TypeError("")]),
         # dict coercion from mapping and iterable-of-pairs
-        (dict[str, int], False, [{1: "2", "3": 4}, [(5, "6")]], [{"1": 2, "3": 4}, {"5": 6}]),
-        (dict[str, int], True, [{1: "2", "3": 4}, [(5, "6")]], [{"1": 2, "3": 4}, TypeError("")]),
+        (
+            dict[str, int],
+            False,
+            [{1: "2", "3": 4}, [(5, "6")]],
+            [{"1": 2, "3": 4}, {"5": 6}],
+        ),
+        (
+            dict[str, int],
+            True,
+            [{1: "2", "3": 4}, [(5, "6")]],
+            [{"1": 2, "3": 4}, TypeError("")],
+        ),
         # Union: first matching member is used
         (int | complex, False, ["1", "1j", "a"], [1, 1j, TypeError("")]),
         (int | complex, True, ["1j", "a"], [1j, TypeError("")]),

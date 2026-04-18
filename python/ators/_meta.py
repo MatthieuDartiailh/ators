@@ -11,6 +11,7 @@ from typing import Any, Mapping, dataclass_transform
 
 from ._ators import (
     Member,
+    PicklePolicy,
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
@@ -19,7 +20,9 @@ from ._ators import (
 )
 
 
-@dataclass_transform(frozen=False)
+@dataclass_transform(
+    field_descriptors=("member",), kw_only_default=True, frozen_default=False
+)
 class AtorsMeta(type):
     """The metaclass for classes derived from Ators.
 
@@ -50,6 +53,8 @@ class AtorsMeta(type):
         observable: bool = False,
         enable_weakrefs: bool = False,
         type_containers: int = -1,
+        pickle_policy: PicklePolicy | None = None,
+        validate_attr: bool = True,
     ):
         # Ensure there is no weird mro calculation and that we can use our
         # re-implementation of C3
@@ -64,6 +69,8 @@ class AtorsMeta(type):
             observable,
             enable_weakrefs,
             type_containers,
+            pickle_policy,
+            validate_attr,
         )
 
     def __call__(self, *args, **kwds):

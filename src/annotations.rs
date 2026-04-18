@@ -677,6 +677,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     dct: &Bound<'py, PyDict>,
     type_containers: i64,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
+    validate_attr: bool,
 ) -> PyResult<HashMap<String, MemberBuilder>> {
     let py = name.py();
 
@@ -717,8 +718,9 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         // Get the origin of the type annotation
         let origin = tools.get_origin.call1((&ann,))?;
 
-        // Check we are not dealing with a ClassVar
-        if origin.is(&class_var) {
+        // Check we are not dealing with a ClassVar (parameterized ClassVar[T] or
+        // bare ClassVar).  Both cases must be skipped even when validate_attr=False.
+        if origin.is(&class_var) || ann.is(&class_var) {
             continue;
         }
 
@@ -742,25 +744,39 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             MemberBuilder::default()
         };
 
-        // Analyze the annotation to configure the builder
-        configure_member_builder_from_annotation(
-            &mut builder,
-            name.cast()?,
-            &ann,
-            type_containers,
-            &tools,
-            false,
-            typevar_bindings,
-        )
-        .map_err(|err| {
-            err_with_cause(
-                py,
-                pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Failed to configure Member {name} from annotation {ann:?}"
-                )),
-                err,
+        if validate_attr {
+            // Analyze the annotation to configure the builder
+            configure_member_builder_from_annotation(
+                &mut builder,
+                name.cast()?,
+                &ann,
+                type_containers,
+                &tools,
+                false,
+                typevar_bindings,
             )
-        })?;
+            .map_err(|err| {
+                err_with_cause(
+                    py,
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Failed to configure Member {name} from annotation {ann:?}"
+                    )),
+                    err,
+                )
+            })?;
+        } else {
+            // When validate_attr=False, skip building type/value validators and
+            // coercers.  Only Final semantics (read-only + undeletable) are
+            // still enforced; everything else is treated as untyped.
+            let is_final = origin.is(&tools.types.final_) || ann.is(&tools.types.final_);
+            if is_final {
+                match builder.pre_setattr() {
+                    Some(PreSetattrBehavior::Constant {}) => {}
+                    _ => builder.set_pre_setattr(PreSetattrBehavior::ReadOnly {}),
+                };
+                builder.set_delattr(DelattrBehavior::Undeletable {});
+            }
+        }
 
         // Set the member name
         builder.name = Some(name.extract()?);

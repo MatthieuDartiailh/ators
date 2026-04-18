@@ -9,7 +9,10 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyString, PyType,
+        PyTypeMethods,
+    },
 };
 use std::cell::UnsafeCell;
 
@@ -22,6 +25,7 @@ pub static ATORS_MEMBERS: &str = "__ators_members__";
 pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
 pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
 pub static ATORS_OBSERVABLE: &str = "__ators_observable__";
+pub static ATORS_PICKLE_POLICY: &str = "__ators_pickle_policy__";
 
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
@@ -55,6 +59,20 @@ pub enum ClassMutability {
     Mutable {},
     #[pyo3(constructor = (values))]
     InspectValues { values: Vec<String> },
+}
+
+#[pyclass(module = "ators._ators", frozen, from_py_object, eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum PicklePolicy {
+    /// Include all members in pickle state (default).
+    #[pyo3(name = "ALL")]
+    All,
+    /// Exclude all members from pickle state.
+    #[pyo3(name = "NONE")]
+    None,
+    /// Include only public members (those not starting with `_`) in pickle state.
+    #[pyo3(name = "PUBLIC")]
+    Public,
 }
 
 #[pymethods]
@@ -126,14 +144,19 @@ impl AtorsBase {
         let Some(kwargs) = kwargs else {
             return Ok(());
         };
-        let members = slf.getattr(ATORS_MEMBERS)?;
+        let members = slf.getattr(ATORS_MEMBERS)?.cast_into::<PyMapping>()?;
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;
+            if !members.get_item(key)?.cast::<Member>()?.get().init {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Cannot pass an init value for member '{key}' because it is not marked as init."
+                )));
+            }
             match slf.setattr(key, v.clone()) {
                 Ok(_) => Ok(()),
                 Err(err) => {
                     // FIXME use cold_branch once Rust 1.95 is out
-                    let m = members.as_any().get_item(key)?.cast_into::<Member>()?;
+                    let m = members.get_item(key)?.cast_into::<Member>()?;
                     if let Some(r) = member_coerce_init(&m, slf, &v) {
                         let coerced_v = r?;
                         slf.setattr(key, coerced_v).map(|_| ())
@@ -143,6 +166,104 @@ impl AtorsBase {
                 }
             }?
         }
+        Ok(())
+    }
+
+    pub fn __getstate__<'py>(slf: &Bound<'py, AtorsBase>) -> PyResult<Bound<'py, PyDict>> {
+        let py = slf.py();
+        let cls = slf.get_type();
+
+        let members = cls
+            .getattr(intern!(py, ATORS_MEMBERS))?
+            .cast_into::<PyMapping>()?;
+
+        let state = PyDict::new(py);
+        for item in members.items()?.try_iter()? {
+            let item = item?;
+            let (name, member_obj) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+            let name_str: String = name.extract()?;
+            let member = member_obj.cast_into::<Member>()?;
+            let mb = member.get();
+
+            if mb.pickle
+                && let Some(value) = get_slot_owned(slf, mb.index())
+            {
+                state.set_item(&name_str, value.into_bound(py))?;
+            }
+        }
+
+        Ok(state)
+    }
+
+    pub fn __setstate__<'py>(
+        slf: &Bound<'py, AtorsBase>,
+        state: &Bound<'py, PyDict>,
+    ) -> PyResult<()> {
+        use crate::containers::{AtorsDict, AtorsList, AtorsSet};
+        use crate::validators::types::TypeValidator;
+
+        let py = slf.py();
+        let cls = slf.get_type();
+
+        let members = cls
+            .getattr(intern!(py, ATORS_MEMBERS))?
+            .cast_into::<PyMapping>()?;
+
+        // Validate all keys are known members
+        for (key, _) in state.iter() {
+            let key_str: String = key.extract()?;
+            if !members.contains(&key)? {
+                return Err(pyo3::exceptions::PyKeyError::new_err(format!(
+                    "Unknown member '{}' for {}",
+                    key_str,
+                    cls.name()?
+                )));
+            }
+        }
+
+        // Restore values
+        for (key, value) in state.iter() {
+            let member = members.get_item(&key)?.cast_into::<Member>()?;
+            let mb = member.get();
+
+            // For container members: restore metadata before slot assignment.
+            // `item_bv` is a `BoxedValidator(Box<Validator>)`; `item_bv.0` is the
+            // inner `Box<Validator>`, and `*item_bv.0` dereferences it to `Validator`.
+            match &mb.validator().type_validator {
+                TypeValidator::List {
+                    item: Some(item_bv),
+                } => {
+                    if let Ok(alist) = value.cast::<AtorsList>() {
+                        AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
+                    }
+                }
+                TypeValidator::Set {
+                    item: Some(item_bv),
+                } => {
+                    if let Ok(aset) = value.cast::<AtorsSet>() {
+                        AtorsSet::restore(aset, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_bv, val_bv)),
+                } => {
+                    if let Ok(adict) = value.cast::<AtorsDict>() {
+                        AtorsDict::restore(
+                            adict,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
+                _ => {}
+            }
+
+            // Write directly to slot, bypassing validation
+            set_slot(slf, mb.index(), &value);
+        }
+
         Ok(())
     }
 }
