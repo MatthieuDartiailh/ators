@@ -248,8 +248,9 @@ pub fn get_ators_args<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAn
         Some(generic) if generic.origin().is_some() => {
             PyTuple::new(py, generic.args().iter().map(|a| a.bind(py))).map(|t| t.into_any())
         }
-        None => Ok(py.None().into_bound(py)),
-        Some(_) => Ok(py.None().into_bound(py)),
+        // Unspecialized generic class: generic metadata is present for
+        // parameters, but there is no origin/args specialization yet.
+        None | Some(_) => Ok(py.None().into_bound(py)),
     }
 }
 
@@ -1235,7 +1236,7 @@ pub fn create_ators_subclass<'py>(
 
         // Resolve the init flag: honour an explicit user value, then fall back
         // to the name-based default (public → true, private → false).
-        mb.init.get_or_insert_with(|| !k.starts_with('_'));
+        let _ = mb.init.get_or_insert_with(|| !k.starts_with('_'));
         if mb.init == Some(true) {
             init_member_names.push(k.clone());
         }

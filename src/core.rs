@@ -154,14 +154,13 @@ impl AtorsBase {
             )));
         }
         if kwargs.len() < required_init_members.len() {
-            let missing = required_init_members
-                .iter()
-                .find(|name| !kwargs.contains(name.as_str()).unwrap_or(false))
-                .cloned()
-                .unwrap_or_else(|| "<unknown>".to_string());
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Missing required init value for member '{missing}'"
-            )));
+            for name in required_init_members {
+                if !kwargs.contains(name.as_str())? {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Missing required init value for member '{name}'"
+                    )));
+                }
+            }
         }
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;
