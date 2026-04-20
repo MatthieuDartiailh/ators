@@ -427,21 +427,29 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 /// * `None`  — the class is a non-specialised generic or a plain Ators class.
 /// * A `PyType` — the class is a specialised generic; the value is the origin.
 ///
-/// Returns `None` for non-Ators types (attribute absent), non-specialised
-/// classes (`None` value), or any unexpected value that is not a type.
+/// Returns `Ok(None)` for non-Ators types (attribute absent) or non-specialised
+/// classes (`None` value).  Returns `Err(TypeError)` if the attribute is set to
+/// a non-`None` value that is not a type (should never happen in practice, but
+/// guards against corrupted state).
 #[inline]
-fn get_ators_origin<'py>(cls: &Bound<'py, PyAny>) -> Option<Bound<'py, PyType>> {
-    let o = cls.getattr(intern!(cls.py(), ATORS_GENERIC_ORIGIN)).ok()?;
+fn get_ators_origin<'py>(cls: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyType>>> {
+    let o = match cls.getattr(intern!(cls.py(), ATORS_GENERIC_ORIGIN)) {
+        Ok(o) => o,
+        Err(_) => return Ok(None), // attribute absent — not an Ators class
+    };
     if o.is_none() {
-        return None;
+        return Ok(None);
     }
     // SAFETY: Only `PyType` objects are stored as `__ators_origin__` (set in
     // `create_ators_specialized_subclass`).  We double-check with
-    // `PyType_Check` before casting to keep this invariant explicit.
+    // `PyType_Check` and raise `TypeError` for any unexpected value.
     if unsafe { ffi::PyType_Check(o.as_ptr()) == 0 } {
-        return None;
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "__ators_origin__ must be a type or None, got {}",
+            o.get_type().qualname()?
+        )));
     }
-    Some(unsafe { o.cast_unchecked::<PyType>() }.clone())
+    Ok(Some(unsafe { o.cast_unchecked::<PyType>() }.clone()))
 }
 
 /// Core generic-subclass matching logic (no caching).
@@ -462,13 +470,13 @@ fn generic_subclass_match_impl<'py>(
     }
 
     // `cls` must be a specialised generic (non-None `__ators_origin__`).
-    let cls_origin = match get_ators_origin(cls.as_any()) {
+    let cls_origin = match get_ators_origin(cls.as_any())? {
         Some(o) => o,
         None => return Ok(false),
     };
 
     // `sub` must also be a specialised generic.
-    let sub_origin = match get_ators_origin(sub.as_any()) {
+    let sub_origin = match get_ators_origin(sub.as_any())? {
         Some(o) => o,
         None => return Ok(false),
     };
@@ -540,7 +548,7 @@ pub fn rust_subclasscheck<'py>(
     cls: &Bound<'py, PyType>,
     sub: &Bound<'py, PyType>,
 ) -> PyResult<bool> {
-    if get_ators_origin(cls.as_any()).is_some() {
+    if get_ators_origin(cls.as_any())?.is_some() {
         return generic_subclass_match_impl(cls, sub);
     }
     // Non-generic fallback: input types are already known; use the C-level
@@ -560,7 +568,7 @@ pub fn rust_instancecheck<'py>(
     instance: &Bound<'py, PyAny>,
 ) -> PyResult<bool> {
     let instance_type = instance.get_type();
-    if get_ators_origin(cls.as_any()).is_some() {
+    if get_ators_origin(cls.as_any())?.is_some() {
         return generic_subclass_match_impl(cls, &instance_type);
     }
     Ok(unsafe { ffi::PyType_IsSubtype(instance_type.as_type_ptr(), cls.as_type_ptr()) != 0 })
