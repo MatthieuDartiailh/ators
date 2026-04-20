@@ -18,6 +18,7 @@ use std::cell::UnsafeCell;
 
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
+use crate::meta::get_class_info;
 use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
@@ -82,15 +83,12 @@ impl AtorsBase {
     #[classmethod]
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
-        let slots_count = cls.getattr(intern!(py, ATORS_MEMBERS))?.len()?;
+        let class_info = get_class_info(cls)?;
+        let slots_count = class_info.members_by_name.len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
         // so later accesses can skip the critical section.
-        let is_observable = cls
-            .getattr(ATORS_OBSERVABLE)
-            .ok()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(false);
+        let is_observable = class_info.observable;
         if slots_count > (u8::MAX as usize) {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The class {} has more than 255 members which is not supported.",
@@ -546,7 +544,15 @@ pub fn get_member<'py>(
 /// Retrieve all members from an Ators objetc.
 #[pyfunction]
 pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
-    obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.copy()
+    let py = obj.py();
+    let members_obj = obj.getattr(ATORS_MEMBERS)?;
+    let members = members_obj.cast::<PyMapping>()?;
+    let copy = PyDict::new(py);
+    for item in members.items()?.try_iter()? {
+        let (k, v) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+        copy.set_item(k, v)?;
+    }
+    Ok(copy)
 }
 
 /// Retrieve all members with a specific metadata key and the value associated with it.
@@ -557,7 +563,10 @@ pub fn get_members_by_tag<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
     let members = PyDict::new(obj.py());
-    for (k, v) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
+    let class_members_obj = obj.getattr(ATORS_MEMBERS)?;
+    let class_members = class_members_obj.cast::<PyMapping>()?;
+    for item in class_members.items()?.try_iter()? {
+        let (k, v) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
         if let Some(m) = v.cast::<Member>()?.get().metadata()
             && m.contains_key(&tag)
         {
@@ -575,7 +584,10 @@ pub fn get_members_by_tag_and_value<'py>(
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
-    for (k, member) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
+    let class_members_obj = obj.getattr(ATORS_MEMBERS)?;
+    let class_members = class_members_obj.cast::<PyMapping>()?;
+    for item in class_members.items()?.try_iter()? {
+        let (k, member) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
         if let Some(m) = member.cast::<Member>()?.get().metadata()
             && m.contains_key(&tag)
             // If comparison fails the member should not be included
@@ -617,7 +629,7 @@ pub fn observe<'py>(
 
     let obj_type = obj.get_type();
     let members_obj = obj_type.getattr(ATORS_MEMBERS)?;
-    let members = members_obj.cast::<PyDict>()?;
+    let members = members_obj.cast::<PyMapping>()?;
     if !members.contains(&member_name)? {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
             "Unknown member '{member_name}'"

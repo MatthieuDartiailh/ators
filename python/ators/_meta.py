@@ -15,6 +15,13 @@ from ._ators import (
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
+    get_ators_args as _get_ators_args,
+    get_ators_frozen_flag as _get_ators_frozen_flag,
+    get_ators_init_member_names as _get_ators_init_member_names,
+    get_ators_members_by_name as _get_ators_members_by_name,
+    get_ators_origin as _get_ators_origin,
+    get_ators_specific_member_names as _get_ators_specific_member_names,
+    get_ators_type_params as _get_ators_type_params,
     rust_instancecheck as _rust_instancecheck,
     rust_subclasscheck as _rust_subclasscheck,
 )
@@ -42,7 +49,11 @@ class AtorsMeta(type):
 
     __ators_members__: Mapping[str, Member]
     __ators_specific_members__: frozenset[str]
-    __ators_freeze__: bool
+    __ators_init_members__: tuple[str, ...]
+    __ators_frozen__: bool
+    __ators_origin__: type | None
+    __ators_args__: tuple[type, ...] | None
+    __ators_type_params__: tuple[type, ...] | None
 
     def __new__(
         meta,
@@ -78,6 +89,34 @@ class AtorsMeta(type):
         if self.__ators_frozen__:
             freeze(new)
         return new
+
+    @property
+    def __ators_members__(cls) -> Mapping[str, Member]:
+        return _get_ators_members_by_name(cls)
+
+    @property
+    def __ators_specific_members__(cls) -> frozenset[str]:
+        return _get_ators_specific_member_names(cls)
+
+    @property
+    def __ators_init_members__(cls) -> tuple[str, ...]:
+        return _get_ators_init_member_names(cls)
+
+    @property
+    def __ators_frozen__(cls) -> bool:
+        return _get_ators_frozen_flag(cls)
+
+    @property
+    def __ators_origin__(cls) -> type | None:
+        return _get_ators_origin(cls)
+
+    @property
+    def __ators_args__(cls) -> tuple[type, ...] | None:
+        return _get_ators_args(cls)
+
+    @property
+    def __ators_type_params__(cls) -> tuple[type, ...] | None:
+        return _get_ators_type_params(cls)
 
     def __getitem__(self, params):
         return _create_ators_specialized_subclass(self, params)

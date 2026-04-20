@@ -54,6 +54,14 @@ def test_freezing(frozen, should_work):
     assert "Cannot modify" in e.exconly()
 
 
+def test_frozen_metadata_name_is_canonical():
+    class A(Ators, frozen=True):
+        a: int
+
+    assert A.__ators_frozen__ is True
+    assert not hasattr(A, "__ators_freeze__")
+
+
 class ForwardFrozenA(Ators, frozen=True):
     a: LateFrozenB
 

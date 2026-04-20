@@ -273,6 +273,13 @@ def test_generic_specialization_is_cached_class():
     assert int_box is not GenericBox[str]
 
 
+def test_specialized_class_exposes_generic_metadata():
+    int_box = GenericBox[int]
+    assert int_box.__ators_origin__ is GenericBox
+    assert int_box.__ators_args__ == (int,)
+    assert int_box.__ators_type_params__ == ()
+
+
 def test_full_and_stepwise_specialization_are_identical():
     U = TypeVar("U")
     direct = GenericPair[int, str]
