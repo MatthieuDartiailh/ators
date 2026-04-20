@@ -84,11 +84,11 @@ impl AtorsBase {
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
-        let slots_count = class_info.members_by_name.len();
+        let slots_count = class_info.members_by_name().len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
         // so later accesses can skip the critical section.
-        let is_observable = class_info.observable;
+        let is_observable = class_info.observable();
         if slots_count > (u8::MAX as usize) {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The class {} has more than 255 members which is not supported.",
@@ -142,10 +142,31 @@ impl AtorsBase {
         let Some(kwargs) = kwargs else {
             return Ok(());
         };
-        let members = slf.getattr(ATORS_MEMBERS)?.cast_into::<PyMapping>()?;
+        let py = slf.py();
+        let class_info = get_class_info(&slf.get_type())?;
+        let init_members = class_info.init_member_names();
+        let required_init_members = class_info.required_init_member_names();
+        if kwargs.len() > init_members.len() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Too many init values passed: got {}, expected at most {}",
+                kwargs.len(),
+                init_members.len()
+            )));
+        }
+        if kwargs.len() < required_init_members.len() {
+            let missing = required_init_members
+                .iter()
+                .find(|name| !kwargs.contains(name.as_str()).unwrap_or(false))
+                .cloned()
+                .unwrap_or_else(|| "<unknown>".to_string());
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Missing required init value for member '{missing}'"
+            )));
+        }
         for (k, v) in kwargs.iter() {
             let key = k.cast::<PyString>()?;
-            if !members.get_item(key)?.cast::<Member>()?.get().init {
+            let key_name: String = key.extract()?;
+            if !init_members.iter().any(|n| n == &key_name) {
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                     "Cannot pass an init value for member '{key}' because it is not marked as init."
                 )));
@@ -154,7 +175,16 @@ impl AtorsBase {
                 Ok(_) => Ok(()),
                 Err(err) => {
                     // FIXME use cold_branch once Rust 1.95 is out
-                    let m = members.get_item(key)?.cast_into::<Member>()?;
+                    let m = class_info
+                        .members_by_name()
+                        .get(&key_name)
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyAttributeError::new_err(format!(
+                                "Unknown member '{key_name}'"
+                            ))
+                        })?
+                        .bind(py)
+                        .clone();
                     if let Some(r) = member_coerce_init(&m, slf, &v) {
                         let coerced_v = r?;
                         slf.setattr(key, coerced_v).map(|_| ())
@@ -535,22 +565,24 @@ pub fn get_member<'py>(
     obj: Bound<'py, PyAny>,
     member_name: Bound<'py, PyString>,
 ) -> PyResult<Bound<'py, Member>> {
-    Ok(obj
-        .getattr(ATORS_MEMBERS)?
-        .get_item(member_name)?
-        .cast_into()?)
+    let info = get_class_info(&obj.get_type())?;
+    let name: String = member_name.extract()?;
+    info.members_by_name()
+        .get(&name)
+        .map(|m| m.bind(obj.py()).clone())
+        .ok_or_else(|| {
+            pyo3::exceptions::PyAttributeError::new_err(format!("Unknown member '{name}'"))
+        })
 }
 
 /// Retrieve all members from an Ators objetc.
 #[pyfunction]
 pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
-    let members_obj = obj.getattr(ATORS_MEMBERS)?;
-    let members = members_obj.cast::<PyMapping>()?;
     let copy = PyDict::new(py);
-    for item in members.items()?.try_iter()? {
-        let (k, v) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-        copy.set_item(k, v)?;
+    let info = get_class_info(&obj.get_type())?;
+    for (name, member) in info.members_by_name() {
+        copy.set_item(name, member.bind(py))?;
     }
     Ok(copy)
 }
@@ -563,14 +595,13 @@ pub fn get_members_by_tag<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
     let members = PyDict::new(obj.py());
-    let class_members_obj = obj.getattr(ATORS_MEMBERS)?;
-    let class_members = class_members_obj.cast::<PyMapping>()?;
-    for item in class_members.items()?.try_iter()? {
-        let (k, v) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-        if let Some(m) = v.cast::<Member>()?.get().metadata()
+    let info = get_class_info(&obj.get_type())?;
+    for (name, v) in info.members_by_name() {
+        let member = v.bind(py);
+        if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
         {
-            members.set_item(&k, (v.clone(), m[&tag].clone_ref(py)))?;
+            members.set_item(name, (member, m[&tag].clone_ref(py)))?;
         }
     }
     Ok(members)
@@ -584,16 +615,16 @@ pub fn get_members_by_tag_and_value<'py>(
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
-    let class_members_obj = obj.getattr(ATORS_MEMBERS)?;
-    let class_members = class_members_obj.cast::<PyMapping>()?;
-    for item in class_members.items()?.try_iter()? {
-        let (k, member) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-        if let Some(m) = member.cast::<Member>()?.get().metadata()
+    let py = obj.py();
+    let info = get_class_info(&obj.get_type())?;
+    for (name, member) in info.members_by_name() {
+        let member = member.bind(py);
+        if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
             // If comparison fails the member should not be included
             && value.as_any().eq(&m[&tag]).unwrap_or(false)
         {
-            members.set_item(&k, member.clone())?;
+            members.set_item(name, member)?;
         }
     }
     Ok(members)
@@ -627,10 +658,8 @@ pub fn observe<'py>(
         ));
     }
 
-    let obj_type = obj.get_type();
-    let members_obj = obj_type.getattr(ATORS_MEMBERS)?;
-    let members = members_obj.cast::<PyMapping>()?;
-    if !members.contains(&member_name)? {
+    let class_info = get_class_info(&obj.get_type())?;
+    if !class_info.members_by_name().contains_key(&member_name) {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
             "Unknown member '{member_name}'"
         )));

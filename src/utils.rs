@@ -177,8 +177,7 @@ impl GenericAttributesMap {
 }
 
 use crate::core::AtorsBase;
-
-use crate::meta::ATORS_FROZEN;
+use crate::meta::get_class_info;
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
 #[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]
@@ -257,10 +256,9 @@ impl TypeMutabilityMap {
     pub fn get_type_mutability<'py>(&self, type_: &Bound<'py, PyType>) -> Mutability {
         let py = type_.py();
         if let Ok(t) = type_.cast::<AtorsBase>() {
-            if t.getattr(ATORS_FROZEN)
-                .expect("Subclass of AtorsBase must have __ators_frozen__ set")
-                .extract::<bool>()
-                .expect("__ators_frozen__ should always be a bool")
+            if get_class_info(&t.get_type())
+                .expect("Subclass of AtorsBase must have class info")
+                .frozen()
             {
                 Mutability::Immutable
             } else {
