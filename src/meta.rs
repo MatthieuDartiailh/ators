@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pyo3::{
-    Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
+    Bound, Py, PyAny, PyErr, PyResult, ffi, intern, pyfunction,
     sync::critical_section::with_critical_section,
     types::{
         IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods,
@@ -261,6 +261,64 @@ fn enforce_narrower_typevar_bound(
     Ok(())
 }
 
+/// Return `true` when `param` is an instance of `typing.ForwardRef`.
+fn is_forward_ref(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = param.py();
+    // FIXME: importing `typing` every call is wasteful; cache on module state
+    // once pyo3 makes that ergonomic.
+    let typing = py.import(intern!(py, "typing"))?;
+    param.is_instance(&typing.getattr(intern!(py, "ForwardRef"))?)
+}
+
+/// Return `true` when `param` is `typing.Any`.
+fn is_any_type(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = param.py();
+    let typing = py.import(intern!(py, "typing"))?;
+    let any = typing.getattr(intern!(py, "Any"))?;
+    Ok(param.is(&any))
+}
+
+/// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
+///
+/// Rules (mirroring PEP 484 compatibility):
+/// - If `typevar` has a bound `B`, `arg` must be a subclass of `B`.
+/// - If `typevar` has constraints `[C1, C2, …]`, `arg` must be a subclass of
+///   at least one constraint.
+/// - An unconstrained, unbound TypeVar is a wildcard and matches anything.
+fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = typevar.py();
+
+    // Bounded TypeVar: arg must be a subclass of the bound (checked first as more common).
+    let bound = typevar.getattr(intern!(py, "__bound__"))?;
+    if !bound.is_none() {
+        if let (Ok(arg_t), Ok(bound_t)) = (arg.cast::<PyType>(), bound.cast::<PyType>()) {
+            return arg_t.is_subclass(bound_t);
+        }
+        // Non-type bound: fall back to equality.
+        return arg.eq(&bound);
+    }
+
+    // Constrained TypeVar: arg must be subclass of (at least) one constraint.
+    let constraints = typevar.getattr(intern!(py, "__constraints__"))?;
+    let constraints_tuple = constraints.cast_into::<PyTuple>()?;
+    if !constraints_tuple.is_empty() {
+        for constraint in constraints_tuple.iter() {
+            if arg.is(&constraint) {
+                return Ok(true);
+            }
+            if let (Ok(arg_t), Ok(con_t)) = (arg.cast::<PyType>(), constraint.cast::<PyType>())
+                && arg_t.is_subclass(con_t)?
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
+    // Unconstrained, unbound TypeVar: wildcard.
+    Ok(true)
+}
+
 /// Verify that `arg` (a concrete type or TypeVar) is compatible with the
 /// constraints declared on the `parent` TypeVar.
 ///
@@ -286,7 +344,7 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
         for constraint in parent_constraints_tuple.iter() {
             let within = if let (Ok(t), Ok(c)) = (ty.cast::<PyType>(), constraint.cast::<PyType>())
             {
-                t.is_subclass(c)?
+                t.is_subclass(c.as_any())?
             } else {
                 let builtins = py.import(intern!(py, "builtins"))?;
                 let issubclass = builtins.getattr(intern!(py, "issubclass"))?;
@@ -362,14 +420,168 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
     Ok(())
 }
 
+/// Retrieve the `__ators_origin__` attribute of `cls` if it is set and is a
+/// non-`None` `PyType`.
+///
+/// `__ators_origin__` is always present on Ators subclasses:
+/// * `None`  — the class is a non-specialised generic or a plain Ators class.
+/// * A `PyType` — the class is a specialised generic; the value is the origin.
+///
+/// Returns `Ok(None)` for non-Ators types (attribute absent) or non-specialised
+/// classes (`None` value).  Returns `Err(TypeError)` if the attribute is set to
+/// a non-`None` value that is not a type (should never happen in practice, but
+/// guards against corrupted state).
+#[inline]
+fn get_ators_origin<'py>(cls: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyType>>> {
+    let o = match cls.getattr(intern!(cls.py(), ATORS_GENERIC_ORIGIN)) {
+        Ok(o) => o,
+        Err(_) => return Ok(None), // attribute absent — not an Ators class
+    };
+    if o.is_none() {
+        return Ok(None);
+    }
+    // SAFETY: Only `PyType` objects are stored as `__ators_origin__` (set in
+    // `create_ators_specialized_subclass`).  We double-check with
+    // `PyType_Check` and raise `TypeError` for any unexpected value.
+    if unsafe { ffi::PyType_Check(o.as_ptr()) == 0 } {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "__ators_origin__ must be a type or None, got {}",
+            o.get_type().qualname()?
+        )));
+    }
+    Ok(Some(unsafe { o.cast_unchecked::<PyType>() }.clone()))
+}
+
+/// Core generic-subclass matching logic (no caching).
+///
+/// Returns `true` when `sub` is generically compatible with the specialised
+/// generic `cls`.  Both `cls` and `sub` are expected to be Ators-specialised
+/// classes (i.e. they carry `__ators_origin__` and `__ators_args__`).
+#[cold]
+fn generic_subclass_match_impl<'py>(
+    cls: &Bound<'py, PyType>,
+    sub: &Bound<'py, PyType>,
+) -> PyResult<bool> {
+    let py = cls.py();
+
+    // Identity short-circuit.
+    if sub.is(cls) {
+        return Ok(true);
+    }
+
+    // `cls` must be a specialised generic (non-None `__ators_origin__`).
+    let cls_origin = match get_ators_origin(cls.as_any())? {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+
+    // `sub` must also be a specialised generic.
+    let sub_origin = match get_ators_origin(sub.as_any())? {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+
+    // Origins must be compatible: same object, or sub_origin is a (normal)
+    // subclass of cls_origin.
+    if !sub_origin.is(&cls_origin) {
+        // Both origins are already PyType; use C-level check to avoid going
+        // through Python dispatch (which would re-enter __subclasscheck__).
+        if unsafe { ffi::PyType_IsSubtype(sub_origin.as_type_ptr(), cls_origin.as_type_ptr()) == 0 }
+        {
+            return Ok(false);
+        }
+    }
+
+    // Retrieve argument tuples.
+    let sub_args = sub
+        .getattr(intern!(py, ATORS_GENERIC_ARGS))?
+        .cast_into::<PyTuple>()?;
+    let cls_args = cls
+        .getattr(intern!(py, ATORS_GENERIC_ARGS))?
+        .cast_into::<PyTuple>()?;
+
+    // Arity mismatch => False.
+    if sub_args.len() != cls_args.len() {
+        return Ok(false);
+    }
+
+    // Match each argument position.
+    for (sub_arg, cls_arg) in sub_args.iter().zip(cls_args.iter()) {
+        // `Any` on the RHS matches everything.
+        if is_any_type(&cls_arg)? {
+            continue;
+        }
+
+        // TypeVar on the RHS acts as a wildcard (subject to bound/constraints).
+        if is_type_var(&cls_arg)? {
+            if !typevar_matches_arg(&cls_arg, &sub_arg)? {
+                return Ok(false);
+            }
+            continue;
+        }
+
+        // Concrete type: sub_arg must be identical or a subclass.
+        if sub_arg.is(&cls_arg) {
+            continue;
+        }
+        match (sub_arg.cast::<PyType>(), cls_arg.cast::<PyType>()) {
+            (Ok(s), Ok(c)) => {
+                if !s.is_subclass(c)? {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+
+    Ok(true)
+}
+
+/// Generic-aware runtime subclass check (Rust side).
+///
+/// Assigned as `AtorsMeta.__subclasscheck__`.  When `cls` is a specialised
+/// Ators generic (carries a non-`None` `__ators_origin__`), the generic match
+/// engine is used.  Otherwise a direct C-level type hierarchy check is used to
+/// avoid recursion through Python's `__subclasscheck__` dispatch.
+#[pyfunction]
+pub fn rust_subclasscheck<'py>(
+    cls: &Bound<'py, PyType>,
+    sub: &Bound<'py, PyType>,
+) -> PyResult<bool> {
+    if get_ators_origin(cls.as_any())?.is_some() {
+        return generic_subclass_match_impl(cls, sub);
+    }
+    // Non-generic fallback: input types are already known; use the C-level
+    // subtype check to avoid going back through Python's __subclasscheck__
+    // dispatch (which would recurse here).
+    Ok(unsafe { ffi::PyType_IsSubtype(sub.as_type_ptr(), cls.as_type_ptr()) != 0 })
+}
+
+/// Generic-aware runtime instance check (Rust side).
+///
+/// Assigned as `AtorsMeta.__instancecheck__`.  When `cls` is a specialised
+/// Ators generic, the generic match engine is applied to `type(instance)`.
+/// Otherwise a C-level subtype check is used.
+#[pyfunction]
+pub fn rust_instancecheck<'py>(
+    cls: &Bound<'py, PyType>,
+    instance: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    let instance_type = instance.get_type();
+    if get_ators_origin(cls.as_any())?.is_some() {
+        return generic_subclass_match_impl(cls, &instance_type);
+    }
+    Ok(unsafe { ffi::PyType_IsSubtype(instance_type.as_type_ptr(), cls.as_type_ptr()) != 0 })
+}
+
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
-    cls: Bound<'py, PyType>,
-    params: Bound<'py, PyAny>,
+    cls: &Bound<'py, PyType>,
+    params: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
 
-    let exposed_params = get_generic_params_obj(&cls)?;
+    let exposed_params = get_generic_params_obj(cls)?;
 
     if exposed_params.is_empty() {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -379,7 +591,7 @@ pub fn create_ators_specialized_subclass<'py>(
     }
 
     let params_tuple = if params.is_instance_of::<PyTuple>() {
-        params.cast_into::<PyTuple>()?
+        params.cast::<PyTuple>()?.clone()
     } else {
         PyTuple::new(py, [params])?
     };
@@ -393,6 +605,17 @@ pub fn create_ators_specialized_subclass<'py>(
         )));
     }
 
+    // ForwardRef is forbidden at specialisation time: it cannot be resolved
+    // without a concrete namespace and would silently produce wrong results.
+    for arg in params_tuple.iter() {
+        if is_forward_ref(&arg)? {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "ForwardRef is not supported in Ators generic specialisations; \
+                 use concrete types or TypeVar instead",
+            ));
+        }
+    }
+
     // If all type var are the type var involved in the definition of the class,
     // we can skip the specialization and return the class itself.
     let fully_passthrough = exposed_params
@@ -400,14 +623,16 @@ pub fn create_ators_specialized_subclass<'py>(
         .zip(params_tuple.iter())
         .all(|(tp, p)| tp.is(&p));
     if fully_passthrough {
-        return Ok(cls.into_any());
+        return Ok(cls.clone().into_any());
     }
 
-    let origin = match cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN)) {
-        // cls is already a specialization – use its recorded origin.
-        Ok(o) => o.cast_into::<PyType>()?,
+    let origin_attr = cls.getattr(intern!(py, ATORS_GENERIC_ORIGIN))?;
+    let origin = if origin_attr.is_none() {
         // cls is the first time it is being specialized; it IS the origin.
-        Err(_) => cls.clone(),
+        cls.clone()
+    } else {
+        // cls is already a specialization – use its recorded origin.
+        origin_attr.cast_into::<PyType>()?
     };
     // Always bind against the origin definition so repeated partial
     // specializations compose transitively.
@@ -1085,6 +1310,11 @@ pub fn create_ators_subclass<'py>(
     {
         cls.setattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS), PyDict::new(py))?;
     }
+
+    // Set __ators_origin__ to None on every non-specialised Ators subclass so
+    // that rust_subclasscheck / rust_instancecheck can test `is_none()` rather
+    // than catching an AttributeError (which is far more expensive).
+    cls.setattr(intern!(py, ATORS_GENERIC_ORIGIN), py.None())?;
 
     Ok(cls)
 }
