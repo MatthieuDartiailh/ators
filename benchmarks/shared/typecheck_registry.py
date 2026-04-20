@@ -165,7 +165,7 @@ def _make_py_issubclass_negative() -> Callable[[], None]:
 
 
 def _make_py_isinstance_negative() -> Callable[[], None]:
-    inst, base = _py_child_inst, _PyChild.__mro__[-1]  # object — True? No, use unrelated
+    inst = _py_child_inst  # _PyChild instance checked against int — False
 
     def _op() -> None:
         isinstance(inst, int)
@@ -210,13 +210,11 @@ def _make_generic_concrete_isinstance_negative() -> Callable[[], None]:
 
 
 def _make_generic_typevar_issubclass_negative() -> Callable[[], None]:
-    lhs, rhs = _G_int_str, _G_T_str  # rhs is _AtorsG[T, str]; lhs matches → test origin mismatch
-
-    # Use a non-matching lhs: _G_int_int vs _G_T_str (str != int) — False
-    lhs2, rhs2 = _G_int_int, _G_T_str
+    # _G_int_int vs _G_T_str: second arg int != str constraint — False
+    lhs, rhs = _G_int_int, _G_T_str
 
     def _op() -> None:
-        issubclass(lhs2, rhs2)
+        issubclass(lhs, rhs)
 
     return _op
 
