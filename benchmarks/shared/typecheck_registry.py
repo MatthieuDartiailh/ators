@@ -72,8 +72,10 @@ _T, _U = _AtorsG.__type_params__
 _G_int_str = _AtorsG[int, str]
 _G_T_str = _AtorsG[_T, str]
 _G_T_U = _AtorsG[_T, _U]
+_G_int_int = _AtorsG[int, int]
 
 _g_int_str_inst = _G_int_str()
+_g_int_int_inst = _G_int_int()
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +148,81 @@ def _make_generic_typevar_issubclass() -> Callable[[], None]:
 
 def _make_generic_typevar_isinstance() -> Callable[[], None]:
     inst, rhs = _g_int_str_inst, _G_T_str
+
+    def _op() -> None:
+        isinstance(inst, rhs)
+
+    return _op
+
+
+def _make_py_issubclass_negative() -> Callable[[], None]:
+    child, base = _PyBase, _PyChild  # reversed — False
+
+    def _op() -> None:
+        issubclass(child, base)
+
+    return _op
+
+
+def _make_py_isinstance_negative() -> Callable[[], None]:
+    inst, base = _py_child_inst, _PyChild.__mro__[-1]  # object — True? No, use unrelated
+
+    def _op() -> None:
+        isinstance(inst, int)
+
+    return _op
+
+
+def _make_ators_issubclass_negative() -> Callable[[], None]:
+    child, base = _AtorsBase, _AtorsChild  # reversed — False
+
+    def _op() -> None:
+        issubclass(child, base)
+
+    return _op
+
+
+def _make_ators_isinstance_negative() -> Callable[[], None]:
+    inst, base = _ators_child_inst, int  # different type — False
+
+    def _op() -> None:
+        isinstance(inst, base)
+
+    return _op
+
+
+def _make_generic_concrete_issubclass_negative() -> Callable[[], None]:
+    lhs, rhs = _G_int_str, _G_int_int  # arg mismatch — False
+
+    def _op() -> None:
+        issubclass(lhs, rhs)
+
+    return _op
+
+
+def _make_generic_concrete_isinstance_negative() -> Callable[[], None]:
+    inst, rhs = _g_int_int_inst, _G_int_str  # arg mismatch — False
+
+    def _op() -> None:
+        isinstance(inst, rhs)
+
+    return _op
+
+
+def _make_generic_typevar_issubclass_negative() -> Callable[[], None]:
+    lhs, rhs = _G_int_str, _G_T_str  # rhs is _AtorsG[T, str]; lhs matches → test origin mismatch
+
+    # Use a non-matching lhs: _G_int_int vs _G_T_str (str != int) — False
+    lhs2, rhs2 = _G_int_int, _G_T_str
+
+    def _op() -> None:
+        issubclass(lhs2, rhs2)
+
+    return _op
+
+
+def _make_generic_typevar_isinstance_negative() -> Callable[[], None]:
+    inst, rhs = _g_int_int_inst, _G_T_str  # int != str constraint — False
 
     def _op() -> None:
         isinstance(inst, rhs)
@@ -232,6 +309,63 @@ _CASES: list[BenchmarkCase] = [
         implementation="ators_generic_typevar_both",
         benchmark_name="typecheck/issubclass/ators_generic_typevar_both",
         operation_factory=_make_generic_typevar_both_issubclass,
+    ),
+    # --- negative (False) outcomes ---
+    BenchmarkCase(
+        family="typecheck",
+        group="issubclass",
+        implementation="py_negative",
+        benchmark_name="typecheck/issubclass/py_negative",
+        operation_factory=_make_py_issubclass_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="isinstance",
+        implementation="py_negative",
+        benchmark_name="typecheck/isinstance/py_negative",
+        operation_factory=_make_py_isinstance_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="issubclass",
+        implementation="ators_negative",
+        benchmark_name="typecheck/issubclass/ators_negative",
+        operation_factory=_make_ators_issubclass_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="isinstance",
+        implementation="ators_negative",
+        benchmark_name="typecheck/isinstance/ators_negative",
+        operation_factory=_make_ators_isinstance_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="issubclass",
+        implementation="ators_generic_concrete_negative",
+        benchmark_name="typecheck/issubclass/ators_generic_concrete_negative",
+        operation_factory=_make_generic_concrete_issubclass_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="isinstance",
+        implementation="ators_generic_concrete_negative",
+        benchmark_name="typecheck/isinstance/ators_generic_concrete_negative",
+        operation_factory=_make_generic_concrete_isinstance_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="issubclass",
+        implementation="ators_generic_typevar_negative",
+        benchmark_name="typecheck/issubclass/ators_generic_typevar_negative",
+        operation_factory=_make_generic_typevar_issubclass_negative,
+    ),
+    BenchmarkCase(
+        family="typecheck",
+        group="isinstance",
+        implementation="ators_generic_typevar_negative",
+        benchmark_name="typecheck/isinstance/ators_generic_typevar_negative",
+        operation_factory=_make_generic_typevar_isinstance_negative,
     ),
 ]
 
