@@ -1236,7 +1236,9 @@ pub fn create_ators_subclass<'py>(
 
         // Resolve the init flag: honour an explicit user value, then fall back
         // to the name-based default (public → true, private → false).
-        let _ = mb.init.get_or_insert_with(|| !k.starts_with('_'));
+        if mb.init.is_none() {
+            mb.init = Some(!k.starts_with('_'));
+        }
         if mb.init == Some(true) {
             init_member_names.push(k.clone());
         }
@@ -1535,13 +1537,6 @@ pub fn create_ators_subclass<'py>(
             Bound::new(py, class_mutability)?,
         )?;
 
-        // Initialize the specialization cache on generic classes so it always
-        // lives on the origin (non-specialized) class. This ensures that
-        // `A[int, str]` and `A[int][str]` resolve to the same class object.
-        if !get_generic_params_obj(&cls)?.is_empty() {
-            cls.setattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS), PyDict::new(py))?;
-            let _ = get_generic_params_obj(&cls)?;
-        }
         Ok(())
     })();
     if let Err(err) = post_create_result {
@@ -1549,15 +1544,16 @@ pub fn create_ators_subclass<'py>(
         return Err(err);
     }
 
+    // Initialize specialization cache once for generic classes so it always
+    // lives on the origin (non-specialized) class.
+    let generic_params = get_generic_params_obj(&cls)?;
     let key = class_key(&cls);
-    let generic = if !get_generic_params_obj(&cls)?.is_empty() {
+    let generic = if !generic_params.is_empty() {
+        cls.setattr(intern!(py, ATORS_GENERIC_SPECIALIZATIONS), PyDict::new(py))?;
         Some(AtorsGenericInfo::new(
             None,
             Vec::new(),
-            get_generic_params_obj(&cls)?
-                .iter()
-                .map(|p| p.unbind())
-                .collect(),
+            generic_params.iter().map(|p| p.unbind()).collect(),
         ))
     } else {
         None
