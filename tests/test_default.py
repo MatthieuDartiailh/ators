@@ -212,3 +212,121 @@ def test_warn_on_multiple_setting_of_default():
 
         class A(Ators):
             a: int = member().default(Default.Call(lambda: 1)).default(1)
+
+
+# ---------------------------------------------------------------------------
+# Constructor kwargs: default= and default_factory=
+# ---------------------------------------------------------------------------
+
+
+def test_member_ctor_default_raw_value_sets_static_behavior():
+    """member(default=x) should behave identically to member().default(x)."""
+
+    class A(Ators):
+        a: int = member(default=42)
+
+    assert A().a == 42
+
+
+def test_member_ctor_default_none_is_explicit():
+    """member(default=None) should set None as the static default, not NoDefault."""
+
+    class A(Ators):
+        a: int | None = member(default=None)
+
+    assert A().a is None
+
+
+def test_member_ctor_default_factory_sets_call_behavior():
+    """member(default_factory=f) should call the factory and cache the result."""
+    i = 0
+
+    def factory():
+        nonlocal i
+        i += 1
+        return 99
+
+    class A(Ators):
+        a = member(default_factory=factory)
+
+    a = A()
+    assert a.a == 99
+    assert i == 1
+    # Second access should use cached value, not call factory again.
+    assert a.a == 99
+    assert i == 1
+
+
+def test_member_ctor_default_factory_rejects_wrong_arity():
+    """default_factory must accept zero arguments."""
+    with pytest.raises(ValueError) as exc_info:
+
+        class A(Ators):
+            a = member(default_factory=lambda x: x)
+
+    assert "callable taking 0" in exc_info.exconly()
+
+
+def test_member_ctor_default_factory_rejects_non_callable():
+    """default_factory must be callable."""
+    with pytest.raises((TypeError, ValueError)):
+
+        class A(Ators):
+            a = member(default_factory=42)
+
+
+def test_member_ctor_default_and_factory_conflict_raises_typeerror():
+    """Specifying both default and default_factory must raise TypeError."""
+    with pytest.raises(TypeError) as exc_info:
+        member(default=1, default_factory=lambda: 1)
+
+    assert "default" in exc_info.exconly()
+    assert "default_factory" in exc_info.exconly()
+
+
+def test_member_ctor_default_rejects_defaultbehavior_instance():
+    """Passing a DefaultBehavior instance to default= must raise TypeError."""
+    with pytest.raises(TypeError) as exc_info:
+        member(default=Default.Call(lambda: 1))
+
+    assert (
+        "DefaultBehavior" in exc_info.exconly() or "plain values" in exc_info.exconly()
+    )
+
+
+def test_member_ctor_default_then_chain_warns():
+    """Calling .default() on a builder that already has a ctor default warns."""
+    with pytest.warns(UserWarning):
+
+        class A(Ators):
+            a: int = member(default=1).default(2)
+
+
+def test_member_ctor_default_inherits():
+    """Constructor-set default propagates through .inherit() in subclasses."""
+
+    class A(Ators):
+        a: int = member(default=7)
+
+    class B(A):
+        a = member().inherit()
+
+    assert B().a == 7
+
+
+def test_member_ctor_default_factory_inherits():
+    """Constructor-set default_factory propagates through .inherit() in subclasses."""
+    i = 0
+
+    def factory():
+        nonlocal i
+        i += 1
+        return 55
+
+    class A(Ators):
+        a = member(default_factory=factory)
+
+    class B(A):
+        a = member().inherit()
+
+    assert B().a == 55
