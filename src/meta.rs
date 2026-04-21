@@ -8,21 +8,20 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, ffi, intern, pyfunction,
-    sync::PyOnceLock,
     sync::critical_section::with_critical_section,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFunction, PyListMethods,
-        PyMapping, PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods,
-        PyType, PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFunction, PyListMethods, PyMapping,
+        PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType,
+        PyTypeMethods,
     },
 };
 
-use crate::class_info::{AtorsClassInfo, AtorsGenericInfo};
+use crate::class_info::{AtorsClassInfo, AtorsGenericInfo, get_class_info};
 use crate::member::{
     DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
 };
@@ -36,231 +35,6 @@ use crate::{
     core::{AtorsBase, ClassMutability, PicklePolicy},
     member::PreGetattrBehavior,
 };
-
-struct ClassInfoStore {
-    definitive: HashMap<usize, Arc<AtorsClassInfo>>,
-    temporary: HashMap<String, Arc<AtorsClassInfo>>,
-}
-
-impl ClassInfoStore {
-    fn new() -> Self {
-        Self {
-            definitive: HashMap::new(),
-            temporary: HashMap::new(),
-        }
-    }
-}
-
-static CLASS_INFO_STORE: PyOnceLock<RwLock<ClassInfoStore>> = PyOnceLock::new();
-
-#[inline]
-fn get_class_info_store<'py>(py: pyo3::Python<'py>) -> &'py RwLock<ClassInfoStore> {
-    CLASS_INFO_STORE.get_or_init(py, || RwLock::new(ClassInfoStore::new()))
-}
-
-#[inline]
-fn class_key(cls: &Bound<'_, PyType>) -> usize {
-    cls.as_ptr().addr()
-}
-
-#[inline]
-fn class_fqname<'py>(cls: &Bound<'py, PyType>) -> PyResult<String> {
-    let py = cls.py();
-    let module: String = cls.getattr(intern!(py, "__module__"))?.extract()?;
-    let qualname: String = cls.getattr(intern!(py, "__qualname__"))?.extract()?;
-    Ok(format!("{module}.{qualname}"))
-}
-
-#[inline]
-fn class_fqname_from_inputs<'py>(
-    name: &Bound<'py, PyString>,
-    dct: &Bound<'py, PyDict>,
-) -> PyResult<String> {
-    let py = name.py();
-    let module = dct
-        .get_item(intern!(py, "__module__"))?
-        .map_or(Ok(String::from("<unknown>")), |m| m.extract::<String>())?;
-    let qualname = dct
-        .get_item(intern!(py, "__qualname__"))?
-        .map_or_else(|| name.extract::<String>(), |q| q.extract::<String>())?;
-    Ok(format!("{module}.{qualname}"))
-}
-
-#[inline]
-fn insert_temp_class_info(py: pyo3::Python<'_>, fqname: String, info: Arc<AtorsClassInfo>) {
-    let store = get_class_info_store(py);
-    store
-        .write()
-        .expect("Class info store write lock poisoned")
-        .temporary
-        .insert(fqname, info);
-}
-
-#[inline]
-fn remove_temp_class_info(py: pyo3::Python<'_>, fqname: &str) {
-    let store = get_class_info_store(py);
-    store
-        .write()
-        .expect("Class info store write lock poisoned")
-        .temporary
-        .remove(fqname);
-}
-
-#[inline]
-fn transfer_temp_to_definitive(
-    py: pyo3::Python<'_>,
-    fqname: &str,
-    cls: &Bound<'_, PyType>,
-) -> PyResult<()> {
-    let key = class_key(cls);
-    let store = get_class_info_store(py);
-    let mut b = store.write().expect("Class info store write lock poisoned");
-    let info = b.temporary.remove(fqname).ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "Missing temporary class info for {fqname}"
-        ))
-    })?;
-    b.definitive.insert(key, info);
-    Ok(())
-}
-
-#[inline]
-fn remove_definitive_class_info(py: pyo3::Python<'_>, cls: &Bound<'_, PyType>) {
-    let key = class_key(cls);
-    let store = get_class_info_store(py);
-    store
-        .write()
-        .expect("Class info store write lock poisoned")
-        .definitive
-        .remove(&key);
-}
-
-#[inline]
-fn try_get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Option<Arc<AtorsClassInfo>>> {
-    let key = class_key(cls);
-    let store = get_class_info_store(cls.py());
-    if let Some(info) = store
-        .read()
-        .expect("Class info store read lock poisoned")
-        .definitive
-        .get(&key)
-        .cloned()
-    {
-        return Ok(Some(info));
-    }
-
-    let fqname = class_fqname(cls)?;
-    Ok(store
-        .read()
-        .expect("Class info store read lock poisoned")
-        .temporary
-        .get(&fqname)
-        .cloned())
-}
-
-#[inline]
-pub(crate) fn get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<AtorsClassInfo>> {
-    if let Some(info) = try_get_class_info(cls)? {
-        Ok(info)
-    } else {
-        let fqname = class_fqname(cls)?;
-        Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "No Ators class info registered for {fqname}"
-        )))
-    }
-}
-
-fn mapping_proxy_from_members<'py>(
-    py: pyo3::Python<'py>,
-    members_dict: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
-    py.import(intern!(py, "types"))?
-        .getattr(intern!(py, "MappingProxyType"))?
-        .call1((members_dict,))
-}
-
-#[pyfunction]
-pub fn get_ators_members_by_name<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let info = get_class_info(cls)?;
-    let members_dict = info.members_dict().bind(cls.py());
-    mapping_proxy_from_members(cls.py(), members_dict)
-}
-
-#[pyfunction]
-pub fn get_ators_specific_member_names<'py>(
-    cls: &Bound<'py, PyType>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let py = cls.py();
-    let info = get_class_info(cls)?;
-    Ok(PyFrozenSet::new(py, info.specific_member_names())?.into_any())
-}
-
-#[pyfunction]
-pub fn get_ators_init_member_names<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let info = get_class_info(cls)?;
-    let init_member_names: Vec<&String> = info
-        .required_init_member_names()
-        .iter()
-        .chain(info.optional_init_member_names().iter())
-        .collect();
-    Ok(PyTuple::new(cls.py(), init_member_names)?.into_any())
-}
-
-#[pyfunction]
-pub fn get_ators_frozen_flag(cls: &Bound<'_, PyType>) -> PyResult<bool> {
-    Ok(get_class_info(cls)?.frozen())
-}
-
-#[pyfunction]
-pub fn get_ators_origin<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let py = cls.py();
-    let info = get_class_info(cls)?;
-    Ok(info
-        .generic()
-        .and_then(|generic| generic.origin())
-        .map_or_else(
-            || py.None().into_bound(py),
-            |origin| origin.bind(py).clone().into_any(),
-        ))
-}
-
-#[pyfunction]
-pub fn get_ators_args<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let py = cls.py();
-    let info = get_class_info(cls)?;
-    match info.generic() {
-        Some(generic) if generic.origin().is_some() => {
-            PyTuple::new(py, generic.args().iter().map(|a| a.bind(py))).map(|t| t.into_any())
-        }
-        // Unspecialized generic class: generic metadata is present for
-        // parameters, but there is no origin/args specialization yet.
-        None | Some(_) => Ok(py.None().into_bound(py)),
-    }
-}
-
-#[pyfunction]
-pub fn get_ators_type_params<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let py = cls.py();
-    let info = get_class_info(cls)?;
-    match info.generic() {
-        Some(generic) => {
-            PyTuple::new(py, generic.parameters().iter().map(|p| p.bind(py))).map(|t| t.into_any())
-        }
-        None => Ok(py.None().into_bound(py)),
-    }
-}
-
-#[inline]
-fn get_ators_args_tuple<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyTuple>> {
-    let info = get_class_info(cls)?;
-    let Some(generic) = info.generic().filter(|g| g.origin().is_some()) else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "{} is not a specialised generic Ators class",
-            cls.qualname()?
-        )));
-    };
-    PyTuple::new(cls.py(), generic.args().iter().map(|a| a.bind(cls.py())))
-}
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
@@ -371,8 +145,8 @@ fn type_param_display(param: &Bound<'_, PyAny>) -> PyResult<String> {
 #[inline]
 fn get_generic_params_obj<'py>(type_obj: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyTuple>> {
     let py = type_obj.py();
-    if let Some(info) = try_get_class_info(type_obj)?
-        && let Some(generic) = info.generic()
+    let info = get_class_info(type_obj)?;
+    if let Some(generic) = info.generic()
         && !generic.parameters().is_empty()
     {
         return PyTuple::new(py, generic.parameters().iter().map(|p| p.bind(py)));
@@ -635,9 +409,7 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 /// guards against corrupted state).
 #[inline]
 fn get_ators_origin_type<'py>(cls: &Bound<'py, PyType>) -> PyResult<Option<Bound<'py, PyType>>> {
-    let Some(info) = try_get_class_info(cls)? else {
-        return Ok(None);
-    };
+    let info = get_class_info(cls)?;
     let o = info
         .generic()
         .and_then(|generic| generic.origin())
@@ -675,14 +447,16 @@ fn generic_subclass_match_impl<'py>(
         return Ok(true);
     }
 
-    // `cls` must be a specialised generic (non-None `__ators_origin__`).
-    let cls_origin = match get_ators_origin_type(cls)? {
+    // `cls` must be a specialised generic (non-None origin).
+    let cls_info = get_class_info(cls)?;
+    let cls_origin = match cls_info.generic().and_then(|g| g.origin()) {
         Some(o) => o,
         None => return Ok(false),
     };
 
     // `sub` must also be a specialised generic.
-    let sub_origin = match get_ators_origin_type(sub)? {
+    let sub_info = get_class_info(sub)?;
+    let sub_origin = match sub_info.generic().and_then(|g| g.origin()) {
         Some(o) => o,
         None => return Ok(false),
     };
@@ -750,7 +524,7 @@ pub fn rust_subclasscheck<'py>(
     cls: &Bound<'py, PyType>,
     sub: &Bound<'py, PyType>,
 ) -> PyResult<bool> {
-    if get_ators_origin_type(cls)?.is_some() {
+    if get_class_info(cls)?.generic().is_some() {
         return generic_subclass_match_impl(cls, sub);
     }
     // Non-generic fallback: input types are already known; use the C-level
@@ -770,7 +544,7 @@ pub fn rust_instancecheck<'py>(
     instance: &Bound<'py, PyAny>,
 ) -> PyResult<bool> {
     let instance_type = instance.get_type();
-    if get_ators_origin_type(cls)?.is_some() {
+    if get_class_info(cls)?.generic().is_some() {
         return generic_subclass_match_impl(cls, &instance_type);
     }
     Ok(unsafe { ffi::PyType_IsSubtype(instance_type.as_type_ptr(), cls.as_type_ptr()) != 0 })
@@ -968,15 +742,13 @@ pub fn create_ators_specialized_subclass<'py>(
     )?;
 
     if let Ok(specialized_type) = specialized.cast::<PyType>() {
-        let info = get_class_info(specialized_type)?;
-        let updated = Arc::new(info.as_ref().clone_ref(py).with_generic(Some(
-            AtorsGenericInfo::new(
-                Some(origin.clone().unbind()),
-                full_args_tuple.iter().map(|a| a.unbind()).collect(),
-                unresolved_tuple.iter().map(|a| a.unbind()).collect(),
-                Some(typevar_bindings.unbind()),
-                None,
-            ),
+        let info = (*get_class_info(specialized_type)?).clone_ref(py);
+        let updated = info.with_generic(Some(AtorsGenericInfo::new(
+            Some(origin.clone().unbind()),
+            full_args_tuple.iter().map(|a| a.unbind()).collect(),
+            unresolved_tuple.iter().map(|a| a.unbind()).collect(),
+            Some(typevar_bindings.unbind()),
+            None,
         )));
         let key = class_key(specialized_type);
         let store = get_class_info_store(py);
@@ -984,7 +756,7 @@ pub fn create_ators_specialized_subclass<'py>(
             .write()
             .expect("Class info store write lock poisoned")
             .definitive
-            .insert(key, updated);
+            .insert(key, Arc::new(updated));
     }
     cache.set_item(&full_args_tuple, &specialized)?;
 
@@ -1416,25 +1188,22 @@ pub fn create_ators_subclass<'py>(
             optional_init_member_names.push(init_name.clone());
         }
     }
-    let class_info = Arc::new(AtorsClassInfo::new(
+    let class_info = AtorsClassInfo::new(
         frozen,
         is_observable,
         enable_weakrefs,
         validate_attr,
         type_containers,
         pickle_policy.clone(),
-        members_by_name
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-            .collect(),
-        all_members.clone().unbind(),
-        specific_members.clone(),
+        members_by_name,
+        specific_members,
         optional_init_member_names,
-        required_init_member_names.clone(),
-        methods_by_name.clone(),
+        required_init_member_names,
+        methods_by_name,
         None,
-    ));
-    insert_temp_class_info(py, fqname.clone(), Arc::clone(&class_info));
+        None,
+    );
+    insert_temp_class_info(py, fqname.clone(), class_info);
 
     let cls_result = py
         .import(intern!(py, "builtins"))?
@@ -1443,19 +1212,17 @@ pub fn create_ators_subclass<'py>(
     let cls = match cls_result.cast_into::<PyType>() {
         Ok(c) => c,
         Err(err) => {
-            remove_temp_class_info(py, &fqname);
+            pop_temp_class_info(py, &fqname);
             return Err(err.into());
         }
     };
-    if let Err(err) = transfer_temp_to_definitive(py, &fqname, &cls) {
-        remove_temp_class_info(py, &fqname);
-        return Err(err);
-    }
+    let class_info = pop_temp_class_info(py, &fqname);
+
     let post_create_result: PyResult<()> = (|| {
         // Retrieve the customization tool and customize the members as needed
         let mut tool = cls
             .getattr("__ators_member_customizer__")?
-            .cast_exact::<MemberCustomizationTool>()?
+            .cast_exact::<Py<MemberCustomizationTool>>()?
             .borrow_mut();
         for (mname, mut mb) in tool.get_builders(py) {
             // Create the new member inheriting behaviors from the existing ones.
@@ -1567,18 +1334,16 @@ pub fn create_ators_subclass<'py>(
     } else {
         None
     };
-    let final_class_info = Arc::new(
-        class_info
-            .as_ref()
-            .clone_ref(py)
-            .with_members(py, members_by_name)
-            .with_generic(generic),
-    );
+
+    let final_class_info = class_info
+        .with_members(members_by_name)
+        .with_generic(generic)
+        .without_customizer();
     get_class_info_store(py)
         .write()
         .expect("Class info store write lock poisoned")
         .definitive
-        .insert(key, final_class_info);
+        .insert(key, Arc::new(final_class_info));
 
     Ok(cls.into_any())
 }

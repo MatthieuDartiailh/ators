@@ -60,10 +60,13 @@ mod _ators {
         get_members_by_tag_and_value, is_frozen, is_notifications_enabled, observe, unobserve,
     };
     #[pymodule_export]
-    use self::meta::{
-        create_ators_specialized_subclass, create_ators_subclass, get_ators_args,
-        get_ators_frozen_flag, get_ators_init_member_names, get_ators_members_by_name,
-        get_ators_origin, get_ators_specific_member_names, get_ators_type_params,
+    use self::meta::{create_ators_specialized_subclass, create_ators_subclass};
+
+    #[pymodule_export]
+    use self::class_info::{
+        get_ators_args, get_ators_frozen_flag, get_ators_init_member_names,
+        get_ators_members_by_name, get_ators_origin, get_ators_specific_member_names,
+        get_ators_type_params,
     };
 
     #[pymodule_export]

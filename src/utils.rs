@@ -7,6 +7,8 @@
 |----------------------------------------------------------------------------*/
 /// Utility functions and structures used across the codebase, not specific to any
 /// particular aspect of the library.
+use crate::class_info::get_class_info;
+use crate::core::AtorsBase;
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
@@ -175,9 +177,6 @@ impl GenericAttributesMap {
         Ok(())
     }
 }
-
-use crate::core::AtorsBase;
-use crate::meta::get_class_info;
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
 #[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]

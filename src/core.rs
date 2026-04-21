@@ -13,9 +13,9 @@ use pyo3::{
 };
 use std::cell::UnsafeCell;
 
+use crate::class_info::get_class_info;
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
-use crate::meta::get_class_info;
 use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
