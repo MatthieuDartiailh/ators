@@ -7,21 +7,17 @@
 # --------------------------------------------------------------------------------------
 """"""
 
-from typing import Any, Mapping, dataclass_transform
+from typing import Any, dataclass_transform
 
 from ._ators import (
-    Member,
     PicklePolicy,
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
-    freeze,
+    drop_class_info as _drop_class_info,
     get_ators_args as _get_ators_args,
     get_ators_frozen_flag as _get_ators_frozen_flag,
-    get_ators_init_member_names as _get_ators_init_member_names,
-    get_ators_members_by_name as _get_ators_members_by_name,
-    get_ators_origin as _get_ators_origin,
-    get_ators_specific_member_names as _get_ators_specific_member_names,
-    get_ators_type_params as _get_ators_type_params,
+    get_ators_origin as _get_origin,
+    get_tracked_class_info_size as _get_tracked_class_info_size,
     rust_instancecheck as _rust_instancecheck,
     rust_subclasscheck as _rust_subclasscheck,
 )
@@ -47,13 +43,9 @@ class AtorsMeta(type):
 
     """
 
-    __ators_members__: Mapping[str, Member]
-    __ators_specific_members__: frozenset[str]
-    __ators_init_members__: tuple[str, ...]
     __ators_frozen__: bool
-    __ators_origin__: type | None
-    __ators_args__: tuple[type, ...] | None
-    __ators_type_params__: tuple[type, ...] | None
+    __origin__: type | None
+    __args__: tuple[type, ...] | None
 
     def __new__(
         meta,
@@ -84,39 +76,17 @@ class AtorsMeta(type):
             validate_attr,
         )
 
-    def __call__(self, *args, **kwds):
-        new = super().__call__(*args, **kwds)
-        if self.__ators_frozen__:
-            freeze(new)
-        return new
-
-    @property
-    def __ators_members__(cls) -> Mapping[str, Member]:
-        return _get_ators_members_by_name(cls)
-
-    @property
-    def __ators_specific_members__(cls) -> frozenset[str]:
-        return _get_ators_specific_member_names(cls)
-
-    @property
-    def __ators_init_members__(cls) -> tuple[str, ...]:
-        return _get_ators_init_member_names(cls)
-
     @property
     def __ators_frozen__(cls) -> bool:
         return _get_ators_frozen_flag(cls)
 
     @property
-    def __ators_origin__(cls) -> type | None:
-        return _get_ators_origin(cls)
+    def __origin__(cls) -> type | None:
+        return _get_origin(cls)
 
     @property
-    def __ators_args__(cls) -> tuple[type, ...] | None:
+    def __args__(cls) -> tuple[type, ...] | None:
         return _get_ators_args(cls)
-
-    @property
-    def __ators_type_params__(cls) -> tuple[type, ...] | None:
-        return _get_ators_type_params(cls)
 
     def __getitem__(self, params):
         return _create_ators_specialized_subclass(self, params)
@@ -126,3 +96,6 @@ class AtorsMeta(type):
 
     def __instancecheck__(cls, instance):  # type: ignore[override]
         return _rust_instancecheck(cls, instance)
+
+    def __del__(cls):
+        _drop_class_info(cls)

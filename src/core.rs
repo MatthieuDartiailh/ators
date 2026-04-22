@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core Ators object and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
@@ -41,6 +41,71 @@ pub struct AtorsBase {
 // called with Python GC guarantees that ensure exclusive access regardless of whether
 // the GIL is enabled (holds for both GIL and free-threaded builds).
 unsafe impl Sync for AtorsBase {}
+
+#[cold]
+fn init_kwargs_error(
+    kwargs: &Bound<'_, PyDict>,
+    class_info: &crate::class_info::AtorsClassInfo,
+) -> PyErr {
+    let mut missing_required = Vec::new();
+    for name in class_info.required_init_member_names() {
+        if !kwargs
+            .contains(name.as_str())
+            .expect("Checking a dict key should not fail for strings")
+        {
+            missing_required.push(name.clone());
+        }
+    }
+    let mut unknown = Vec::new();
+    for (k, _) in kwargs.iter() {
+        if let Ok(name) = k.extract::<String>()
+            && !class_info.is_init_member(&name)
+        {
+            unknown.push(name);
+        }
+    }
+    if !missing_required.is_empty() {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Missing required init value(s): {}",
+            missing_required.join(", ")
+        ))
+    } else if !unknown.is_empty() {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Cannot pass init value(s) for non-init member(s): {}",
+            unknown.join(", ")
+        ))
+    } else {
+        pyo3::exceptions::PyTypeError::new_err("Invalid init kwargs for Ators instance")
+    }
+}
+
+#[inline]
+fn set_init_value<'py>(
+    slf: &Bound<'py, AtorsBase>,
+    class_info: &crate::class_info::AtorsClassInfo,
+    key: &Bound<'py, PyString>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let py = slf.py();
+    match slf.setattr(key, value.clone()) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let key_name: String = key.extract()?;
+            let member = class_info
+                .members_by_name()
+                .get(&key_name)
+                .ok_or_else(|| pyo3::exceptions::PyAttributeError::new_err("Unknown init member"))?
+                .bind(py)
+                .clone();
+            if let Some(r) = member_coerce_init(&member, slf, value) {
+                let coerced_v = r?;
+                slf.setattr(key, coerced_v).map(|_| ())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
 
 #[pymethods]
 impl AtorsBase {
@@ -81,6 +146,47 @@ impl AtorsBase {
         })
     }
 
+    #[pyo3(signature = (**kwargs))]
+    pub fn __init__(
+        slf: &Bound<'_, AtorsBase>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let class_info = get_class_info(&slf.get_type())?;
+        let Some(kwargs) = kwargs else {
+            if class_info.frozen() {
+                freeze(slf)?;
+            }
+            return Ok(());
+        };
+
+        let mut consumed = 0usize;
+        for required_name in class_info.required_init_member_py_names() {
+            let required_key = required_name.bind(slf.py());
+            if let Some(value) = kwargs.get_item(required_key)? {
+                set_init_value(slf, &class_info, required_key, &value)?;
+                consumed += 1;
+            } else {
+                return Err(init_kwargs_error(kwargs, &class_info));
+            }
+        }
+        if consumed != kwargs.len() {
+            for optional_name in class_info.optional_init_member_py_names() {
+                let optional_key = optional_name.bind(slf.py());
+                if let Some(value) = kwargs.get_item(optional_key)? {
+                    set_init_value(slf, &class_info, optional_key, &value)?;
+                    consumed += 1;
+                }
+            }
+        }
+        if consumed != kwargs.len() {
+            return Err(init_kwargs_error(kwargs, &class_info));
+        }
+        if class_info.frozen() {
+            freeze(slf)?;
+        }
+        Ok(())
+    }
+
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
@@ -98,67 +204,6 @@ impl AtorsBase {
         for o in inner.slots.iter_mut() {
             *o = None;
         }
-    }
-
-    #[pyo3(signature = (**kwargs))]
-    pub fn __init__(
-        slf: &Bound<'_, AtorsBase>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<()> {
-        let Some(kwargs) = kwargs else {
-            return Ok(());
-        };
-        let py = slf.py();
-        let class_info = get_class_info(&slf.get_type())?;
-        let required_init_members = class_info.required_init_member_names();
-        if kwargs.len() > class_info.init_member_count() {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Too many init values passed: got {}, expected at most {}",
-                kwargs.len(),
-                class_info.init_member_count()
-            )));
-        }
-        if kwargs.len() < required_init_members.len() {
-            for name in required_init_members {
-                if !kwargs.contains(name.as_str())? {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Missing required init value for member '{name}'"
-                    )));
-                }
-            }
-        }
-        for (k, v) in kwargs.iter() {
-            let key = k.cast::<PyString>()?;
-            let key_name: String = key.extract()?;
-            if !class_info.is_init_member(&key_name) {
-                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Cannot pass an init value for member '{key}' because it is not marked as init."
-                )));
-            }
-            match slf.setattr(key, v.clone()) {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    // FIXME use cold_branch once Rust 1.95 is out
-                    let m = class_info
-                        .members_by_name()
-                        .get(&key_name)
-                        .ok_or_else(|| {
-                            pyo3::exceptions::PyAttributeError::new_err(format!(
-                                "Unknown member '{key_name}'"
-                            ))
-                        })?
-                        .bind(py)
-                        .clone();
-                    if let Some(r) = member_coerce_init(&m, slf, &v) {
-                        let coerced_v = r?;
-                        slf.setattr(key, coerced_v).map(|_| ())
-                    } else {
-                        Err(err)
-                    }
-                }
-            }?
-        }
-        Ok(())
     }
 
     pub fn __getstate__<'py>(slf: &Bound<'py, AtorsBase>) -> PyResult<Bound<'py, PyDict>> {
@@ -190,18 +235,6 @@ impl AtorsBase {
         let py = slf.py();
         let cls = slf.get_type();
         let class_info = get_class_info(&cls)?;
-
-        // Validate all keys are known members
-        for (key, _) in state.iter() {
-            let key_str: String = key.extract()?;
-            if !class_info.members_by_name().contains_key(&key_str) {
-                return Err(pyo3::exceptions::PyKeyError::new_err(format!(
-                    "Unknown member '{}' for {}",
-                    key_str,
-                    cls.name()?
-                )));
-            }
-        }
 
         // Restore values
         for (key, value) in state.iter() {

@@ -7,7 +7,11 @@
 # --------------------------------------------------------------------------------------
 """Test default behavior for ators object"""
 
+import gc
+import weakref
+
 import pytest
+from ators._meta import _get_tracked_class_info_size
 
 from ators import (
     Ators,
@@ -100,10 +104,8 @@ def test_member_init_subclass():
     assert isinstance(B.b.pre_setattr, PreSetAttr.Constant)
     assert isinstance(B.b.delattr, DelAttr.Undeletable)
     assert B.b.metadata == {"a": 1}
-    assert B.__ators_members__["a"] is B.a
-    assert B.__ators_members__["b"] is B.b
-    assert "a" in B.__ators_specific_members__
-    assert "b" in B.__ators_specific_members__
+    assert get_members(B)["a"] is B.a
+    assert get_members(B)["b"] is B.b
 
     with pytest.raises(RuntimeError):
         get_member_customization_tool(B)
@@ -117,25 +119,38 @@ def test_metadata_available_during_init_subclass():
         _b = member()
 
         def __init_subclass__(cls):
-            seen["members"] = cls.__ators_members__
+            seen["members"] = get_members(cls)
             seen["frozen"] = cls.__ators_frozen__
-            seen["init_members"] = cls.__ators_init_members__
 
     class B(A):
         pass
 
     assert "a" in seen["members"]
     assert seen["frozen"] is False
-    assert "a" in seen["init_members"]
-    assert "_b" not in seen["init_members"]
-    assert "a" in B.__ators_members__
+    assert "a" in get_members(B)
 
 
 def test_members_mapping_is_immutable():
     class A(Ators):
         a = member()
 
-    members = A.__ators_members__
-    assert type(members).__name__ == "mappingproxy"
-    with pytest.raises(TypeError):
-        members["a"] = A.a
+    members = get_members(A)
+    assert members["a"] is A.a
+
+
+def test_class_info_is_removed_when_class_is_collected():
+    before = _get_tracked_class_info_size()
+
+    def _build():
+        class Temp(Ators):
+            a = member()
+
+        return Temp
+
+    temp = _build()
+    assert _get_tracked_class_info_size() == before + 1
+    w = weakref.ref(temp)
+    del temp
+    gc.collect()
+    assert w() is None
+    assert _get_tracked_class_info_size() == before

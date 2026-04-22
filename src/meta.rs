@@ -22,8 +22,9 @@ use crate::{
     annotations::generate_member_builders_from_cls_namespace,
     class_info::{
         AtorsClassInfo, AtorsGenericInfo, ClassMutability, PicklePolicy, class_fqname_from_inputs,
-        get_class_info, insert_definitive_class_info, insert_temp_class_info,
-        pop_definitive_class_info, pop_temp_class_info,
+        get_class_info, insert_definitive_class_info, insert_pending_specialization_bindings,
+        insert_temp_class_info, pop_definitive_class_info, pop_temp_class_info,
+        take_pending_specialization_bindings,
     },
     core::AtorsBase,
     member::PreGetattrBehavior,
@@ -393,7 +394,7 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 ///
 /// Returns `true` when `sub` is generically compatible with the specialised
 /// generic `cls`.  Both `cls` and `sub` are expected to be Ators-specialised
-/// classes (i.e. they carry `__ators_origin__` and `__ators_args__`).
+/// classes (i.e. they carry `__origin__` and `__args__`).
 #[cold]
 fn generic_subclass_match_impl<'py>(
     cls: &Bound<'py, PyType>,
@@ -425,7 +426,7 @@ fn generic_subclass_match_impl<'py>(
 
     // Origins must be compatible: same object, or sub_origin is a (normal)
     // subclass of cls_origin.
-    if !sub_origin.is(&cls_origin) {
+    if !sub_origin.is(cls_origin) {
         // Both origins are already PyType; use C-level check to avoid going
         // through Python dispatch (which would re-enter __subclasscheck__).
         if unsafe {
@@ -486,7 +487,7 @@ fn generic_subclass_match_impl<'py>(
 /// Generic-aware runtime subclass check (Rust side).
 ///
 /// Assigned as `AtorsMeta.__subclasscheck__`.  When `cls` is a specialised
-/// Ators generic (carries a non-`None` `__ators_origin__`), the generic match
+/// Ators generic (carries a non-`None` `__origin__`), the generic match
 /// engine is used.  Otherwise a direct C-level type hierarchy check is used to
 /// avoid recursion through Python's `__subclasscheck__` dispatch.
 #[pyfunction]
@@ -494,7 +495,11 @@ pub fn rust_subclasscheck<'py>(
     cls: &Bound<'py, PyType>,
     sub: &Bound<'py, PyType>,
 ) -> PyResult<bool> {
-    if get_class_info(cls)?.generic().is_some() {
+    if get_class_info(cls)?
+        .generic()
+        .and_then(|generic| generic.origin())
+        .is_some()
+    {
         return generic_subclass_match_impl(cls, sub);
     }
     // Non-generic fallback: input types are already known; use the C-level
@@ -514,7 +519,11 @@ pub fn rust_instancecheck<'py>(
     instance: &Bound<'py, PyAny>,
 ) -> PyResult<bool> {
     let instance_type = instance.get_type();
-    if get_class_info(cls)?.generic().is_some() {
+    if get_class_info(cls)?
+        .generic()
+        .and_then(|generic| generic.origin())
+        .is_some()
+    {
         return generic_subclass_match_impl(cls, &instance_type);
     }
     Ok(unsafe { ffi::PyType_IsSubtype(instance_type.as_type_ptr(), cls.as_type_ptr()) != 0 })
@@ -607,13 +616,13 @@ pub fn create_ators_specialized_subclass<'py>(
         }
 
         if is_type_var(&arg)? {
-            enforce_narrower_typevar_bound(&exposed, &arg)?;
+            enforce_narrower_typevar_bound(exposed, &arg)?;
         }
-        enforce_within_constraints(&exposed, &arg)?;
+        enforce_within_constraints(exposed, &arg)?;
 
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {
-            if value.is(&exposed) {
+            if value.is(exposed) {
                 to_replace.push(key.unbind());
             }
         }
@@ -653,7 +662,7 @@ pub fn create_ators_specialized_subclass<'py>(
 
     // The cache always lives on the origin class so that independent
     // specialization paths (direct vs. step-wise) share the same result.
-    let origin_info = get_class_info(&origin)?;
+    let origin_info = get_class_info(origin)?;
     let cache = origin_info
         .generic()
         .and_then(|g| g.specializations())
@@ -706,9 +715,15 @@ pub fn create_ators_specialized_subclass<'py>(
     let kwargs = PyDict::new(py);
     kwargs.set_item(intern!(py, "frozen"), cls_info.frozen())?;
 
-    // we do not store info since it we will go throug create_ators_subclass
-    // which will create the info and store it in the store, but we need to
-    //pass it to create the specialized class
+    let typevar_bindings_py = typevar_bindings.unbind();
+    let origin_module: String = cls.getattr(intern!(py, "__module__"))?.extract()?;
+    let specialized_fqname = format!("{origin_module}.{specialized_name}");
+    insert_pending_specialization_bindings(
+        py,
+        specialized_fqname,
+        typevar_bindings_py.clone_ref(py),
+    );
+
     let specialized = cls.get_type().call(
         (
             specialized_name,
@@ -720,11 +735,13 @@ pub fn create_ators_specialized_subclass<'py>(
 
     if let Ok(specialized_type) = specialized.cast::<PyType>() {
         let info = pop_definitive_class_info(py, specialized_type);
+        // AtorsGenericInfo::new takes (type_parameters, origin, args, ...)
+        // so unresolved type vars are first, followed by concrete specialization args.
         let updated = info.with_generic(Some(AtorsGenericInfo::new(
-            full_args_tuple.iter().map(|a| a.unbind()).collect(),
-            Some(origin.clone().unbind()),
             unresolved_tuple.iter().map(|a| a.unbind()).collect(),
-            Some(typevar_bindings.unbind()),
+            Some(origin.clone().unbind()),
+            full_args_tuple.iter().map(|a| a.unbind()).collect(),
+            Some(typevar_bindings_py),
             None,
         )));
         insert_definitive_class_info(py, specialized_type, updated);
@@ -798,21 +815,15 @@ pub fn create_ators_subclass<'py>(
         dct.set_item(slot_name, ())?;
     }
 
-    let typevar_bindings =
-        if let Some(tb) = dct.get_item(intern!(py, "__ators_typevar_bindings__"))? {
-            Some(tb.cast_into::<PyDict>()?)
-        } else {
-            None
-        };
-    if typevar_bindings.is_some() {
-        dct.del_item(intern!(py, "__ators_typevar_bindings__"))?;
-    }
+    let fqname = class_fqname_from_inputs(&name, &dct)?;
+    let typevar_bindings = take_pending_specialization_bindings(py, &fqname);
+    let typevar_bindings_ref = typevar_bindings.as_ref().map(|tb| tb.bind(py));
 
     let mut member_builders = generate_member_builders_from_cls_namespace(
         &name,
         &dct,
         type_containers,
-        typevar_bindings.as_ref(),
+        typevar_bindings_ref,
         validate_attr,
     )?;
 
@@ -1139,7 +1150,6 @@ pub fn create_ators_subclass<'py>(
 
     // Build class info with member customization tool to be used in
     // __init__subclass__
-    let fqname = class_fqname_from_inputs(&name, &dct)?;
     let members_by_name = all_members
         .iter()
         .map(|(k, v)| Ok((k.extract::<String>()?, v.cast::<Member>()?.clone().unbind())))
@@ -1155,18 +1165,26 @@ pub fn create_ators_subclass<'py>(
             optional_init_member_names.push(init_name.clone());
         }
     }
+    let optional_init_member_py_names = optional_init_member_names
+        .iter()
+        .map(|name| PyString::new(py, name).unbind())
+        .collect();
+    let required_init_member_py_names = required_init_member_names
+        .iter()
+        .map(|name| PyString::new(py, name).unbind())
+        .collect();
     let class_info = AtorsClassInfo::new(
         frozen,
         is_observable,
-        enable_weakrefs,
-        validate_attr,
-        type_containers,
         pickle_policy.clone(),
         None,
         members_by_name,
+        all_members.clone().unbind(),
         specific_members,
         optional_init_member_names,
         required_init_member_names,
+        optional_init_member_py_names,
+        required_init_member_py_names,
         methods_by_name,
         None,
         Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
@@ -1288,7 +1306,7 @@ pub fn create_ators_subclass<'py>(
     };
 
     let final_class_info = class_info
-        .with_members(updated_members_by_name)
+        .with_members(py, updated_members_by_name)
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
     insert_definitive_class_info(py, &cls, final_class_info);

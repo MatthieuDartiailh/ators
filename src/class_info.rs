@@ -9,11 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use pyo3::{
-    Bound, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction,
+    Bound, Py, PyAny, PyResult, intern, pyclass, pyfunction,
     sync::PyOnceLock,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType, PyTypeMethods,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType},
 };
 
 use crate::member::{Member, MemberCustomizationTool};
@@ -107,15 +105,15 @@ impl AtorsGenericInfo {
 pub(crate) struct AtorsClassInfo {
     frozen: bool,
     observable: bool,
-    enable_weakrefs: bool,
-    validate_attr: bool,
-    type_containers: i64,
     pickle_policy: PicklePolicy,
     mutability: Option<ClassMutability>,
     members_by_name: HashMap<String, Py<Member>>,
+    members_dict: Py<PyDict>,
     specific_member_names: HashSet<String>,
     optional_init_member_names: Vec<String>,
     required_init_member_names: Vec<String>,
+    optional_init_member_py_names: Vec<Py<PyString>>,
+    required_init_member_py_names: Vec<Py<PyString>>,
     method_names: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
@@ -126,15 +124,15 @@ impl AtorsClassInfo {
     pub(crate) fn new(
         frozen: bool,
         observable: bool,
-        enable_weakrefs: bool,
-        validate_attr: bool,
-        type_containers: i64,
         pickle_policy: PicklePolicy,
         mutability: Option<ClassMutability>,
         members_by_name: HashMap<String, Py<Member>>,
+        members_dict: Py<PyDict>,
         specific_member_names: HashSet<String>,
         optional_init_member_names: Vec<String>,
         required_init_member_names: Vec<String>,
+        optional_init_member_py_names: Vec<Py<PyString>>,
+        required_init_member_py_names: Vec<Py<PyString>>,
         method_names: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
@@ -142,15 +140,15 @@ impl AtorsClassInfo {
         Self {
             frozen,
             observable,
-            enable_weakrefs,
-            validate_attr,
-            type_containers,
             pickle_policy,
             mutability,
             members_by_name,
+            members_dict,
             specific_member_names,
             optional_init_member_names,
             required_init_member_names,
+            optional_init_member_py_names,
+            required_init_member_py_names,
             method_names,
             generic,
             customizer_tool,
@@ -161,9 +159,20 @@ impl AtorsClassInfo {
         Self { generic, ..self }
     }
 
-    pub(crate) fn with_members(self, members_by_name: HashMap<String, Py<Member>>) -> Self {
+    pub(crate) fn with_members(
+        self,
+        py: pyo3::Python<'_>,
+        members_by_name: HashMap<String, Py<Member>>,
+    ) -> Self {
+        let members_dict = PyDict::new(py);
+        for (name, member) in &members_by_name {
+            members_dict
+                .set_item(name, member.bind(py))
+                .expect("Known member values should always be settable");
+        }
         Self {
             members_by_name,
+            members_dict: members_dict.unbind(),
             ..self
         }
     }
@@ -202,6 +211,10 @@ impl AtorsClassInfo {
         &self.members_by_name
     }
 
+    pub(crate) fn members_dict(&self) -> &Py<PyDict> {
+        &self.members_dict
+    }
+
     pub(crate) fn specific_member_names(&self) -> &HashSet<String> {
         &self.specific_member_names
     }
@@ -214,8 +227,12 @@ impl AtorsClassInfo {
         &self.required_init_member_names
     }
 
-    pub(crate) fn init_member_count(&self) -> usize {
-        self.optional_init_member_names.len() + self.required_init_member_names.len()
+    pub(crate) fn required_init_member_py_names(&self) -> &[Py<PyString>] {
+        &self.required_init_member_py_names
+    }
+
+    pub(crate) fn optional_init_member_py_names(&self) -> &[Py<PyString>] {
+        &self.optional_init_member_py_names
     }
 
     pub(crate) fn is_init_member(&self, name: &str) -> bool {
@@ -239,7 +256,7 @@ impl AtorsClassInfo {
 pub fn get_ators_members_by_name<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
     let info = get_class_info(cls)?;
-    let members_dict = info.members_by_name();
+    let members_dict = info.members_dict().bind(py);
     py.import(intern!(py, "types"))?
         .getattr(intern!(py, "MappingProxyType"))?
         .call1((members_dict,))
@@ -308,21 +325,10 @@ pub fn get_ators_type_params<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'p
     }
 }
 
-#[inline]
-fn get_ators_args_tuple<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyTuple>> {
-    let info = get_class_info(cls)?;
-    let Some(generic) = info.generic().filter(|g| g.origin().is_some()) else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "{} is not a specialised generic Ators class",
-            cls.qualname()?
-        )));
-    };
-    PyTuple::new(cls.py(), generic.args().iter().map(|a| a.bind(cls.py())))
-}
-
 struct ClassInfoStore {
     definitive: HashMap<usize, Arc<AtorsClassInfo>>,
     temporary: HashMap<String, Arc<AtorsClassInfo>>,
+    pending_specialization_bindings: HashMap<String, Py<PyDict>>,
 }
 
 impl ClassInfoStore {
@@ -330,6 +336,7 @@ impl ClassInfoStore {
         Self {
             definitive: HashMap::new(),
             temporary: HashMap::new(),
+            pending_specialization_bindings: HashMap::new(),
         }
     }
 }
@@ -401,6 +408,33 @@ pub(crate) fn pop_temp_class_info(py: pyo3::Python<'_>, fqname: &str) -> AtorsCl
 }
 
 #[inline]
+pub(crate) fn insert_pending_specialization_bindings(
+    py: pyo3::Python<'_>,
+    fqname: String,
+    bindings: Py<PyDict>,
+) {
+    let store = get_class_info_store(py);
+    store
+        .write()
+        .expect("Class info store write lock poisoned")
+        .pending_specialization_bindings
+        .insert(fqname, bindings);
+}
+
+#[inline]
+pub(crate) fn take_pending_specialization_bindings(
+    py: pyo3::Python<'_>,
+    fqname: &str,
+) -> Option<Py<PyDict>> {
+    let store = get_class_info_store(py);
+    store
+        .write()
+        .expect("Class info store write lock poisoned")
+        .pending_specialization_bindings
+        .remove(fqname)
+}
+
+#[inline]
 pub(crate) fn insert_definitive_class_info(
     py: pyo3::Python<'_>,
     cls: &Bound<'_, PyType>,
@@ -450,10 +484,34 @@ pub(crate) fn get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<Ator
         .temporary
         .get(&fqname)
     {
-        return Ok(Arc::clone(info));
+        Ok(Arc::clone(info))
     } else {
         Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "No Ators class info registered for {fqname}"
         )))
     }
+}
+
+#[pyfunction]
+pub fn drop_class_info(cls: &Bound<'_, PyType>) {
+    let py = cls.py();
+    let key = class_key(cls);
+    let fqname = class_fqname(cls).ok();
+    let store = get_class_info_store(py);
+    let mut store = store.write().expect("Class info store write lock poisoned");
+    store.definitive.remove(&key);
+    if let Some(fqname) = fqname {
+        store.temporary.remove(&fqname);
+        store.pending_specialization_bindings.remove(&fqname);
+    }
+}
+
+#[pyfunction]
+pub fn get_tracked_class_info_size(py: pyo3::Python<'_>) -> usize {
+    let store = get_class_info_store(py);
+    store
+        .read()
+        .expect("Class info store read lock poisoned")
+        .definitive
+        .len()
 }
