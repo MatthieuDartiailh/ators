@@ -13,7 +13,7 @@ use pyo3::{
 };
 use std::cell::UnsafeCell;
 
-use crate::class_info::get_class_info;
+use crate::class_info::{ClassMutability, get_class_info};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
@@ -41,31 +41,6 @@ pub struct AtorsBase {
 // called with Python GC guarantees that ensure exclusive access regardless of whether
 // the GIL is enabled (holds for both GIL and free-threaded builds).
 unsafe impl Sync for AtorsBase {}
-
-#[pyclass(module = "ators._ators", frozen, from_py_object)]
-#[derive(Debug, Clone)]
-pub enum ClassMutability {
-    #[pyo3(constructor = ())]
-    Immutable {},
-    #[pyo3(constructor = ())]
-    Mutable {},
-    #[pyo3(constructor = (values))]
-    InspectValues { values: Vec<String> },
-}
-
-#[pyclass(module = "ators._ators", frozen, from_py_object, eq, eq_int)]
-#[derive(Debug, Clone, PartialEq)]
-pub enum PicklePolicy {
-    /// Include all members in pickle state (default).
-    #[pyo3(name = "ALL")]
-    All,
-    /// Exclude all members from pickle state.
-    #[pyo3(name = "NONE")]
-    None,
-    /// Include only public members (those not starting with `_`) in pickle state.
-    #[pyo3(name = "PUBLIC")]
-    Public,
-}
 
 #[pymethods]
 impl AtorsBase {
@@ -485,53 +460,49 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     // Check class mutability to determine if freezing is allowed
     let class_type = obj.get_type();
     let class_info = get_class_info(&class_type)?;
-    match class_type.getattr("__ators_members_mutability__") {
-        Ok(mutability_obj) => {
-            let mutability_enum = mutability_obj.extract::<ClassMutability>()?;
-            match mutability_enum {
-                ClassMutability::Immutable {} => {
-                    do_freeze(obj);
-                    Ok(())
-                }
-                ClassMutability::Mutable {} => Err(pyo3::exceptions::PyTypeError::new_err(
-                    "Cannot freeze an object with mutable member types",
-                )),
-                ClassMutability::InspectValues { values } => {
-                    let ty_mutability_map = get_type_mutability_map(py);
-                    for attr_name in &values {
-                        let member =
-                            class_info.members_by_name().get(attr_name).ok_or_else(|| {
-                                pyo3::exceptions::PyAttributeError::new_err(format!(
-                                    "Unknown member '{attr_name}'"
-                                ))
+    if let Some(mutability) = class_info.mutability() {
+        match mutability {
+            ClassMutability::Immutable {} => {
+                do_freeze(obj);
+                Ok(())
+            }
+            ClassMutability::Mutable {} => Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot freeze an object with mutable member types",
+            )),
+            ClassMutability::InspectValues { values } => {
+                let ty_mutability_map = get_type_mutability_map(py);
+                for attr_name in values {
+                    let member = class_info.members_by_name().get(attr_name).ok_or_else(|| {
+                        pyo3::exceptions::PyAttributeError::new_err(format!(
+                            "Unknown member '{attr_name}'"
+                        ))
+                    })?;
+                    if let Some(slot_value) = get_slot(obj, member.bind(py).get().index()) {
+                        let attr_bound = slot_value.bind(py);
+                        let attr_mutability =
+                            with_critical_section(ty_mutability_map.as_any(), || {
+                                ty_mutability_map.borrow().get_object_mutability(attr_bound)
                             })?;
-                        if let Some(slot_value) = get_slot(obj, member.bind(py).get().index()) {
-                            let attr_bound = slot_value.bind(py);
-                            let attr_mutability =
-                                with_critical_section(ty_mutability_map.as_any(), || {
-                                    ty_mutability_map.borrow().get_object_mutability(attr_bound)
-                                })?;
-                            if matches!(
-                                attr_mutability,
-                                Mutability::Mutable | Mutability::Undecidable
-                            ) {
-                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                                    "Cannot freeze object: member '{}' contains potentially mutable value",
-                                    attr_name
-                                )));
-                            }
+                        if matches!(
+                            attr_mutability,
+                            Mutability::Mutable | Mutability::Undecidable
+                        ) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot freeze object: member '{}' contains potentially mutable value",
+                                attr_name
+                            )));
                         }
                     }
-                    do_freeze(obj);
-                    Ok(())
                 }
+                do_freeze(obj);
+                Ok(())
             }
         }
-        Err(_) => Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "Class {} is missing the required attribute '{}' to determine mutability",
+    } else {
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "Class {} mutability cannot be determined at this stage.",
             class_type.name().expect("Type object always has a name"),
-            "__ators_members_mutability__"
-        ))),
+        )))
     }
 }
 
@@ -619,14 +590,13 @@ pub fn get_members_by_tag_and_value<'py>(
 pub fn get_member_customization_tool<'py>(
     cls: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, MemberCustomizationTool>> {
-    let attr = cls.getattr("__ators_member_customizer__")?;
-    if attr.is_none() {
+    if let Some(tool) = get_class_info(cls.cast::<PyType>()?)?.customizer() {
+        Ok(tool.bind(cls.py()).clone())
+    } else {
         Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Member customization is only possible during __init_subclass__ for class {}",
             cls.get_type().name().unwrap()
         )))
-    } else {
-        Ok(attr.cast_into::<MemberCustomizationTool>()?)
     }
 }
 

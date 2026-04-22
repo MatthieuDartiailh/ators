@@ -10,8 +10,8 @@
 use crate::class_info::get_class_info;
 use crate::core::AtorsBase;
 use pyo3::{
-    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
-    pymethods,
+    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, ffi, intern,
+    pyclass, pymethods,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;

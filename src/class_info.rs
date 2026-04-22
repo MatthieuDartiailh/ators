@@ -9,38 +9,75 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use pyo3::{
-    Bound, Py, PyAny, PyResult, Python, intern, pyfunction,
+    Bound, Py, PyAny, PyResult, Python, intern, pyclass, pyfunction,
     sync::PyOnceLock,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType, PyTypeMethods,
     },
 };
 
-use crate::{
-    core::PicklePolicy,
-    member::{Member, MemberCustomizationTool},
-};
+use crate::member::{Member, MemberCustomizationTool};
+
+#[pyclass(module = "ators._ators", frozen, from_py_object)]
+#[derive(Debug, Clone)]
+pub enum ClassMutability {
+    #[pyo3(constructor = ())]
+    Immutable {},
+    #[pyo3(constructor = ())]
+    Mutable {},
+    #[pyo3(constructor = (values))]
+    InspectValues { values: Vec<String> },
+}
+
+#[pyclass(module = "ators._ators", frozen, from_py_object, eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum PicklePolicy {
+    /// Include all members in pickle state (default).
+    #[pyo3(name = "ALL")]
+    All,
+    /// Exclude all members from pickle state.
+    #[pyo3(name = "NONE")]
+    None,
+    /// Include only public members (those not starting with `_`) in pickle state.
+    #[pyo3(name = "PUBLIC")]
+    Public,
+}
 
 pub(crate) struct AtorsGenericInfo {
+    /// The type parameters of the generic class, if any.  This is used to
+    /// support unspecialized generic classes
+    /// (e.g. `class MyGeneric(Generic[T])`), which have generic metadata but
+    /// no origin/args specialization.
+    type_parameters: Vec<Py<PyAny>>,
+    /// The original generic class that was specialized to produce the current
+    /// class, if any.
     origin: Option<Py<PyType>>,
+    /// The actual type arguments used in the specialization, if any.
     args: Vec<Py<PyAny>>,
-    parameters: Vec<Py<PyAny>>,
+    /// The mapping of type variables to their bound values in this
+    /// specialization, if any.
     typevar_bindings: Option<Py<PyDict>>,
+    /// The mapping of type variables to their specialized values for any
+    /// known specializations of this generic class, if any.  This is used to
+    /// support partial specialization of already specialized generic classes
+    /// (e.g. `MyGeneric[int]`), which may have further specializations
+    /// (e.g. `MyGeneric[int][str]`) that require knowledge of the original t
+    /// type parameters and their bindings.
     specializations: Option<Py<PyDict>>,
 }
 
 impl AtorsGenericInfo {
     pub(crate) fn new(
+        type_parameters: Vec<Py<PyAny>>,
         origin: Option<Py<PyType>>,
         args: Vec<Py<PyAny>>,
-        parameters: Vec<Py<PyAny>>,
         typevar_bindings: Option<Py<PyDict>>,
         specializations: Option<Py<PyDict>>,
     ) -> Self {
         Self {
+            type_parameters,
             origin,
             args,
-            parameters,
             typevar_bindings,
             specializations,
         }
@@ -54,8 +91,8 @@ impl AtorsGenericInfo {
         &self.args
     }
 
-    pub(crate) fn parameters(&self) -> &[Py<PyAny>] {
-        &self.parameters
+    pub(crate) fn type_parameters(&self) -> &[Py<PyAny>] {
+        &self.type_parameters
     }
 
     pub(crate) fn typevar_bindings(&self) -> Option<&Py<PyDict>> {
@@ -64,16 +101,6 @@ impl AtorsGenericInfo {
 
     pub(crate) fn specializations(&self) -> Option<&Py<PyDict>> {
         self.specializations.as_ref()
-    }
-
-    pub(crate) fn clone_ref(&self, py: Python<'_>) -> Self {
-        Self {
-            origin: self.origin.as_ref().map(|o| o.clone_ref(py)),
-            args: self.args.iter().map(|a| a.clone_ref(py)).collect(),
-            parameters: self.parameters.iter().map(|p| p.clone_ref(py)).collect(),
-            typevar_bindings: self.typevar_bindings.as_ref().map(|m| m.clone_ref(py)),
-            specializations: self.specializations.as_ref().map(|m| m.clone_ref(py)),
-        }
     }
 }
 
@@ -84,6 +111,7 @@ pub(crate) struct AtorsClassInfo {
     validate_attr: bool,
     type_containers: i64,
     pickle_policy: PicklePolicy,
+    mutability: Option<ClassMutability>,
     members_by_name: HashMap<String, Py<Member>>,
     specific_member_names: HashSet<String>,
     optional_init_member_names: Vec<String>,
@@ -102,6 +130,7 @@ impl AtorsClassInfo {
         validate_attr: bool,
         type_containers: i64,
         pickle_policy: PicklePolicy,
+        mutability: Option<ClassMutability>,
         members_by_name: HashMap<String, Py<Member>>,
         specific_member_names: HashSet<String>,
         optional_init_member_names: Vec<String>,
@@ -117,6 +146,7 @@ impl AtorsClassInfo {
             validate_attr,
             type_containers,
             pickle_policy,
+            mutability,
             members_by_name,
             specific_member_names,
             optional_init_member_names,
@@ -131,18 +161,25 @@ impl AtorsClassInfo {
         Self { generic, ..self }
     }
 
-    pub(crate) fn without_customizer(self) -> Self {
-        Self {
-            customizer_tool: None,
-            ..self
-        }
-    }
-
     pub(crate) fn with_members(self, members_by_name: HashMap<String, Py<Member>>) -> Self {
         Self {
             members_by_name,
             ..self
         }
+    }
+
+    pub(crate) fn with_mutability(self, mutability: Option<ClassMutability>) -> Self {
+        Self { mutability, ..self }
+    }
+
+    pub(crate) fn customizer(&self) -> Option<&Py<MemberCustomizationTool>> {
+        self.customizer_tool.as_ref()
+    }
+
+    pub(crate) fn take_customizer(&mut self) -> Py<MemberCustomizationTool> {
+        self.customizer_tool
+            .take()
+            .expect("Member customizer should be set at this point")
     }
 
     pub(crate) fn frozen(&self) -> bool {
@@ -151,6 +188,10 @@ impl AtorsClassInfo {
 
     pub(crate) fn observable(&self) -> bool {
         self.observable
+    }
+
+    pub(crate) fn mutability(&self) -> Option<&ClassMutability> {
+        self.mutability.as_ref()
     }
 
     pub(crate) fn pickle_policy(&self) -> &PicklePolicy {
@@ -189,32 +230,10 @@ impl AtorsClassInfo {
     pub(crate) fn generic(&self) -> Option<&AtorsGenericInfo> {
         self.generic.as_ref()
     }
-
-    pub(crate) fn clone_ref(&self, py: Python<'_>) -> Self {
-        Self {
-            frozen: self.frozen,
-            observable: self.observable,
-            enable_weakrefs: self.enable_weakrefs,
-            validate_attr: self.validate_attr,
-            type_containers: self.type_containers,
-            pickle_policy: self.pickle_policy.clone(),
-            members_by_name: self
-                .members_by_name
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-                .collect(),
-            specific_member_names: self.specific_member_names.clone(),
-            optional_init_member_names: self.optional_init_member_names.clone(),
-            required_init_member_names: self.required_init_member_names.clone(),
-            method_names: self.method_names.clone(),
-            generic: self.generic.as_ref().map(|g| g.clone_ref(py)),
-            // intentionally not cloned
-            customizer_tool: None,
-        }
-    }
 }
 
 // Python exposed functions to access class info.
+// XXX audit
 
 #[pyfunction]
 pub fn get_ators_members_by_name<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
@@ -283,9 +302,8 @@ pub fn get_ators_type_params<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'p
     let py = cls.py();
     let info = get_class_info(cls)?;
     match info.generic() {
-        Some(generic) => {
-            PyTuple::new(py, generic.parameters().iter().map(|p| p.bind(py))).map(|t| t.into_any())
-        }
+        Some(generic) => PyTuple::new(py, generic.type_parameters().iter().map(|p| p.bind(py)))
+            .map(|t| t.into_any()),
         None => Ok(py.None().into_bound(py)),
     }
 }
@@ -302,7 +320,6 @@ fn get_ators_args_tuple<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, Py
     PyTuple::new(cls.py(), generic.args().iter().map(|a| a.bind(cls.py())))
 }
 
-// XXX move all class info management to class_info module
 struct ClassInfoStore {
     definitive: HashMap<usize, Arc<AtorsClassInfo>>,
     temporary: HashMap<String, Arc<AtorsClassInfo>>,
@@ -338,7 +355,7 @@ fn class_fqname<'py>(cls: &Bound<'py, PyType>) -> PyResult<String> {
 }
 
 #[inline]
-fn class_fqname_from_inputs<'py>(
+pub(crate) fn class_fqname_from_inputs<'py>(
     name: &Bound<'py, PyString>,
     dct: &Bound<'py, PyDict>,
 ) -> PyResult<String> {
@@ -353,7 +370,7 @@ fn class_fqname_from_inputs<'py>(
 }
 
 #[inline]
-fn insert_temp_class_info(py: pyo3::Python<'_>, fqname: String, info: AtorsClassInfo) {
+pub(crate) fn insert_temp_class_info(py: pyo3::Python<'_>, fqname: String, info: AtorsClassInfo) {
     let store = get_class_info_store(py);
     store
         .write()
@@ -370,7 +387,7 @@ fn insert_temp_class_info(py: pyo3::Python<'_>, fqname: String, info: AtorsClass
 /// multiple strong references to the info (which would indicate a logic error
 /// in the creation process).
 #[inline]
-fn pop_temp_class_info(py: pyo3::Python<'_>, fqname: &str) -> AtorsClassInfo {
+pub(crate) fn pop_temp_class_info(py: pyo3::Python<'_>, fqname: &str) -> AtorsClassInfo {
     let store = get_class_info_store(py);
     Arc::into_inner(
         store
@@ -384,17 +401,38 @@ fn pop_temp_class_info(py: pyo3::Python<'_>, fqname: &str) -> AtorsClassInfo {
 }
 
 #[inline]
-fn remove_definitive_class_info(py: pyo3::Python<'_>, cls: &Bound<'_, PyType>) {
-    let key = class_key(cls);
+pub(crate) fn insert_definitive_class_info(
+    py: pyo3::Python<'_>,
+    cls: &Bound<'_, PyType>,
+    info: AtorsClassInfo,
+) {
     let store = get_class_info_store(py);
     store
         .write()
         .expect("Class info store write lock poisoned")
         .definitive
-        .remove(&key);
+        .insert(class_key(cls), Arc::new(info));
 }
 
-pub fn get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<AtorsClassInfo>> {
+#[inline]
+pub(crate) fn pop_definitive_class_info(
+    py: pyo3::Python<'_>,
+    cls: &Bound<'_, PyType>,
+) -> AtorsClassInfo {
+    let key = class_key(cls);
+    let store = get_class_info_store(py);
+    Arc::into_inner(
+        store
+            .write()
+            .expect("Class info store write lock poisoned")
+            .definitive
+            .remove(&key)
+            .expect("Class info is known to be present at this point."),
+    )
+    .expect("No other strong reference should exists.")
+}
+
+pub(crate) fn get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<AtorsClassInfo>> {
     let key = class_key(cls);
     let store = get_class_info_store(cls.py());
     if let Some(info) = store

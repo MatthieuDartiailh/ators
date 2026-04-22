@@ -6,10 +6,7 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, ffi, intern, pyfunction,
@@ -21,19 +18,21 @@ use pyo3::{
     },
 };
 
-use crate::class_info::{AtorsClassInfo, AtorsGenericInfo, get_class_info};
-use crate::member::{
-    DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
-};
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
+    class_info::{
+        AtorsClassInfo, AtorsGenericInfo, ClassMutability, PicklePolicy, class_fqname_from_inputs,
+        get_class_info, insert_definitive_class_info, insert_temp_class_info,
+        pop_definitive_class_info, pop_temp_class_info,
+    },
+    core::AtorsBase,
+    member::PreGetattrBehavior,
+    member::{
+        DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
+    },
     member::{MemberBuilder, MemberCustomizationTool},
     utils::Mutability,
     validators::{Coercer, ValueValidator},
-};
-use crate::{
-    core::{AtorsBase, ClassMutability, PicklePolicy},
-    member::PreGetattrBehavior,
 };
 
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
@@ -145,12 +144,6 @@ fn type_param_display(param: &Bound<'_, PyAny>) -> PyResult<String> {
 #[inline]
 fn get_generic_params_obj<'py>(type_obj: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyTuple>> {
     let py = type_obj.py();
-    let info = get_class_info(type_obj)?;
-    if let Some(generic) = info.generic()
-        && !generic.parameters().is_empty()
-    {
-        return PyTuple::new(py, generic.parameters().iter().map(|p| p.bind(py)));
-    }
 
     // Prefer PEP 695 runtime metadata (__type_params__), but fall back to
     // legacy typing metadata (__parameters__) so Generic[...] classes from
@@ -396,42 +389,6 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
     Ok(())
 }
 
-/// Retrieve the `__ators_origin__` attribute of `cls` if it is set and is a
-/// non-`None` `PyType`.
-///
-/// `__ators_origin__` is always present on Ators subclasses:
-/// * `None`  — the class is a non-specialised generic or a plain Ators class.
-/// * A `PyType` — the class is a specialised generic; the value is the origin.
-///
-/// Returns `Ok(None)` for non-Ators types (attribute absent) or non-specialised
-/// classes (`None` value).  Returns `Err(TypeError)` if the attribute is set to
-/// a non-`None` value that is not a type (should never happen in practice, but
-/// guards against corrupted state).
-#[inline]
-fn get_ators_origin_type<'py>(cls: &Bound<'py, PyType>) -> PyResult<Option<Bound<'py, PyType>>> {
-    let info = get_class_info(cls)?;
-    let o = info
-        .generic()
-        .and_then(|generic| generic.origin())
-        .map_or_else(
-            || cls.py().None().into_bound(cls.py()),
-            |origin| origin.bind(cls.py()).clone().into_any(),
-        );
-    if o.is_none() {
-        return Ok(None);
-    }
-    // SAFETY: Only `PyType` objects are stored as `__ators_origin__` (set in
-    // `create_ators_specialized_subclass`).  We double-check with
-    // `PyType_Check` and raise `TypeError` for any unexpected value.
-    if unsafe { ffi::PyType_Check(o.as_ptr()) == 0 } {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "__ators_origin__ must be a type or None, got {}",
-            o.get_type().qualname()?
-        )));
-    }
-    Ok(Some(unsafe { o.cast_unchecked::<PyType>() }.clone()))
-}
-
 /// Core generic-subclass matching logic (no caching).
 ///
 /// Returns `true` when `sub` is generically compatible with the specialised
@@ -446,19 +403,24 @@ fn generic_subclass_match_impl<'py>(
     if sub.is(cls) {
         return Ok(true);
     }
+    let py = cls.py();
 
     // `cls` must be a specialised generic (non-None origin).
     let cls_info = get_class_info(cls)?;
-    let cls_origin = match cls_info.generic().and_then(|g| g.origin()) {
-        Some(o) => o,
-        None => return Ok(false),
+    let Some(cls_generic) = cls_info.generic() else {
+        return Ok(false);
+    };
+    let Some(cls_origin) = cls_generic.origin() else {
+        return Ok(false);
     };
 
     // `sub` must also be a specialised generic.
     let sub_info = get_class_info(sub)?;
-    let sub_origin = match sub_info.generic().and_then(|g| g.origin()) {
-        Some(o) => o,
-        None => return Ok(false),
+    let Some(sub_generic) = sub_info.generic() else {
+        return Ok(false);
+    };
+    let Some(sub_origin) = sub_generic.origin() else {
+        return Ok(false);
     };
 
     // Origins must be compatible: same object, or sub_origin is a (normal)
@@ -466,15 +428,19 @@ fn generic_subclass_match_impl<'py>(
     if !sub_origin.is(&cls_origin) {
         // Both origins are already PyType; use C-level check to avoid going
         // through Python dispatch (which would re-enter __subclasscheck__).
-        if unsafe { ffi::PyType_IsSubtype(sub_origin.as_type_ptr(), cls_origin.as_type_ptr()) == 0 }
-        {
+        if unsafe {
+            ffi::PyType_IsSubtype(
+                sub_origin.bind(py).as_type_ptr(),
+                cls_origin.bind(py).as_type_ptr(),
+            ) == 0
+        } {
             return Ok(false);
         }
     }
 
     // Retrieve argument tuples.
-    let sub_args = get_ators_args_tuple(sub)?;
-    let cls_args = get_ators_args_tuple(cls)?;
+    let sub_args = sub_generic.args();
+    let cls_args = cls_generic.args();
 
     // Arity mismatch => False.
     if sub_args.len() != cls_args.len() {
@@ -482,22 +448,26 @@ fn generic_subclass_match_impl<'py>(
     }
 
     // Match each argument position.
-    for (sub_arg, cls_arg) in sub_args.iter().zip(cls_args.iter()) {
+    for (sub_arg, cls_arg) in sub_args
+        .iter()
+        .map(|sa| sa.bind(py))
+        .zip(cls_args.iter().map(|ca| ca.bind(py)))
+    {
         // `Any` on the RHS matches everything.
-        if is_any_type(&cls_arg)? {
+        if is_any_type(cls_arg)? {
             continue;
         }
 
         // TypeVar on the RHS acts as a wildcard (subject to bound/constraints).
-        if is_type_var(&cls_arg)? {
-            if !typevar_matches_arg(&cls_arg, &sub_arg)? {
+        if is_type_var(cls_arg)? {
+            if !typevar_matches_arg(cls_arg, sub_arg)? {
                 return Ok(false);
             }
             continue;
         }
 
         // Concrete type: sub_arg must be identical or a subclass.
-        if sub_arg.is(&cls_arg) {
+        if sub_arg.is(cls_arg) {
             continue;
         }
         match (sub_arg.cast::<PyType>(), cls_arg.cast::<PyType>()) {
@@ -557,14 +527,14 @@ pub fn create_ators_specialized_subclass<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
 
-    let exposed_params = get_generic_params_obj(cls)?;
-
-    if exposed_params.is_empty() {
+    let cls_info = get_class_info(cls)?;
+    let Some(cls_generic_info) = cls_info.generic() else {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "{} is not a generic Ators class",
             cls.qualname()?
         )));
-    }
+    };
+    let exposed_params = cls_generic_info.type_parameters();
 
     let params_tuple = if params.is_instance_of::<PyTuple>() {
         params.cast::<PyTuple>()?.clone()
@@ -602,24 +572,23 @@ pub fn create_ators_specialized_subclass<'py>(
         return Ok(cls.clone().into_any());
     }
 
-    let origin_attr = get_ators_origin(cls)?;
-    let origin = if origin_attr.is_none() {
-        // cls is the first time it is being specialized; it IS the origin.
-        cls.clone()
-    } else {
-        // cls is already a specialization – use its recorded origin.
-        origin_attr.cast_into::<PyType>()?
-    };
+    // None: cls is the first time it is being specialized; it IS the origin.
+    // Some: cls is already a specialization – use its recorded origin.
+    let origin = cls_generic_info.origin().map(|o| o.bind(py)).unwrap_or(cls);
+
     // Always bind against the origin definition so repeated partial
     // specializations compose transitively.
     // Apply the same compatibility rule to the origin class metadata.
-    let origin_params = get_generic_params_obj(&origin)?;
+    let origin_params = get_generic_params_obj(origin)?;
 
+    // Determine how the type variables of the origin class map to the provided
+    // arguments,  starting from the existing bindings on the class (if any)
+    // or the identity mapping on the origin parameters.
+    // This allows partial specializations to be defined in terms of the
+    // original type parameters, and for users to re-use the same argument in
+    // multiple positions (e.g. `A[int, int]`).
     let full_bindings = PyDict::new(py);
-    if let Some(existing) = get_class_info(cls)?
-        .generic()
-        .and_then(|g| g.typevar_bindings())
-    {
+    if let Some(existing) = cls_generic_info.typevar_bindings() {
         for (k, v) in existing.bind(py).iter() {
             full_bindings.set_item(k, v)?;
         }
@@ -628,8 +597,11 @@ pub fn create_ators_specialized_subclass<'py>(
             full_bindings.set_item(&tp, &tp)?;
         }
     }
-
-    for (exposed, arg) in exposed_params.iter().zip(params_tuple.iter()) {
+    for (exposed, arg) in exposed_params
+        .iter()
+        .map(|p| p.bind(py))
+        .zip(params_tuple.iter())
+    {
         if exposed.is(&arg) {
             continue;
         }
@@ -652,6 +624,10 @@ pub fn create_ators_specialized_subclass<'py>(
         }
     }
 
+    // Compute the set of unresolved type variables in the final bindings.
+    // This is used to determine which type variables remain free in the
+    // specialized class and should be recorded as typevar_bindings metadata
+    // for downstream specializations.
     let mut unresolved = Vec::new();
     for origin_param in origin_params.iter() {
         let value = full_bindings
@@ -665,11 +641,10 @@ pub fn create_ators_specialized_subclass<'py>(
     }
     let unresolved_tuple = PyTuple::new(py, unresolved.iter())?;
 
-    let typevar_bindings = full_bindings;
-
     // Compute the full argument tuple for all origin params.  This is the
     // canonical cache key: using the full args (relative to the origin) means
     // that `A[int, str]` and `A[int][str]` always resolve to the same class.
+    let typevar_bindings = full_bindings;
     let full_args = origin_params
         .iter()
         .map(|tp| Ok(typevar_bindings.get_item(&tp)?.unwrap_or(tp)))
@@ -711,10 +686,8 @@ pub fn create_ators_specialized_subclass<'py>(
         cls.getattr(intern!(py, "__module__"))?,
     )?;
     namespace.set_item(intern!(py, "__annotations__"), &annotations)?;
-    namespace.set_item(intern!(py, "__ators_typevar_bindings__"), &typevar_bindings)?;
 
-    let members_info = get_class_info(cls)?;
-    for member_name in members_info.members_by_name().keys() {
+    for member_name in cls_info.members_by_name().keys() {
         if annotations.contains(member_name)? {
             let mut inherited_builder = MemberBuilder::default();
             inherited_builder.set_inherit(true);
@@ -731,7 +704,11 @@ pub fn create_ators_specialized_subclass<'py>(
     let specialized_name = format!("{base_name}[{rendered}]");
 
     let kwargs = PyDict::new(py);
-    kwargs.set_item(intern!(py, "frozen"), get_ators_frozen_flag(cls)?)?;
+    kwargs.set_item(intern!(py, "frozen"), cls_info.frozen())?;
+
+    // we do not store info since it we will go throug create_ators_subclass
+    // which will create the info and store it in the store, but we need to
+    //pass it to create the specialized class
     let specialized = cls.get_type().call(
         (
             specialized_name,
@@ -742,21 +719,15 @@ pub fn create_ators_specialized_subclass<'py>(
     )?;
 
     if let Ok(specialized_type) = specialized.cast::<PyType>() {
-        let info = (*get_class_info(specialized_type)?).clone_ref(py);
+        let info = pop_definitive_class_info(py, specialized_type);
         let updated = info.with_generic(Some(AtorsGenericInfo::new(
-            Some(origin.clone().unbind()),
             full_args_tuple.iter().map(|a| a.unbind()).collect(),
+            Some(origin.clone().unbind()),
             unresolved_tuple.iter().map(|a| a.unbind()).collect(),
             Some(typevar_bindings.unbind()),
             None,
         )));
-        let key = class_key(specialized_type);
-        let store = get_class_info_store(py);
-        store
-            .write()
-            .expect("Class info store write lock poisoned")
-            .definitive
-            .insert(key, Arc::new(updated));
+        insert_definitive_class_info(py, specialized_type, updated);
     }
     cache.set_item(&full_args_tuple, &specialized)?;
 
@@ -1166,14 +1137,10 @@ pub fn create_ators_subclass<'py>(
 
     // Since the only slot we use is __weakref__ we do not need copyreg
 
-    // Add member customization tool to be used in __init__subclass__ and
-    // create the class
-    dct.set_item(
-        "__ators_member_customizer__",
-        MemberCustomizationTool::new(&all_members),
-    )?;
+    // Build class info with member customization tool to be used in
+    // __init__subclass__
     let fqname = class_fqname_from_inputs(&name, &dct)?;
-    let mut members_by_name = all_members
+    let members_by_name = all_members
         .iter()
         .map(|(k, v)| Ok((k.extract::<String>()?, v.cast::<Member>()?.clone().unbind())))
         .collect::<PyResult<HashMap<String, Py<Member>>>>()?;
@@ -1195,13 +1162,14 @@ pub fn create_ators_subclass<'py>(
         validate_attr,
         type_containers,
         pickle_policy.clone(),
+        None,
         members_by_name,
         specific_members,
         optional_init_member_names,
         required_init_member_names,
         methods_by_name,
         None,
-        None,
+        Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
     );
     insert_temp_class_info(py, fqname.clone(), class_info);
 
@@ -1216,118 +1184,102 @@ pub fn create_ators_subclass<'py>(
             return Err(err.into());
         }
     };
-    let class_info = pop_temp_class_info(py, &fqname);
+    let mut class_info = pop_temp_class_info(py, &fqname);
+    let mut updated_members_by_name = class_info
+        .members_by_name()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+        .collect::<HashMap<_, _>>();
 
-    let post_create_result: PyResult<()> = (|| {
-        // Retrieve the customization tool and customize the members as needed
-        let mut tool = cls
-            .getattr("__ators_member_customizer__")?
-            .cast_exact::<Py<MemberCustomizationTool>>()?
-            .borrow_mut();
-        for (mname, mut mb) in tool.get_builders(py) {
-            // Create the new member inheriting behaviors from the existing ones.
-            let existing_member = cls.getattr(&mname)?.cast_into::<Member>()?;
-            let em = existing_member.get();
-            mb.name = Some(em.name().to_owned());
-            mb.slot_index = Some(em.index());
-            mb.get_inherited_behavior_from_member(em);
-            let new_member = Bound::new(py, mb.build(&name)?)?;
+    // Retrieve and clear the customization tool and customize the members as needed
+    let mut tool = class_info.take_customizer().bind(py).borrow_mut();
+    for (mname, mut mb) in tool.get_builders(py) {
+        // Create the new member inheriting behaviors from the existing ones.
+        let existing_member = cls.getattr(&mname)?.cast_into::<Member>()?;
+        let em = existing_member.get();
+        mb.name = Some(em.name().to_owned());
+        mb.slot_index = Some(em.index());
+        mb.get_inherited_behavior_from_member(em);
+        let new_member = Bound::new(py, mb.build(&name)?)?;
 
-            // Replace the exiting member references by references by the new member
-            cls.setattr(&mname, Bound::clone(&new_member))?;
-            all_members.set_item(&mname, Bound::clone(&new_member))?;
-            members_by_name.insert(mname.clone(), new_member.clone().unbind());
-        }
+        // Replace the exiting member references by references by the new member
+        cls.setattr(&mname, Bound::clone(&new_member))?;
+        all_members.set_item(&mname, Bound::clone(&new_member))?;
+        updated_members_by_name.insert(mname.clone(), new_member.clone().unbind());
+    }
 
-        // Set the customizer to None to mark that the class has been created.
-        cls.setattr("__ators_member_customizer__", py.None())?;
+    // Determine class mutability based on member type validators
+    let members_dict = &all_members;
+    let mut class_mutability = ClassMutability::Immutable {};
+    let mut inspect_values_names = Vec::new();
 
-        // Determine class mutability based on member type validators
-        let members_dict = &all_members;
-        let mut class_mutability = ClassMutability::Immutable {};
-        let mut inspect_values_names = Vec::new();
+    for (member_name, member_obj) in members_dict.iter() {
+        let member = member_obj.cast::<Member>()?;
 
-        for (member_name, member_obj) in members_dict.iter() {
-            let member = member_obj.cast::<Member>()?;
+        // Set the owner if the validator contains a ForwardValidator requiring
+        // a owner to resolve it.
+        let requires_owner = members_requiring_owner.contains(&member_name.extract::<String>()?);
+        let new_member = if requires_owner {
+            Bound::new(py, member.get().with_owner(py, &cls))?
+        } else {
+            member_obj.clone().cast_into()?
+        };
+        members_dict.set_item(&member_name, Bound::clone(&new_member))?;
+        let member_name_str = member_name.extract::<String>()?;
+        cls.setattr(&member_name_str, Bound::clone(&new_member))?;
+        updated_members_by_name.insert(member_name_str.clone(), new_member.clone().unbind());
 
-            // Set the owner if the validator contains a ForwardValidator requiring
-            // a owner to resolve it.
-            let requires_owner =
-                members_requiring_owner.contains(&member_name.extract::<String>()?);
-            let new_member = if requires_owner {
-                Bound::new(py, member.get().with_owner(py, &cls))?
-            } else {
-                member_obj.clone().cast_into()?
-            };
-            members_dict.set_item(&member_name, Bound::clone(&new_member))?;
-            let member_name_str = member_name.extract::<String>()?;
-            cls.setattr(&member_name_str, Bound::clone(&new_member))?;
-            members_by_name.insert(member_name_str.clone(), new_member.clone().unbind());
+        // Get the validator from the member using the accessor method
+        let member_borrow = new_member.get();
+        let validator = member_borrow.validator();
 
-            // Get the validator from the member using the accessor method
-            let member_borrow = new_member.get();
-            let validator = member_borrow.validator();
-
-            // Examine the mutability of the member and update the class mutability
-            // accordingly. For validation involving forward references we do not
-            // have enough information to determine mutability (since the class has
-            // not yet been added to the module dict), so we mark it as Undecidable
-            // and keep track of the member name to later set the class mutability
-            // to InspectValues if needed.
-            let mutability = if requires_owner {
-                Mutability::Undecidable
-            } else {
-                validator.type_validator.is_type_mutable(py)
-            };
-            match mutability {
-                Mutability::Mutable => {
-                    class_mutability = ClassMutability::Mutable {};
-                    break;
-                }
-                Mutability::Undecidable => {
-                    inspect_values_names.push(member_name.extract::<String>()?);
-                }
-                Mutability::Immutable => {
-                    // Keep iterating
-                }
+        // Examine the mutability of the member and update the class mutability
+        // accordingly. For validation involving forward references we do not
+        // have enough information to determine mutability (since the class has
+        // not yet been added to the module dict), so we mark it as Undecidable
+        // and keep track of the member name to later set the class mutability
+        // to InspectValues if needed.
+        let mutability = if requires_owner {
+            Mutability::Undecidable
+        } else {
+            validator.type_validator.is_type_mutable(py)
+        };
+        match mutability {
+            Mutability::Mutable => {
+                class_mutability = ClassMutability::Mutable {};
+                break;
+            }
+            Mutability::Undecidable => {
+                inspect_values_names.push(member_name.extract::<String>()?);
+            }
+            Mutability::Immutable => {
+                // Keep iterating
             }
         }
+    }
 
-        // If we haven't found a mutable type and we have undecidable types, set to InspectValues
-        match class_mutability {
-            ClassMutability::Immutable {} if !inspect_values_names.is_empty() => {
-                class_mutability = ClassMutability::InspectValues {
-                    values: inspect_values_names,
-                };
-            }
-            _ => {}
+    // If we haven't found a mutable type and we have undecidable types, set to InspectValues
+    match class_mutability {
+        ClassMutability::Immutable {} if !inspect_values_names.is_empty() => {
+            class_mutability = ClassMutability::InspectValues {
+                values: inspect_values_names,
+            };
         }
-
-        cls.setattr(
-            "__ators_members_mutability__",
-            Bound::new(py, class_mutability)?,
-        )?;
-
-        Ok(())
-    })();
-    if let Err(err) = post_create_result {
-        remove_definitive_class_info(py, &cls);
-        return Err(err);
+        _ => {}
     }
 
     // Initialize specialization cache once for generic classes so it always
     // lives on the origin (non-specialized) class.
     let generic_params = get_generic_params_obj(&cls)?;
-    let key = class_key(&cls);
     let generic = if !generic_params.is_empty() {
         let typevar_bindings = PyDict::new(py);
         for param in generic_params.iter() {
             typevar_bindings.set_item(&param, &param)?;
         }
         Some(AtorsGenericInfo::new(
+            generic_params.iter().map(|p| p.unbind()).collect(),
             None,
             Vec::new(),
-            generic_params.iter().map(|p| p.unbind()).collect(),
             Some(typevar_bindings.unbind()),
             Some(PyDict::new(py).unbind()),
         ))
@@ -1336,14 +1288,10 @@ pub fn create_ators_subclass<'py>(
     };
 
     let final_class_info = class_info
-        .with_members(members_by_name)
+        .with_members(updated_members_by_name)
         .with_generic(generic)
-        .without_customizer();
-    get_class_info_store(py)
-        .write()
-        .expect("Class info store write lock poisoned")
-        .definitive
-        .insert(key, Arc::new(final_class_info));
+        .with_mutability(Some(class_mutability));
+    insert_definitive_class_info(py, &cls, final_class_info);
 
     Ok(cls.into_any())
 }
