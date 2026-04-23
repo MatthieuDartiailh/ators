@@ -38,7 +38,23 @@ and two frontends:
 
 ## Running Benchmarks
 
-Activate the local environment first:
+If a `.venv/` directory is present, activate it first using the
+shell-appropriate activation command.
+
+Before running benchmarks, install the package with an optimized install step:
+
+```bash
+pip install .
+# or
+uv pip install .
+```
+
+Do not use `maturin develop` as the benchmark install step. It compiles the
+extension in debug mode, which is not suitable for benchmark measurements.
+
+For regular development (non-benchmark), `maturin develop` is still appropriate.
+
+Example environment activation in PowerShell:
 
 ```bash
 & .venv/Scripts/Activate.ps1
@@ -78,21 +94,6 @@ python benchmarks/run_pyperf.py --family list
 python benchmarks/run_pyperf.py --family validation_int
 python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
-```
-
-Run convenience pyperf scripts:
-
-```bash
-python benchmarks/bench_validation.py
-python benchmarks/bench_containers_assignment.py
-python benchmarks/bench_get_untyped.py
-python benchmarks/bench_set_untyped.py
-python benchmarks/bench_set_untyped_alternating.py
-python benchmarks/bench_get_descriptor.py
-python benchmarks/containers/bench_list.py
-python benchmarks/containers/bench_set.py
-python benchmarks/containers/bench_dict.py
-python benchmarks/bench_typecheck.py
 ```
 
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
