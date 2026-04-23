@@ -10,7 +10,9 @@
 from ._ators import (
     AtorsBase as _Base,
     AtorsChange,
+    ListChange,
     Member,
+    NotifyingList,
     PicklePolicy,
     add_generic_type_attributes,
     disable_notifications,
@@ -83,7 +85,9 @@ class Ators(_Base, metaclass=_Meta):
 __all__ = [
     "Ators",
     "AtorsChange",
+    "ListChange",
     "Member",
+    "NotifyingList",
     "PicklePolicy",
     "add_generic_type_attributes",
     "disable_notifications",

@@ -162,6 +162,26 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
+                TypeValidator::NotifyingList { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    // For coercion, we just create a PyList with coerced items
+                    // The actual NotifyingList will be created in validate_type()
+                    PyList::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
                 TypeValidator::Dict { items } => {
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {

@@ -341,6 +341,35 @@ pub fn build_validator_from_annotation<'py>(
                 ),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if let Ok(ators_mod) = py.import(intern!(py, "ators._ators")) {
+            if let Ok(notifying_list_type) = ators_mod.getattr(intern!(py, "NotifyingList"))
+                && origin.is(&notifying_list_type)
+            {
+                let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                    let (item_validator, item_info) = build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-item")).cast()?,
+                        &item_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    )?;
+                    (
+                        Some(BoxedValidator::from(item_validator)),
+                        item_info.requires_owner,
+                    )
+                } else {
+                    (None, false)
+                };
+                Ok((
+                    Validator::new(TypeValidator::NotifyingList { item: item_val }, None, None, None),
+                    ValidatorBuildInfo { requires_owner },
+                ))
+            } else {
+                Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "unsupported type in annotation: {origin}"
+                )))
+            }
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant
