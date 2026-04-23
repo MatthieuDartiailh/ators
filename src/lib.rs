@@ -57,7 +57,8 @@ mod _ators {
     use self::core::{
         AtorsBase, disable_notifications, enable_notifications, freeze, get_member,
         get_member_customization_tool, get_members, get_members_by_tag,
-        get_members_by_tag_and_value, is_frozen, is_notifications_enabled, observe, unobserve,
+        get_members_by_tag_and_value, is_frozen, is_notifications_enabled,
+        maybe_freeze_instance_after_call, observe, unobserve,
     };
     #[pymodule_export]
     use self::meta::{create_ators_specialized_subclass, create_ators_subclass};

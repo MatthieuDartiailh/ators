@@ -17,7 +17,7 @@ from ._ators import (
     get_ators_args as _get_ators_args,
     get_ators_frozen_flag as _get_ators_frozen_flag,
     get_ators_origin as _get_origin,
-    get_tracked_class_info_size as _get_tracked_class_info_size,
+    maybe_freeze_instance_after_call as _maybe_freeze_instance_after_call,
     rust_instancecheck as _rust_instancecheck,
     rust_subclasscheck as _rust_subclasscheck,
 )
@@ -75,6 +75,9 @@ class AtorsMeta(type):
             pickle_policy,
             validate_attr,
         )
+
+    def __call__(self, *args, **kwds):
+        return _maybe_freeze_instance_after_call(super().__call__(*args, **kwds))
 
     @property
     def __ators_frozen__(cls) -> bool:

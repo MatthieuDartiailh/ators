@@ -153,9 +153,6 @@ impl AtorsBase {
     ) -> PyResult<()> {
         let class_info = get_class_info(&slf.get_type())?;
         let Some(kwargs) = kwargs else {
-            if class_info.frozen() {
-                freeze(slf)?;
-            }
             return Ok(());
         };
 
@@ -180,9 +177,6 @@ impl AtorsBase {
         }
         if consumed != kwargs.len() {
             return Err(init_kwargs_error(kwargs, &class_info));
-        }
-        if class_info.frozen() {
-            freeze(slf)?;
         }
         Ok(())
     }
@@ -537,6 +531,18 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
             class_type.name().expect("Type object always has a name"),
         )))
     }
+}
+
+#[pyfunction]
+pub fn maybe_freeze_instance_after_call<'py>(
+    obj: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if let Ok(instance) = obj.cast::<AtorsBase>()
+        && get_class_info(&instance.get_type())?.frozen()
+    {
+        freeze(instance)?;
+    }
+    Ok(obj)
 }
 
 #[pyfunction]

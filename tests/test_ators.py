@@ -11,7 +11,6 @@ import gc
 import weakref
 
 import pytest
-from ators._meta import _get_tracked_class_info_size
 
 from ators import (
     Ators,
@@ -22,6 +21,7 @@ from ators import (
     get_members_by_tag_and_value,
     member,
 )
+from ators._ators import get_tracked_class_info_size
 from ators.behaviors import DelAttr, PreSetAttr
 
 
@@ -139,7 +139,7 @@ def test_members_mapping_is_immutable():
 
 
 def test_class_info_is_removed_when_class_is_collected():
-    before = _get_tracked_class_info_size()
+    before = get_tracked_class_info_size()
 
     def _build():
         class Temp(Ators):
@@ -148,9 +148,9 @@ def test_class_info_is_removed_when_class_is_collected():
         return Temp
 
     temp = _build()
-    assert _get_tracked_class_info_size() == before + 1
+    assert get_tracked_class_info_size() == before + 1
     w = weakref.ref(temp)
     del temp
     gc.collect()
     assert w() is None
-    assert _get_tracked_class_info_size() == before
+    assert get_tracked_class_info_size() == before
