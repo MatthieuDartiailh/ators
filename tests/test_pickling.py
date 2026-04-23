@@ -11,7 +11,7 @@ import pickle
 
 import pytest
 
-from ators import Ators, PicklePolicy, member
+from ators import Ators, NotifyingList, PicklePolicy, member
 
 # ---------------------------------------------------------------------------
 # Module-level class definitions (pickle requires a findable qualified name)
@@ -112,6 +112,18 @@ class _DictSetValueClass(Ators):
 
 class _DictDictValueClass(Ators):
     mapping: dict[str, dict[str, int]]
+
+
+class _NotifyingListClass(Ators):
+    items: NotifyingList[int]
+
+
+class _ListNotifyingListClass(Ators):
+    items: list[NotifyingList[int]]
+
+
+class _DictNotifyingListClass(Ators):
+    mapping: dict[str, NotifyingList[int]]
 
 
 class _InheritanceBase(Ators):
@@ -415,6 +427,48 @@ def test_dict_dict_value_member_validates_after_restore():
     assert a2.mapping["y"]["c"] == 3
     with pytest.raises(TypeError):
         a2.mapping["y"]["d"] = "not an int"
+
+
+# ---------------------------------------------------------------------------
+# Roundtrip: typed notifying-list members (NotifyingList)
+# ---------------------------------------------------------------------------
+
+
+def test_roundtrip_notifying_list_member():
+    """Pickle/unpickle roundtrip preserves notifying-list content."""
+    a = _NotifyingListClass(items=[1, 2, 3])
+    a2 = pickle.loads(pickle.dumps(a))
+    assert list(a2.items) == [1, 2, 3]
+
+
+def test_notifying_list_member_validates_after_restore():
+    """After unpickling, a typed notifying-list must still enforce its validator."""
+    a = _NotifyingListClass(items=[10, 20])
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.items.append(30)
+    assert list(a2.items) == [10, 20, 30]
+    with pytest.raises(TypeError):
+        a2.items.append("not an int")
+
+
+def test_list_of_notifying_list_member_validates_after_restore():
+    """After unpickling, list[NotifyingList[int]] keeps nested validator metadata."""
+    a = _ListNotifyingListClass(items=[[1, 2]])
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.items[0].append(3)
+    assert list(a2.items[0]) == [1, 2, 3]
+    with pytest.raises(TypeError):
+        a2.items[0].append("not an int")
+
+
+def test_dict_of_notifying_list_member_validates_after_restore():
+    """After unpickling, dict[str, NotifyingList[int]] keeps nested metadata."""
+    a = _DictNotifyingListClass(mapping={"x": [1, 2]})
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["x"].append(3)
+    assert list(a2.mapping["x"]) == [1, 2, 3]
+    with pytest.raises(TypeError):
+        a2.mapping["x"].append("not an int")
 
 
 # ---------------------------------------------------------------------------
