@@ -308,6 +308,18 @@ impl AtorsBase {
                         AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
                     }
                 }
+                TypeValidator::NotifyingList {
+                    item: Some(item_bv),
+                } => {
+                    if let Ok(alist) = value.cast::<NotifyingList>() {
+                        NotifyingList::restore(
+                            alist,
+                            (*item_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
                 TypeValidator::Set {
                     item: Some(item_bv),
                 } => {
