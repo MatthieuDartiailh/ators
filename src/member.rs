@@ -1298,6 +1298,21 @@ impl MemberBuilder {
             )),))?;
         }
 
+        if (self.coerce.is_some() || self.coerce_init.is_some())
+            && let Some(type_name_str) = (match &tv {
+                TypeValidator::Sequence { .. } => Some("Sequence"),
+                TypeValidator::Collection { .. } => Some("Collection"),
+                TypeValidator::Mapping { .. } => Some("Mapping"),
+                _ => None,
+            })
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Member {} of {} cannot configure coercion with abstract collection validator {}. \
+                 Use a concrete container validator instead.",
+                &name, &type_name, type_name_str
+            )));
+        }
+
         // For union type validators, if type inferred coercion is requested at
         // the member level we set coercion on all union validators if no specific
         // was set.

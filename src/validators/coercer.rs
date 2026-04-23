@@ -235,6 +235,14 @@ impl Coercer {
                 TypeValidator::GenericAttributes { type_, .. } => {
                     type_.bind(py).call1((value,))
                 }
+                TypeValidator::Sequence { .. }
+                | TypeValidator::Collection { .. }
+                | TypeValidator::Mapping { .. } => Err(
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "Cannot coerce a value to an abstract collection type \
+                         (Sequence, Collection, or Mapping). Assign a concrete value instead."
+                    )
+                ),
             },
             Self::CallValue { callable } => callable.0.bind(value.py()).call1((value,)),
             Self::CallNameObjectValueInit { callable } => callable
