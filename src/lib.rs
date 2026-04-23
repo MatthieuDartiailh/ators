@@ -45,6 +45,54 @@ fn get_type_mutability_map<'py>(py: Python<'py>) -> Bound<'py, TypeMutabilityMap
         .into_bound(py)
 }
 
+static ABC_SEQUENCE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+pub(crate) fn get_abc_sequence<'py>(py: Python<'py>) -> Bound<'py, PyType> {
+    ABC_SEQUENCE
+        .get_or_init(py, || {
+            let abc = py.import("collections.abc").expect("collections.abc must exist");
+            abc.getattr("Sequence")
+                .expect("collections.abc.Sequence must exist")
+                .cast_into::<PyType>()
+                .expect("Sequence must be a type")
+                .unbind()
+        })
+        .clone_ref(py)
+        .into_bound(py)
+}
+
+static ABC_COLLECTION: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+pub(crate) fn get_abc_collection<'py>(py: Python<'py>) -> Bound<'py, PyType> {
+    ABC_COLLECTION
+        .get_or_init(py, || {
+            let abc = py.import("collections.abc").expect("collections.abc must exist");
+            abc.getattr("Collection")
+                .expect("collections.abc.Collection must exist")
+                .cast_into::<PyType>()
+                .expect("Collection must be a type")
+                .unbind()
+        })
+        .clone_ref(py)
+        .into_bound(py)
+}
+
+static ABC_MAPPING: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+pub(crate) fn get_abc_mapping<'py>(py: Python<'py>) -> Bound<'py, PyType> {
+    ABC_MAPPING
+        .get_or_init(py, || {
+            let abc = py.import("collections.abc").expect("collections.abc must exist");
+            abc.getattr("Mapping")
+                .expect("collections.abc.Mapping must exist")
+                .cast_into::<PyType>()
+                .expect("Mapping must be a type")
+                .unbind()
+        })
+        .clone_ref(py)
+        .into_bound(py)
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 mod _ators {
