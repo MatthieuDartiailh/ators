@@ -80,6 +80,13 @@ python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
 ```
 
+Export shared pyperf results to markdown:
+
+```bash
+python benchmarks/run_pyperf.py --family dict --group update_dict \
+   --implementation ators --markdown-output benchmarks/results/latest.md
+```
+
 Run convenience pyperf scripts:
 
 ```bash

@@ -195,6 +195,55 @@ def _print_benchmark_results(results) -> None:
     console.print(table)
 
 
+def _build_markdown_report(results) -> str:
+    if not results:
+        return "# Benchmark Results\n\nNo benchmark results were produced.\n"
+
+    means = [benchmark.mean() for _, benchmark in results]
+    fastest = min(means)
+    slowest = max(means)
+    fastest_value = results[means.index(fastest)][1].format_value(fastest)
+    slowest_value = results[means.index(slowest)][1].format_value(slowest)
+
+    lines = [
+        "# Benchmark Results",
+        "",
+        f"- Completed cases: {len(results)}",
+        f"- Fastest mean: {fastest_value}",
+        f"- Slowest mean: {slowest_value}",
+        "",
+        "| Family | Group | Impl | Mean | Median | Stdev | Spread | Samples |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+
+    for case, benchmark in results:
+        mean = benchmark.mean()
+        stdev = benchmark.stdev()
+        spread = (stdev / mean * 100.0) if mean else 0.0
+        lines.append(
+            "| "
+            f"{case.family} | "
+            f"{case.group} | "
+            f"{case.implementation} | "
+            f"{benchmark.format_value(mean)} | "
+            f"{benchmark.format_value(benchmark.median())} | "
+            f"{benchmark.format_value(stdev)} | "
+            f"{spread:.2f}% | "
+            f"{benchmark.get_nvalue()} |"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_markdown_report(output_path: str, results) -> None:
+    report = _build_markdown_report(results)
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    print(f"Markdown report written to: {path}")
+
+
 def _forward_only_pyperf_args(pyperf_args: list[str]) -> None:
     """Keep only script name and pyperf-specific arguments in sys.argv."""
     sys.argv = [sys.argv[0], *pyperf_args]
@@ -237,6 +286,10 @@ def main() -> None:
         action="append",
         help="Filter by implementation (py, py_typed, ators, atom).",
     )
+    parser.add_argument(
+        "--markdown-output",
+        help="Write benchmark results to a markdown report file.",
+    )
     args, unknown = parser.parse_known_args()
     pyperf_args = _build_pyperf_args(unknown)
     program_args = _build_script_program_args(args)
@@ -270,6 +323,8 @@ def main() -> None:
     )
     if not is_worker:
         _print_benchmark_results(results)
+        if args.markdown_output:
+            _write_markdown_report(args.markdown_output, results)
 
 
 if __name__ == "__main__":
