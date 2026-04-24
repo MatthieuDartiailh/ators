@@ -103,22 +103,27 @@ impl MembersByNameMapping {
         Self { members_by_name }
     }
 
+    /// Return the number of members currently stored in the mapping.
     pub(crate) fn len(&self) -> usize {
         self.members_by_name.len()
     }
 
+    /// Check whether a member with the provided name exists.
     pub(crate) fn contains_key(&self, name: &str) -> bool {
         self.members_by_name.contains_key(name)
     }
 
+    /// Retrieve a member by name from the underlying Rust map.
     pub(crate) fn get(&self, name: &str) -> Option<&Py<Member>> {
         self.members_by_name.get(name)
     }
 
+    /// Iterate over member-name/member-object pairs.
     pub(crate) fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Py<Member>> {
         self.members_by_name.iter()
     }
 
+    /// Iterate over member names.
     pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, String, Py<Member>> {
         self.members_by_name.keys()
     }
