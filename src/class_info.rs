@@ -99,10 +99,8 @@ impl MembersByNameMapping {
 }
 
 impl MembersByNameMapping {
-    fn from_member_lookup(member_lookup_by_name: HashMap<String, Py<Member>>) -> Self {
-        Self {
-            members_by_name: member_lookup_by_name,
-        }
+    fn from_member_lookup(members_by_name: HashMap<String, Py<Member>>) -> Self {
+        Self { members_by_name }
     }
 
     pub(crate) fn len(&self) -> usize {

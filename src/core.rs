@@ -519,13 +519,11 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
                 let ty_mutability_map = get_type_mutability_map(py);
                 for attr_name in values {
                     let members = class_info.members_by_name_ref(py);
-                    let member = members
-                        .get(attr_name)
-                        .ok_or_else(|| {
-                            pyo3::exceptions::PyAttributeError::new_err(format!(
-                                "Unknown member '{attr_name}'"
-                            ))
-                        })?;
+                    let member = members.get(attr_name).ok_or_else(|| {
+                        pyo3::exceptions::PyAttributeError::new_err(format!(
+                            "Unknown member '{attr_name}'"
+                        ))
+                    })?;
                     if let Some(slot_value) = get_slot(obj, member.bind(py).get().index()) {
                         let attr_bound = slot_value.bind(py);
                         let attr_mutability =
