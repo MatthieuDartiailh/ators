@@ -47,19 +47,25 @@ fn init_kwargs_error(
     kwargs: &Bound<'_, PyDict>,
     class_info: &crate::class_info::AtorsClassInfo,
 ) -> PyErr {
+    let py = kwargs.py();
     let mut missing_required = Vec::new();
     for name in class_info.required_init_member_names() {
-        if !kwargs
-            .contains(name.as_str())
-            .expect("Checking a dict key should not fail for strings")
+        let key = name.bind(py);
+        if kwargs
+            .get_item(key)
+            .expect("Dict lookup should not fail for string keys")
+            .is_none()
         {
-            missing_required.push(name.clone());
+            missing_required.push(
+                key.extract::<String>()
+                    .expect("Class info stores only valid Python string keys"),
+            );
         }
     }
     let mut unknown = Vec::new();
     for (k, _) in kwargs.iter() {
         if let Ok(name) = k.extract::<String>()
-            && !class_info.is_init_member(&name)
+            && !class_info.is_init_member_name(py, &name)
         {
             unknown.push(name);
         }
@@ -79,31 +85,27 @@ fn init_kwargs_error(
     }
 }
 
-#[inline]
-fn set_init_value<'py>(
+#[cold]
+fn set_init_value_after_setattr_error<'py>(
     slf: &Bound<'py, AtorsBase>,
     class_info: &crate::class_info::AtorsClassInfo,
     key: &Bound<'py, PyString>,
     value: &Bound<'py, PyAny>,
+    err: PyErr,
 ) -> PyResult<()> {
     let py = slf.py();
-    match slf.setattr(key, value.clone()) {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            let key_name: String = key.extract()?;
-            let member = class_info
-                .members_by_name()
-                .get(&key_name)
-                .ok_or_else(|| pyo3::exceptions::PyAttributeError::new_err("Unknown init member"))?
-                .bind(py)
-                .clone();
-            if let Some(r) = member_coerce_init(&member, slf, value) {
-                let coerced_v = r?;
-                slf.setattr(key, coerced_v).map(|_| ())
-            } else {
-                Err(err)
-            }
-        }
+    let key_name: String = key.extract()?;
+    let member = class_info
+        .member_lookup_by_name()
+        .get(&key_name)
+        .ok_or_else(|| pyo3::exceptions::PyAttributeError::new_err("Unknown init member"))?
+        .bind(py)
+        .clone();
+    if let Some(r) = member_coerce_init(&member, slf, value) {
+        let coerced_v = r?;
+        slf.setattr(key, coerced_v).map(|_| ())
+    } else {
+        Err(err)
     }
 }
 
@@ -115,7 +117,7 @@ impl AtorsBase {
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
-        let slots_count = class_info.members_by_name().len();
+        let slots_count = class_info.member_lookup_by_name().len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
         // so later accesses can skip the critical section.
@@ -157,20 +159,36 @@ impl AtorsBase {
         };
 
         let mut consumed = 0usize;
-        for required_name in class_info.required_init_member_py_names() {
+        for required_name in class_info.required_init_member_names() {
             let required_key = required_name.bind(slf.py());
             if let Some(value) = kwargs.get_item(required_key)? {
-                set_init_value(slf, &class_info, required_key, &value)?;
+                if let Err(err) = slf.setattr(required_key, value.clone()) {
+                    set_init_value_after_setattr_error(
+                        slf,
+                        &class_info,
+                        required_key,
+                        &value,
+                        err,
+                    )?;
+                }
                 consumed += 1;
             } else {
                 return Err(init_kwargs_error(kwargs, &class_info));
             }
         }
         if consumed != kwargs.len() {
-            for optional_name in class_info.optional_init_member_py_names() {
+            for optional_name in class_info.optional_init_member_names() {
                 let optional_key = optional_name.bind(slf.py());
                 if let Some(value) = kwargs.get_item(optional_key)? {
-                    set_init_value(slf, &class_info, optional_key, &value)?;
+                    if let Err(err) = slf.setattr(optional_key, value.clone()) {
+                        set_init_value_after_setattr_error(
+                            slf,
+                            &class_info,
+                            optional_key,
+                            &value,
+                            err,
+                        )?;
+                    }
                     consumed += 1;
                 }
             }
@@ -206,7 +224,7 @@ impl AtorsBase {
         let class_info = get_class_info(&cls)?;
 
         let state = PyDict::new(py);
-        for (name_str, member) in class_info.members_by_name() {
+        for (name_str, member) in class_info.member_lookup_by_name() {
             let mb = member.bind(py).get();
 
             if mb.pickle
@@ -233,17 +251,20 @@ impl AtorsBase {
         // Restore values
         for (key, value) in state.iter() {
             let key_str: String = key.extract()?;
-            let member = class_info.members_by_name().get(&key_str).ok_or_else(|| {
-                let cls_name = cls
-                    .name()
-                    .ok()
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                pyo3::exceptions::PyKeyError::new_err(format!(
-                    "Unknown member '{}' for {}",
-                    key_str, cls_name
-                ))
-            })?;
+            let member = class_info
+                .member_lookup_by_name()
+                .get(&key_str)
+                .ok_or_else(|| {
+                    let cls_name = cls
+                        .name()
+                        .ok()
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    pyo3::exceptions::PyKeyError::new_err(format!(
+                        "Unknown member '{}' for {}",
+                        key_str, cls_name
+                    ))
+                })?;
             let mb = member.bind(py).get();
 
             // For container members: restore metadata before slot assignment.
@@ -499,11 +520,14 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
             ClassMutability::InspectValues { values } => {
                 let ty_mutability_map = get_type_mutability_map(py);
                 for attr_name in values {
-                    let member = class_info.members_by_name().get(attr_name).ok_or_else(|| {
-                        pyo3::exceptions::PyAttributeError::new_err(format!(
-                            "Unknown member '{attr_name}'"
-                        ))
-                    })?;
+                    let member = class_info
+                        .member_lookup_by_name()
+                        .get(attr_name)
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyAttributeError::new_err(format!(
+                                "Unknown member '{attr_name}'"
+                            ))
+                        })?;
                     if let Some(slot_value) = get_slot(obj, member.bind(py).get().index()) {
                         let attr_bound = slot_value.bind(py);
                         let attr_mutability =
@@ -561,7 +585,7 @@ pub fn get_member<'py>(
 ) -> PyResult<Bound<'py, Member>> {
     let info = get_class_info(&obj.get_type())?;
     let name: String = member_name.extract()?;
-    info.members_by_name()
+    info.member_lookup_by_name()
         .get(&name)
         .map(|m| m.bind(obj.py()).clone())
         .ok_or_else(|| {
@@ -569,16 +593,11 @@ pub fn get_member<'py>(
         })
 }
 
-/// Retrieve all members from an Ators objetc.
+/// Retrieve all members from an Ators object.
 #[pyfunction]
-pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
-    let py = obj.py();
-    let copy = PyDict::new(py);
+pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let info = get_class_info(&obj.get_type())?;
-    for (name, member) in info.members_by_name() {
-        copy.set_item(name, member.bind(py))?;
-    }
-    Ok(copy)
+    Ok(info.members_by_name().bind(obj.py()).clone().into_any())
 }
 
 /// Retrieve all members with a specific metadata key and the value associated with it.
@@ -590,7 +609,7 @@ pub fn get_members_by_tag<'py>(
     let py = obj.py();
     let members = PyDict::new(obj.py());
     let info = get_class_info(&obj.get_type())?;
-    for (name, v) in info.members_by_name() {
+    for (name, v) in info.member_lookup_by_name() {
         let member = v.bind(py);
         if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
@@ -611,7 +630,7 @@ pub fn get_members_by_tag_and_value<'py>(
     let members = PyDict::new(obj.py());
     let py = obj.py();
     let info = get_class_info(&obj.get_type())?;
-    for (name, member) in info.members_by_name() {
+    for (name, member) in info.member_lookup_by_name() {
         let member = member.bind(py);
         if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
@@ -652,7 +671,10 @@ pub fn observe<'py>(
     }
 
     let class_info = get_class_info(&obj.get_type())?;
-    if !class_info.members_by_name().contains_key(&member_name) {
+    if !class_info
+        .member_lookup_by_name()
+        .contains_key(&member_name)
+    {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
             "Unknown member '{member_name}'"
         )));

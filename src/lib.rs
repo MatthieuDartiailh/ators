@@ -65,7 +65,7 @@ mod _ators {
 
     #[pymodule_export]
     use self::class_info::{
-        PicklePolicy, drop_class_info, get_ators_args, get_ators_frozen_flag,
+        MembersByNameMapping, PicklePolicy, drop_class_info, get_ators_args, get_ators_frozen_flag,
         get_ators_init_member_names, get_ators_members_by_name, get_ators_origin,
         get_ators_specific_member_names, get_ators_type_params, get_tracked_class_info_size,
     };

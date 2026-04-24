@@ -21,10 +21,10 @@ use pyo3::{
 use crate::{
     annotations::generate_member_builders_from_cls_namespace,
     class_info::{
-        AtorsClassInfo, AtorsGenericInfo, ClassMutability, PicklePolicy, class_fqname_from_inputs,
-        get_class_info, insert_definitive_class_info, insert_pending_specialization_bindings,
+        AtorsClassInfo, AtorsGenericInfo, ClassMutability, PicklePolicy, get_class_info,
+        insert_definitive_class_info, insert_pending_specialization_bindings,
         insert_temp_class_info, pop_definitive_class_info, pop_temp_class_info,
-        take_pending_specialization_bindings,
+        take_pending_specialization_bindings_for_inputs,
     },
     core::AtorsBase,
     member::PreGetattrBehavior,
@@ -696,7 +696,7 @@ pub fn create_ators_specialized_subclass<'py>(
     )?;
     namespace.set_item(intern!(py, "__annotations__"), &annotations)?;
 
-    for member_name in cls_info.members_by_name().keys() {
+    for member_name in cls_info.member_lookup_by_name().keys() {
         if annotations.contains(member_name)? {
             let mut inherited_builder = MemberBuilder::default();
             inherited_builder.set_inherit(true);
@@ -815,8 +815,7 @@ pub fn create_ators_subclass<'py>(
         dct.set_item(slot_name, ())?;
     }
 
-    let fqname = class_fqname_from_inputs(&name, &dct)?;
-    let typevar_bindings = take_pending_specialization_bindings(py, &fqname);
+    let typevar_bindings = take_pending_specialization_bindings_for_inputs(py, &name, &dct)?;
     let typevar_bindings_ref = typevar_bindings.as_ref().map(|tb| tb.bind(py));
 
     let mut member_builders = generate_member_builders_from_cls_namespace(
@@ -886,7 +885,7 @@ pub fn create_ators_subclass<'py>(
             let spm = base_info.specific_member_names();
             members.extend(
                 base_info
-                    .members_by_name()
+                    .member_lookup_by_name()
                     .iter()
                     .filter(|(k, _)| spm.contains(k.as_str()))
                     .map(|(k, v)| (k.clone(), v.bind(py).clone())),
@@ -1165,31 +1164,29 @@ pub fn create_ators_subclass<'py>(
             optional_init_member_names.push(init_name.clone());
         }
     }
-    let optional_init_member_py_names = optional_init_member_names
+    let optional_init_member_names = optional_init_member_names
         .iter()
         .map(|name| PyString::new(py, name).unbind())
         .collect();
-    let required_init_member_py_names = required_init_member_names
+    let required_init_member_names = required_init_member_names
         .iter()
         .map(|name| PyString::new(py, name).unbind())
         .collect();
     let class_info = AtorsClassInfo::new(
+        py,
         frozen,
         is_observable,
         pickle_policy.clone(),
         None,
         members_by_name,
-        all_members.clone().unbind(),
         specific_members,
         optional_init_member_names,
         required_init_member_names,
-        optional_init_member_py_names,
-        required_init_member_py_names,
         methods_by_name,
         None,
         Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
-    );
-    insert_temp_class_info(py, fqname.clone(), class_info);
+    )?;
+    let fqname = insert_temp_class_info(py, &name, &dct, class_info)?;
 
     let cls_result = py
         .import(intern!(py, "builtins"))?
@@ -1204,7 +1201,7 @@ pub fn create_ators_subclass<'py>(
     };
     let mut class_info = pop_temp_class_info(py, &fqname);
     let mut updated_members_by_name = class_info
-        .members_by_name()
+        .member_lookup_by_name()
         .iter()
         .map(|(k, v)| (k.clone(), v.clone_ref(py)))
         .collect::<HashMap<_, _>>();
@@ -1306,7 +1303,7 @@ pub fn create_ators_subclass<'py>(
     };
 
     let final_class_info = class_info
-        .with_members(py, updated_members_by_name)
+        .with_members(py, updated_members_by_name)?
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
     insert_definitive_class_info(py, &cls, final_class_info);

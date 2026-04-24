@@ -9,9 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use pyo3::{
-    Bound, Py, PyAny, PyResult, intern, pyclass, pyfunction,
+    Bound, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::PyOnceLock,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyStringMethods, PyTuple,
+        PyType,
+    },
 };
 
 use crate::member::{Member, MemberCustomizationTool};
@@ -39,6 +42,81 @@ pub enum PicklePolicy {
     /// Include only public members (those not starting with `_`) in pickle state.
     #[pyo3(name = "PUBLIC")]
     Public,
+}
+
+#[pyclass(module = "ators._ators", mapping)]
+pub struct MembersByNameMapping {
+    members_by_name: HashMap<String, Py<Member>>,
+    key_order: Vec<Py<PyString>>,
+}
+
+#[pyclass(module = "ators._ators")]
+struct MembersByNameKeysIter {
+    keys: Vec<Py<PyString>>,
+    index: usize,
+}
+
+#[pymethods]
+impl MembersByNameKeysIter {
+    fn __iter__(slf: pyo3::PyRef<'_, Self>) -> pyo3::PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__<'py>(mut slf: pyo3::PyRefMut<'py, Self>) -> Option<Bound<'py, PyString>> {
+        let key = slf.keys.get(slf.index)?.clone_ref(slf.py());
+        slf.index += 1;
+        Some(key.bind(slf.py()).clone())
+    }
+}
+
+#[pymethods]
+impl MembersByNameMapping {
+    fn __len__(&self) -> usize {
+        self.members_by_name.len()
+    }
+
+    fn __getitem__<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, Member>> {
+        let key_name: String = key.extract()?;
+        self.members_by_name
+            .get(&key_name)
+            .map(|member| member.bind(py).clone())
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key_name))
+    }
+
+    fn __iter__(&self, py: pyo3::Python<'_>) -> PyResult<Py<MembersByNameKeysIter>> {
+        Py::new(
+            py,
+            MembersByNameKeysIter {
+                keys: self.key_order.iter().map(|k| k.clone_ref(py)).collect(),
+                index: 0,
+            },
+        )
+    }
+}
+
+impl MembersByNameMapping {
+    fn from_member_lookup(
+        py: pyo3::Python<'_>,
+        member_lookup_by_name: &HashMap<String, Py<Member>>,
+    ) -> PyResult<Py<Self>> {
+        let mut members_by_name = HashMap::with_capacity(member_lookup_by_name.len());
+        let mut key_order = Vec::with_capacity(member_lookup_by_name.len());
+        for (name, member) in member_lookup_by_name {
+            key_order.push(PyString::new(py, name).unbind());
+            members_by_name.insert(name.clone(), member.clone_ref(py));
+        }
+        Py::new(
+            py,
+            Self {
+                members_by_name,
+                key_order,
+            },
+        )
+    }
 }
 
 pub(crate) struct AtorsGenericInfo {
@@ -107,13 +185,11 @@ pub(crate) struct AtorsClassInfo {
     observable: bool,
     pickle_policy: PicklePolicy,
     mutability: Option<ClassMutability>,
-    members_by_name: HashMap<String, Py<Member>>,
-    members_dict: Py<PyDict>,
+    member_lookup_by_name: HashMap<String, Py<Member>>,
+    members_by_name: Py<MembersByNameMapping>,
     specific_member_names: HashSet<String>,
-    optional_init_member_names: Vec<String>,
-    required_init_member_names: Vec<String>,
-    optional_init_member_py_names: Vec<Py<PyString>>,
-    required_init_member_py_names: Vec<Py<PyString>>,
+    optional_init_member_names: Vec<Py<PyString>>,
+    required_init_member_names: Vec<Py<PyString>>,
     method_names: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
@@ -122,37 +198,34 @@ pub(crate) struct AtorsClassInfo {
 impl AtorsClassInfo {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        py: pyo3::Python<'_>,
         frozen: bool,
         observable: bool,
         pickle_policy: PicklePolicy,
         mutability: Option<ClassMutability>,
-        members_by_name: HashMap<String, Py<Member>>,
-        members_dict: Py<PyDict>,
+        member_lookup_by_name: HashMap<String, Py<Member>>,
         specific_member_names: HashSet<String>,
-        optional_init_member_names: Vec<String>,
-        required_init_member_names: Vec<String>,
-        optional_init_member_py_names: Vec<Py<PyString>>,
-        required_init_member_py_names: Vec<Py<PyString>>,
+        optional_init_member_names: Vec<Py<PyString>>,
+        required_init_member_names: Vec<Py<PyString>>,
         method_names: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        let members_by_name = MembersByNameMapping::from_member_lookup(py, &member_lookup_by_name)?;
+        Ok(Self {
             frozen,
             observable,
             pickle_policy,
             mutability,
+            member_lookup_by_name,
             members_by_name,
-            members_dict,
             specific_member_names,
             optional_init_member_names,
             required_init_member_names,
-            optional_init_member_py_names,
-            required_init_member_py_names,
             method_names,
             generic,
             customizer_tool,
-        }
+        })
     }
 
     pub(crate) fn with_generic(self, generic: Option<AtorsGenericInfo>) -> Self {
@@ -162,19 +235,14 @@ impl AtorsClassInfo {
     pub(crate) fn with_members(
         self,
         py: pyo3::Python<'_>,
-        members_by_name: HashMap<String, Py<Member>>,
-    ) -> Self {
-        let members_dict = PyDict::new(py);
-        for (name, member) in &members_by_name {
-            members_dict
-                .set_item(name, member.bind(py))
-                .expect("Known member values should always be settable");
-        }
-        Self {
+        member_lookup_by_name: HashMap<String, Py<Member>>,
+    ) -> PyResult<Self> {
+        let members_by_name = MembersByNameMapping::from_member_lookup(py, &member_lookup_by_name)?;
+        Ok(Self {
+            member_lookup_by_name,
             members_by_name,
-            members_dict: members_dict.unbind(),
             ..self
-        }
+        })
     }
 
     pub(crate) fn with_mutability(self, mutability: Option<ClassMutability>) -> Self {
@@ -207,37 +275,36 @@ impl AtorsClassInfo {
         &self.pickle_policy
     }
 
-    pub(crate) fn members_by_name(&self) -> &HashMap<String, Py<Member>> {
-        &self.members_by_name
+    pub(crate) fn member_lookup_by_name(&self) -> &HashMap<String, Py<Member>> {
+        &self.member_lookup_by_name
     }
 
-    pub(crate) fn members_dict(&self) -> &Py<PyDict> {
-        &self.members_dict
+    pub(crate) fn members_by_name(&self) -> &Py<MembersByNameMapping> {
+        &self.members_by_name
     }
 
     pub(crate) fn specific_member_names(&self) -> &HashSet<String> {
         &self.specific_member_names
     }
 
-    pub(crate) fn optional_init_member_names(&self) -> &[String] {
+    pub(crate) fn optional_init_member_names(&self) -> &[Py<PyString>] {
         &self.optional_init_member_names
     }
 
-    pub(crate) fn required_init_member_names(&self) -> &[String] {
+    pub(crate) fn required_init_member_names(&self) -> &[Py<PyString>] {
         &self.required_init_member_names
     }
 
-    pub(crate) fn required_init_member_py_names(&self) -> &[Py<PyString>] {
-        &self.required_init_member_py_names
-    }
-
-    pub(crate) fn optional_init_member_py_names(&self) -> &[Py<PyString>] {
-        &self.optional_init_member_py_names
-    }
-
-    pub(crate) fn is_init_member(&self, name: &str) -> bool {
-        self.required_init_member_names.iter().any(|n| n == name)
-            || self.optional_init_member_names.iter().any(|n| n == name)
+    pub(crate) fn is_init_member_name(&self, py: pyo3::Python<'_>, name: &str) -> bool {
+        self.required_init_member_names
+            .iter()
+            .chain(self.optional_init_member_names.iter())
+            .any(|n| {
+                n.bind(py)
+                    .to_str()
+                    .map(|candidate| candidate == name)
+                    .unwrap_or(false)
+            })
     }
 
     pub(crate) fn method_names(&self) -> &HashSet<String> {
@@ -254,12 +321,8 @@ impl AtorsClassInfo {
 
 #[pyfunction]
 pub fn get_ators_members_by_name<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
-    let py = cls.py();
     let info = get_class_info(cls)?;
-    let members_dict = info.members_dict().bind(py);
-    py.import(intern!(py, "types"))?
-        .getattr(intern!(py, "MappingProxyType"))?
-        .call1((members_dict,))
+    Ok(info.members_by_name().bind(cls.py()).clone().into_any())
 }
 
 #[pyfunction]
@@ -273,13 +336,15 @@ pub fn get_ators_specific_member_names<'py>(
 
 #[pyfunction]
 pub fn get_ators_init_member_names<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
+    let py = cls.py();
     let info = get_class_info(cls)?;
-    let init_member_names: Vec<&String> = info
+    let init_member_names: Vec<Bound<'_, PyString>> = info
         .required_init_member_names()
         .iter()
         .chain(info.optional_init_member_names().iter())
+        .map(|name| name.bind(py).clone())
         .collect();
-    Ok(PyTuple::new(cls.py(), init_member_names)?.into_any())
+    Ok(PyTuple::new(py, init_member_names)?.into_any())
 }
 
 #[pyfunction]
@@ -362,7 +427,7 @@ fn class_fqname<'py>(cls: &Bound<'py, PyType>) -> PyResult<String> {
 }
 
 #[inline]
-pub(crate) fn class_fqname_from_inputs<'py>(
+fn class_fqname_from_inputs<'py>(
     name: &Bound<'py, PyString>,
     dct: &Bound<'py, PyDict>,
 ) -> PyResult<String> {
@@ -377,13 +442,20 @@ pub(crate) fn class_fqname_from_inputs<'py>(
 }
 
 #[inline]
-pub(crate) fn insert_temp_class_info(py: pyo3::Python<'_>, fqname: String, info: AtorsClassInfo) {
+pub(crate) fn insert_temp_class_info<'py>(
+    py: pyo3::Python<'py>,
+    name: &Bound<'py, PyString>,
+    dct: &Bound<'py, PyDict>,
+    info: AtorsClassInfo,
+) -> PyResult<String> {
+    let fqname = class_fqname_from_inputs(name, dct)?;
     let store = get_class_info_store(py);
     store
         .write()
         .expect("Class info store write lock poisoned")
         .temporary
-        .insert(fqname, Arc::new(info));
+        .insert(fqname.clone(), Arc::new(info));
+    Ok(fqname)
 }
 
 /// Pop a temporary class info from the store by fully qualified name.
@@ -432,6 +504,16 @@ pub(crate) fn take_pending_specialization_bindings(
         .expect("Class info store write lock poisoned")
         .pending_specialization_bindings
         .remove(fqname)
+}
+
+#[inline]
+pub(crate) fn take_pending_specialization_bindings_for_inputs<'py>(
+    py: pyo3::Python<'py>,
+    name: &Bound<'py, PyString>,
+    dct: &Bound<'py, PyDict>,
+) -> PyResult<Option<Py<PyDict>>> {
+    let fqname = class_fqname_from_inputs(name, dct)?;
+    Ok(take_pending_specialization_bindings(py, &fqname))
 }
 
 #[inline]
