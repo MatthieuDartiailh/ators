@@ -96,6 +96,14 @@ python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
 ```
 
+Export shared pyperf results to markdown:
+
+```bash
+python benchmarks/run_pyperf.py --family dict --group update_dict \
+   --implementation ators --markdown-output benchmarks/results/latest.md
+```
+
+
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
 with summary counts.
 
