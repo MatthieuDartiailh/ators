@@ -7,13 +7,13 @@
 # --------------------------------------------------------------------------------------
 """Shared descriptor benchmark case registry."""
 
-import importlib.util
 from typing import Any, Callable
 
 from ators import Ators, freeze, member
 from benchmarks.shared.registry_types import BenchmarkCase
+from benchmarks.shared.runtime import atom_benchmarks_available
 
-ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
+ATOM_AVAILABLE = atom_benchmarks_available()
 
 if ATOM_AVAILABLE:
     from atom.api import Atom, Value
