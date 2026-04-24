@@ -696,7 +696,7 @@ pub fn create_ators_specialized_subclass<'py>(
     )?;
     namespace.set_item(intern!(py, "__annotations__"), &annotations)?;
 
-    for member_name in cls_info.member_lookup_by_name().keys() {
+    for member_name in cls_info.members_by_name_ref(py).keys() {
         if annotations.contains(member_name)? {
             let mut inherited_builder = MemberBuilder::default();
             inherited_builder.set_inherit(true);
@@ -885,7 +885,7 @@ pub fn create_ators_subclass<'py>(
             let spm = base_info.specific_member_names();
             members.extend(
                 base_info
-                    .member_lookup_by_name()
+                    .members_by_name_ref(py)
                     .iter()
                     .filter(|(k, _)| spm.contains(k.as_str()))
                     .map(|(k, v)| (k.clone(), v.bind(py).clone())),
@@ -1201,7 +1201,7 @@ pub fn create_ators_subclass<'py>(
     };
     let mut class_info = pop_temp_class_info(py, &fqname);
     let mut updated_members_by_name = class_info
-        .member_lookup_by_name()
+        .members_by_name_ref(py)
         .iter()
         .map(|(k, v)| (k.clone(), v.clone_ref(py)))
         .collect::<HashMap<_, _>>();

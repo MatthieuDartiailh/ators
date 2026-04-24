@@ -95,8 +95,8 @@ fn set_init_value_after_setattr_error<'py>(
 ) -> PyResult<()> {
     let py = slf.py();
     let key_name: String = key.extract()?;
-    let member = class_info
-        .member_lookup_by_name()
+    let members = class_info.members_by_name_ref(py);
+    let member = members
         .get(&key_name)
         .ok_or_else(|| pyo3::exceptions::PyAttributeError::new_err("Unknown init member"))?
         .bind(py)
@@ -117,7 +117,7 @@ impl AtorsBase {
     fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
-        let slots_count = class_info.member_lookup_by_name().len();
+        let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
         // so later accesses can skip the critical section.
@@ -224,7 +224,7 @@ impl AtorsBase {
         let class_info = get_class_info(&cls)?;
 
         let state = PyDict::new(py);
-        for (name_str, member) in class_info.member_lookup_by_name() {
+        for (name_str, member) in class_info.members_by_name_ref(py).iter() {
             let mb = member.bind(py).get();
 
             if mb.pickle
@@ -251,20 +251,18 @@ impl AtorsBase {
         // Restore values
         for (key, value) in state.iter() {
             let key_str: String = key.extract()?;
-            let member = class_info
-                .member_lookup_by_name()
-                .get(&key_str)
-                .ok_or_else(|| {
-                    let cls_name = cls
-                        .name()
-                        .ok()
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|| "<unknown>".to_string());
-                    pyo3::exceptions::PyKeyError::new_err(format!(
-                        "Unknown member '{}' for {}",
-                        key_str, cls_name
-                    ))
-                })?;
+            let members = class_info.members_by_name_ref(py);
+            let member = members.get(&key_str).ok_or_else(|| {
+                let cls_name = cls
+                    .name()
+                    .ok()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                pyo3::exceptions::PyKeyError::new_err(format!(
+                    "Unknown member '{}' for {}",
+                    key_str, cls_name
+                ))
+            })?;
             let mb = member.bind(py).get();
 
             // For container members: restore metadata before slot assignment.
@@ -520,8 +518,8 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
             ClassMutability::InspectValues { values } => {
                 let ty_mutability_map = get_type_mutability_map(py);
                 for attr_name in values {
-                    let member = class_info
-                        .member_lookup_by_name()
+                    let members = class_info.members_by_name_ref(py);
+                    let member = members
                         .get(attr_name)
                         .ok_or_else(|| {
                             pyo3::exceptions::PyAttributeError::new_err(format!(
@@ -585,7 +583,7 @@ pub fn get_member<'py>(
 ) -> PyResult<Bound<'py, Member>> {
     let info = get_class_info(&obj.get_type())?;
     let name: String = member_name.extract()?;
-    info.member_lookup_by_name()
+    info.members_by_name_ref(obj.py())
         .get(&name)
         .map(|m| m.bind(obj.py()).clone())
         .ok_or_else(|| {
@@ -609,7 +607,7 @@ pub fn get_members_by_tag<'py>(
     let py = obj.py();
     let members = PyDict::new(obj.py());
     let info = get_class_info(&obj.get_type())?;
-    for (name, v) in info.member_lookup_by_name() {
+    for (name, v) in info.members_by_name_ref(py).iter() {
         let member = v.bind(py);
         if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
@@ -630,7 +628,7 @@ pub fn get_members_by_tag_and_value<'py>(
     let members = PyDict::new(obj.py());
     let py = obj.py();
     let info = get_class_info(&obj.get_type())?;
-    for (name, member) in info.member_lookup_by_name() {
+    for (name, member) in info.members_by_name_ref(py).iter() {
         let member = member.bind(py);
         if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
@@ -672,7 +670,7 @@ pub fn observe<'py>(
 
     let class_info = get_class_info(&obj.get_type())?;
     if !class_info
-        .member_lookup_by_name()
+        .members_by_name_ref(obj.py())
         .contains_key(&member_name)
     {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(

@@ -11,10 +11,7 @@ use std::sync::{Arc, RwLock};
 use pyo3::{
     Bound, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::PyOnceLock,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyStringMethods, PyTuple,
-        PyType,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType},
 };
 
 use crate::member::{Member, MemberCustomizationTool};
@@ -47,7 +44,6 @@ pub enum PicklePolicy {
 #[pyclass(module = "ators._ators", mapping)]
 pub struct MembersByNameMapping {
     members_by_name: HashMap<String, Py<Member>>,
-    key_order: Vec<Py<PyString>>,
 }
 
 #[pyclass(module = "ators._ators")]
@@ -91,7 +87,11 @@ impl MembersByNameMapping {
         Py::new(
             py,
             MembersByNameKeysIter {
-                keys: self.key_order.iter().map(|k| k.clone_ref(py)).collect(),
+                keys: self
+                    .members_by_name
+                    .keys()
+                    .map(|k| PyString::new(py, k).unbind())
+                    .collect(),
                 index: 0,
             },
         )
@@ -99,23 +99,30 @@ impl MembersByNameMapping {
 }
 
 impl MembersByNameMapping {
-    fn from_member_lookup(
-        py: pyo3::Python<'_>,
-        member_lookup_by_name: &HashMap<String, Py<Member>>,
-    ) -> PyResult<Py<Self>> {
-        let mut members_by_name = HashMap::with_capacity(member_lookup_by_name.len());
-        let mut key_order = Vec::with_capacity(member_lookup_by_name.len());
-        for (name, member) in member_lookup_by_name {
-            key_order.push(PyString::new(py, name).unbind());
-            members_by_name.insert(name.clone(), member.clone_ref(py));
+    fn from_member_lookup(member_lookup_by_name: HashMap<String, Py<Member>>) -> Self {
+        Self {
+            members_by_name: member_lookup_by_name,
         }
-        Py::new(
-            py,
-            Self {
-                members_by_name,
-                key_order,
-            },
-        )
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.members_by_name.len()
+    }
+
+    pub(crate) fn contains_key(&self, name: &str) -> bool {
+        self.members_by_name.contains_key(name)
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&Py<Member>> {
+        self.members_by_name.get(name)
+    }
+
+    pub(crate) fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Py<Member>> {
+        self.members_by_name.iter()
+    }
+
+    pub(crate) fn keys(&self) -> std::collections::hash_map::Keys<'_, String, Py<Member>> {
+        self.members_by_name.keys()
     }
 }
 
@@ -185,7 +192,6 @@ pub(crate) struct AtorsClassInfo {
     observable: bool,
     pickle_policy: PicklePolicy,
     mutability: Option<ClassMutability>,
-    member_lookup_by_name: HashMap<String, Py<Member>>,
     members_by_name: Py<MembersByNameMapping>,
     specific_member_names: HashSet<String>,
     optional_init_member_names: Vec<Py<PyString>>,
@@ -203,7 +209,7 @@ impl AtorsClassInfo {
         observable: bool,
         pickle_policy: PicklePolicy,
         mutability: Option<ClassMutability>,
-        member_lookup_by_name: HashMap<String, Py<Member>>,
+        members_by_name: HashMap<String, Py<Member>>,
         specific_member_names: HashSet<String>,
         optional_init_member_names: Vec<Py<PyString>>,
         required_init_member_names: Vec<Py<PyString>>,
@@ -211,13 +217,15 @@ impl AtorsClassInfo {
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
     ) -> PyResult<Self> {
-        let members_by_name = MembersByNameMapping::from_member_lookup(py, &member_lookup_by_name)?;
+        let members_by_name = Py::new(
+            py,
+            MembersByNameMapping::from_member_lookup(members_by_name),
+        )?;
         Ok(Self {
             frozen,
             observable,
             pickle_policy,
             mutability,
-            member_lookup_by_name,
             members_by_name,
             specific_member_names,
             optional_init_member_names,
@@ -235,11 +243,13 @@ impl AtorsClassInfo {
     pub(crate) fn with_members(
         self,
         py: pyo3::Python<'_>,
-        member_lookup_by_name: HashMap<String, Py<Member>>,
+        members_by_name: HashMap<String, Py<Member>>,
     ) -> PyResult<Self> {
-        let members_by_name = MembersByNameMapping::from_member_lookup(py, &member_lookup_by_name)?;
+        let members_by_name = Py::new(
+            py,
+            MembersByNameMapping::from_member_lookup(members_by_name),
+        )?;
         Ok(Self {
-            member_lookup_by_name,
             members_by_name,
             ..self
         })
@@ -275,12 +285,15 @@ impl AtorsClassInfo {
         &self.pickle_policy
     }
 
-    pub(crate) fn member_lookup_by_name(&self) -> &HashMap<String, Py<Member>> {
-        &self.member_lookup_by_name
-    }
-
     pub(crate) fn members_by_name(&self) -> &Py<MembersByNameMapping> {
         &self.members_by_name
+    }
+
+    pub(crate) fn members_by_name_ref<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyRef<'py, MembersByNameMapping> {
+        self.members_by_name.bind(py).borrow()
     }
 
     pub(crate) fn specific_member_names(&self) -> &HashSet<String> {
@@ -296,15 +309,12 @@ impl AtorsClassInfo {
     }
 
     pub(crate) fn is_init_member_name(&self, py: pyo3::Python<'_>, name: &str) -> bool {
-        self.required_init_member_names
-            .iter()
-            .chain(self.optional_init_member_names.iter())
-            .any(|n| {
-                n.bind(py)
-                    .to_str()
-                    .map(|candidate| candidate == name)
-                    .unwrap_or(false)
-            })
+        self.members_by_name
+            .bind(py)
+            .borrow()
+            .get(name)
+            .map(|member| member.bind(py).get().init)
+            .unwrap_or(false)
     }
 
     pub(crate) fn method_names(&self) -> &HashSet<String> {
