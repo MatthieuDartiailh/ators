@@ -18,6 +18,4 @@ def atom_benchmarks_available() -> bool:
     when the GIL is disabled.
     """
     # sys._is_gil_enabled() is available on Python 3.12+ (returns False on 3.14t)
-    if not getattr(sys, "_is_gil_enabled", lambda: True)():
-        return False
-    return bool(importlib.util.find_spec("atom"))
+    return sys._is_gil_enabled() and  bool(importlib.util.find_spec("atom"))
