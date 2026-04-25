@@ -20,7 +20,7 @@ use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
 #[inline]
-fn resolve_ators_class_from_obj<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyType>> {
+fn resolve_class_for_obj<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyType>> {
     if let Ok(cls) = obj.cast::<PyType>() {
         Ok(cls.clone())
     } else {
@@ -125,6 +125,8 @@ impl AtorsBase {
     #[classmethod]
     fn py_new(
         cls: &Bound<'_, PyType>,
+        // Accept and ignore positional args so metaclass __call__ can forward
+        // constructor arguments to __init__ without __new__ rejecting them.
         _args: &Bound<'_, pyo3::types::PyTuple>,
         _kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
@@ -592,7 +594,7 @@ pub fn get_member<'py>(
     obj: Bound<'py, PyAny>,
     member_name: Bound<'py, PyString>,
 ) -> PyResult<Bound<'py, Member>> {
-    let cls = resolve_ators_class_from_obj(&obj)?;
+    let cls = resolve_class_for_obj(&obj)?;
     let info = get_class_info(&cls)?;
     let name: String = member_name.extract()?;
     info.members_by_name_ref(obj.py())
@@ -606,7 +608,7 @@ pub fn get_member<'py>(
 /// Retrieve all members from an Ators object.
 #[pyfunction]
 pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    let cls = resolve_ators_class_from_obj(obj)?;
+    let cls = resolve_class_for_obj(obj)?;
     let info = get_class_info(&cls)?;
     Ok(info.members_by_name().bind(obj.py()).clone().into_any())
 }
@@ -619,7 +621,7 @@ pub fn get_members_by_tag<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
     let members = PyDict::new(obj.py());
-    let cls = resolve_ators_class_from_obj(obj)?;
+    let cls = resolve_class_for_obj(obj)?;
     let info = get_class_info(&cls)?;
     for (name, v) in info.members_by_name_ref(py).iter() {
         let member = v.bind(py);
@@ -641,7 +643,7 @@ pub fn get_members_by_tag_and_value<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
     let py = obj.py();
-    let cls = resolve_ators_class_from_obj(obj)?;
+    let cls = resolve_class_for_obj(obj)?;
     let info = get_class_info(&cls)?;
     for (name, member) in info.members_by_name_ref(py).iter() {
         let member = member.bind(py);
