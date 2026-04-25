@@ -983,7 +983,6 @@ pub fn create_ators_subclass<'py>(
     }
 
     let mut specific_members = HashSet::new();
-    let mut init_member_names = Vec::new();
     for (k, mb) in member_builders.iter_mut() {
         // Track members specific to this class (per opposition to members
         // which are on base classes but not on this one).
@@ -994,10 +993,6 @@ pub fn create_ators_subclass<'py>(
         if mb.init.is_none() {
             mb.init = Some(!k.starts_with('_'));
         }
-        if mb.init == Some(true) {
-            init_member_names.push(k.clone());
-        }
-
         // Resolve the pickle flag: honour an explicit user value, then fall back
         // to the class policy.
         if !mb.pickle_explicit {
@@ -1155,13 +1150,14 @@ pub fn create_ators_subclass<'py>(
         .collect::<PyResult<HashMap<String, Py<Member>>>>()?;
     let mut required_init_member_names = Vec::new();
     let mut optional_init_member_names = Vec::new();
-    for init_name in &init_member_names {
-        if let Some(member) = members_by_name.get(init_name)
-            && !member.bind(py).get().has_default()
-        {
-            required_init_member_names.push(init_name.clone());
-        } else {
-            optional_init_member_names.push(init_name.clone());
+    for (member_name, member) in &members_by_name {
+        let member = member.bind(py).get();
+        if member.init {
+            if member.has_default() {
+                optional_init_member_names.push(member_name.clone());
+            } else {
+                required_init_member_names.push(member_name.clone());
+            }
         }
     }
     let optional_init_member_names = optional_init_member_names

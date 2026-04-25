@@ -19,6 +19,15 @@ use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
+#[inline]
+fn resolve_ators_class_from_obj<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyType>> {
+    if let Ok(cls) = obj.cast::<PyType>() {
+        Ok(cls.clone())
+    } else {
+        Ok(obj.get_type())
+    }
+}
+
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
 struct InnerAtors {
@@ -112,9 +121,13 @@ fn set_init_value_after_setattr_error<'py>(
 #[pymethods]
 impl AtorsBase {
     #[new]
-    #[pyo3(signature = (**_kwargs))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     #[classmethod]
-    fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn py_new(
+        cls: &Bound<'_, PyType>,
+        _args: &Bound<'_, pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
         let slots_count = class_info.members_by_name_ref(py).len();
@@ -579,7 +592,8 @@ pub fn get_member<'py>(
     obj: Bound<'py, PyAny>,
     member_name: Bound<'py, PyString>,
 ) -> PyResult<Bound<'py, Member>> {
-    let info = get_class_info(&obj.get_type())?;
+    let cls = resolve_ators_class_from_obj(&obj)?;
+    let info = get_class_info(&cls)?;
     let name: String = member_name.extract()?;
     info.members_by_name_ref(obj.py())
         .get(&name)
@@ -592,7 +606,8 @@ pub fn get_member<'py>(
 /// Retrieve all members from an Ators object.
 #[pyfunction]
 pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    let info = get_class_info(&obj.get_type())?;
+    let cls = resolve_ators_class_from_obj(obj)?;
+    let info = get_class_info(&cls)?;
     Ok(info.members_by_name().bind(obj.py()).clone().into_any())
 }
 
@@ -604,7 +619,8 @@ pub fn get_members_by_tag<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
     let members = PyDict::new(obj.py());
-    let info = get_class_info(&obj.get_type())?;
+    let cls = resolve_ators_class_from_obj(obj)?;
+    let info = get_class_info(&cls)?;
     for (name, v) in info.members_by_name_ref(py).iter() {
         let member = v.bind(py);
         if let Some(m) = member.get().metadata()
@@ -625,7 +641,8 @@ pub fn get_members_by_tag_and_value<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
     let py = obj.py();
-    let info = get_class_info(&obj.get_type())?;
+    let cls = resolve_ators_class_from_obj(obj)?;
+    let info = get_class_info(&cls)?;
     for (name, member) in info.members_by_name_ref(py).iter() {
         let member = member.bind(py);
         if let Some(m) = member.get().metadata()
