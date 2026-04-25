@@ -7,14 +7,14 @@
 # --------------------------------------------------------------------------------------
 """Shared container-assignment benchmark case registry."""
 
-import importlib.util
 from collections.abc import Callable
 from typing import Any, cast
 
 from ators import Ators, member
 from benchmarks.shared.registry_types import BenchmarkCase
+from benchmarks.shared.runtime import atom_benchmarks_available
 
-ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
+ATOM_AVAILABLE = atom_benchmarks_available()
 
 if ATOM_AVAILABLE:
     import atom.api as atom_api
