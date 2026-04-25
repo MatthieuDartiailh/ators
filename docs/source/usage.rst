@@ -22,6 +22,50 @@ To create an Ators class, inherit from ``Ators``:
    obj = MyClass(name="Alice", age=30)
    print(obj.name)  # Alice
 
+Defaults
+--------
+
+There are three ways to provide a default for a member.
+
+**Static default** — pass a plain value directly to the constructor::
+
+   class Config(Ators):
+       retries: int = member(default=3)
+       label: str = member(default="unnamed")
+
+This is equivalent to the chained form ``member().default(value)``.
+
+**Factory default** — provide a zero-argument callable; it is called once
+on first access and the result is cached for that instance::
+
+   class Container(Ators):
+       items: list = member(default_factory=list)
+
+``default_factory`` must be callable and accept **zero** arguments.
+A ``ValueError`` is raised at class definition time if the callable
+has the wrong signature.
+
+``default`` and ``default_factory`` are **mutually exclusive**; specifying
+both raises ``TypeError``::
+
+   member(default=0, default_factory=int)  # TypeError
+
+**Advanced defaults** — for behaviors that depend on the owner instance
+(e.g. calling a method on the object) use the ``.default()`` chaining API
+with an explicit ``DefaultBehavior`` variant, or the ``@default`` decorator
+from ``ators.behaviors``::
+
+   from ators.behaviors import Default, default
+
+   class Computed(Ators):
+       a: int = member().default(Default.Call(lambda: expensive()))
+
+       b: int = member()
+
+       @default(b)
+       def _default_b(self, member):
+           return self.a * 2
+
 Key Features
 ------------
 
