@@ -14,8 +14,8 @@ use crate::{
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern, pyclass,
-    pymethods,
+    Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
+    intern, pyclass, pymethods,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
 };
 use std::{clone::Clone, collections::HashMap};
@@ -711,6 +711,20 @@ impl Member {
     }
 }
 
+/// Parameter type for `member(default=...)`, distinguishing "not provided"
+/// (Missing) from "explicitly provided as any value including `None`" (Value).
+pub(crate) enum MemberDefaultArg<'py> {
+    Missing,
+    Value(Bound<'py, PyAny>),
+}
+
+impl<'py> FromPyObject<'_, 'py> for MemberDefaultArg<'py> {
+    type Error = pyo3::PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        Ok(MemberDefaultArg::Value(ob.to_owned()))
+    }
+}
+
 #[pyclass(module = "ators._ators", name = "member", from_py_object)]
 #[derive(Debug, Default)]
 /// Builder class for Member that allows for ergonomic specification of member
@@ -746,12 +760,36 @@ pub struct MemberBuilder {
 #[pymethods]
 impl MemberBuilder {
     #[new]
-    #[pyo3(signature = (*, init = None))]
-    pub fn py_new(init: Option<bool>) -> Self {
-        MemberBuilder {
+    #[allow(private_interfaces)] // MemberDefaultArg is an internal pyo3 extraction type, not a public Rust API
+    #[pyo3(signature = (*, init = None, default = MemberDefaultArg::Missing, default_factory = None))]
+    pub fn py_new<'py>(
+        _py: Python<'py>,
+        init: Option<bool>,
+        default: MemberDefaultArg<'py>,
+        default_factory: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if !matches!(default, MemberDefaultArg::Missing) && default_factory.is_some() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot specify both 'default' and 'default_factory' in member()",
+            ));
+        }
+        let mut builder = MemberBuilder {
             init,
             ..Default::default()
+        };
+        if let MemberDefaultArg::Value(v) = default {
+            if v.cast::<DefaultBehavior>().is_ok() {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "'default' only accepts plain values; \
+                     use .default(DefaultBehavior.*) for advanced behaviors",
+                ));
+            }
+            builder.default = Some(DefaultBehavior::Static { value: v.unbind() });
         }
+        if let Some(factory) = default_factory {
+            builder.default = Some(default::call_default_from_factory(factory)?);
+        }
+        Ok(builder)
     }
 
     pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {

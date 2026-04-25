@@ -110,5 +110,37 @@ jobs:
       - uses: codecov/codecov-action@v6
         with:
           files: coverage.lcov,coverage.xml
-          name: ${{ matrix.os }}
+          name: ${{ matrix.os }}-${{ matrix.python-version }}
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  tests-freethreaded:
+    name: Unit tests (free-threaded)
+    runs-on: ${{ matrix.os }}
+    needs: [python-checks, rust-checks]
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.14t"]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests-freethreaded-${{ matrix.os }}
+        continue-on-error: true
+      - name: Setup virtual environment
+        run: |
+          uv sync
+      - name: Run tests
+        run: |
+          uv run -- maturin develop --uv
+          uv run -- pytest tests -v
