@@ -39,4 +39,4 @@ jobs:
               uses: CodSpeedHQ/action@v4
               with:
                   mode: simulation
-                  run: pytest benchmarks/ -v --codspeed
+                  run: pytest benchmarks/ -v --codspeed -W error
