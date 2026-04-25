@@ -16,6 +16,7 @@ use pyo3::{
 use crate::utils::{GenericAttributesMap, TypeMutabilityMap};
 
 mod annotations;
+mod callable_validation;
 mod containers;
 mod core;
 mod member;
@@ -79,6 +80,9 @@ mod _ators {
 
     #[pymodule_export]
     use self::observers::AtorsChange;
+
+    #[pymodule_export]
+    use self::callable_validation::{CallableValidator, validated};
 
     #[pyfunction]
     /// Register generic attribute names for a Python type.
