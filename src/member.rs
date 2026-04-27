@@ -618,10 +618,10 @@ impl Member {
         // Validate the subscription is a 2-tuple.
         let alias_args = match item.cast::<PyTuple>() {
             Ok(t) => {
-                let n: usize = PyTupleMethods::len(t);
-                if n != 2 {
+                let arg_count: usize = PyTupleMethods::len(t);
+                if arg_count != 2 {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Member[...] expects exactly 2 arguments, got {n}"
+                        "Member[...] expects exactly 2 arguments, got {arg_count}"
                     )));
                 }
                 PyTuple::new(py, [t.get_item(0)?, t.get_item(1)?])?
