@@ -16,7 +16,10 @@ use crate::{
 use pyo3::{
     Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
     intern, pyclass, pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
+        PyString, PyTuple, PyTupleMethods,
+    },
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -591,13 +594,75 @@ impl Member {
     }
 }
 
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___class_getitem__(
+        py: ::pyo3::Python<'_>,
+        cls: *mut ::pyo3::ffi::PyObject,
+        args: *mut ::pyo3::ffi::PyObject,
+        _kwargs: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+        // With METH_VARARGS | METH_CLASS, `args` is a 1-tuple containing the
+        // subscription item passed to __class_getitem__.  For Member[T1, T2],
+        // that item is the tuple (T1, T2); for Member[T1] it is just T1.
+        let args_any = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, args) };
+        let args_tuple = args_any
+            .cast_into::<PyTuple>()
+            .expect("CPython always provides a PyTuple for METH_VARARGS");
+        let item = args_tuple.get_item(0).map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "Member.__class_getitem__() takes exactly 1 argument",
+            )
+        })?;
+
+        // Validate the subscription is a 2-tuple.
+        let alias_args = match item.cast::<PyTuple>() {
+            Ok(t) => {
+                let n: usize = PyTupleMethods::len(t);
+                if n != 2 {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Member[...] expects exactly 2 arguments, got {n}"
+                    )));
+                }
+                PyTuple::new(py, [t.get_item(0)?, t.get_item(1)?])?
+            }
+            Err(_) => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "Member[...] expects exactly 2 arguments, got 1",
+                ));
+            }
+        };
+
+        let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
+        let alias = PyGenericAlias::new(py, &cls_bound, alias_args.as_any())?;
+        Ok(alias.into_ptr())
+    }
+}
+
 #[allow(unknown_lints, non_local_definitions)]
 impl ::pyo3::impl_::pyclass::PyMethods<Member>
     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
 {
     fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
         static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
-            methods: &[],
+            methods: &[::pyo3::impl_::pymethods::PyMethodDefType::Method(
+                ::pyo3::impl_::pymethods::PyMethodDef::cfunction_with_keywords(
+                    c"__class_getitem__",
+                    {
+                        struct ClassGetItemDef;
+                        impl ::pyo3::impl_::trampoline::MethodDef<
+                            ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
+                        > for ClassGetItemDef
+                        {
+                            const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
+                                Member::__pymethod___class_getitem__;
+                        }
+                        ::pyo3::impl_::trampoline::cfunction_with_keywords::<ClassGetItemDef>
+                    },
+                    c"",
+                )
+                .flags(::pyo3::ffi::METH_CLASS),
+            )],
             slots: &[
                 ::pyo3::ffi::PyType_Slot {
                     slot: ::pyo3::ffi::Py_tp_descr_get,
