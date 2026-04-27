@@ -192,6 +192,7 @@ impl AtorsList {
 // since they can add new items.
 #[pymethods]
 impl AtorsList {
+    /// Append a value after validating it with the list item validator.
     pub fn append<'py>(self_: &Bound<'py, AtorsList>, value: &Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         let valid = self_.get().validate_item(py, value)?;
@@ -200,6 +201,7 @@ impl AtorsList {
         unsafe { self_.cast_unchecked::<PyList>() }.append(&valid)
     }
 
+    /// Insert a value at `index` after validating it with the item validator.
     pub fn insert<'py>(
         self_: &Bound<'py, AtorsList>,
         index: usize,
@@ -277,6 +279,7 @@ impl AtorsList {
         })
     }
 
+    /// Extend the list with values from `other` after validating each item.
     pub fn extend<'py>(self_: &Bound<'py, AtorsList>, other: &Bound<'py, PyAny>) -> PyResult<()> {
         let valid = with_critical_section(self_.as_any(), || {
             self_.get().validate_iterable(other.py(), other)
@@ -474,6 +477,7 @@ impl AtorsSet {
 // item validation since they can add items
 #[pymethods]
 impl AtorsSet {
+    /// Add one value to the set after validating it with the item validator.
     pub fn add<'py>(self_: &Bound<'py, AtorsSet>, value: Bound<'py, PyAny>) -> PyResult<()> {
         let py = value.py();
         // Safety: validator and member_name are effectively immutable; object is not modified
@@ -503,6 +507,7 @@ impl AtorsSet {
         Ok(())
     }
 
+    /// Update the set from `other` after validating each candidate item.
     pub fn update<'py>(self_: &Bound<'py, AtorsSet>, other: Bound<'py, PyAny>) -> PyResult<()> {
         AtorsSet::__ior__(self_, other)
     }
@@ -844,6 +849,10 @@ impl AtorsDict {
     }
 
     #[pyo3(signature = (other=None, **kwargs))]
+    /// Update the dict from mappings/iterables/kwargs after validating all entries.
+    ///
+    /// Validation is performed eagerly into a temporary dict to avoid partial
+    /// updates when one item fails validation.
     pub fn update<'py>(
         self_: &Bound<'py, AtorsDict>,
         other: Option<&Bound<'py, PyAny>>,
@@ -897,6 +906,7 @@ impl AtorsDict {
         ndict.update(valid.as_mapping())
     }
 
+    /// Return the value for `key`, inserting a validated default if absent.
     pub fn setdefault<'py>(
         self_: &Bound<'py, AtorsDict>,
         key: &Bound<'py, PyAny>,

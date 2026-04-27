@@ -70,6 +70,10 @@ pub enum ValueValidator {
 }
 
 impl ValueValidator {
+    /// Validate a value against this value-level validator.
+    ///
+    /// The validation runs after type validation and may use member/object
+    /// context depending on the selected variant.
     pub fn validate_value<'py>(
         &self,
         name: Option<&str>,

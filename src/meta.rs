@@ -529,6 +529,10 @@ pub fn rust_instancecheck<'py>(
     Ok(unsafe { ffi::PyType_IsSubtype(instance_type.as_type_ptr(), cls.as_type_ptr()) != 0 })
 }
 
+/// Create (or reuse from cache) a specialised Ators generic subclass.
+///
+/// This resolves and validates type arguments, computes the canonical origin
+/// argument mapping, and reuses an existing specialisation when available.
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: &Bound<'py, PyType>,
@@ -751,6 +755,10 @@ pub fn create_ators_specialized_subclass<'py>(
     Ok(specialized)
 }
 
+/// Create an Ators subclass from metaclass inputs.
+///
+/// This computes member layout and inherited behaviors, enforces Ators class
+/// constraints, records class metadata, and returns the newly created class.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn create_ators_subclass<'py>(

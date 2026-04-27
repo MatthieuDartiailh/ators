@@ -86,6 +86,16 @@ def test_member_access_fucntions():
         assert list(get_members_by_tag_and_value(obj, "t", 1)) == ["a"]
 
 
+def test_get_member_on_non_ators_class_reports_clear_error():
+    with pytest.raises(TypeError, match="Expected an Ators class or instance, got int"):
+        get_member(int, "imag")
+
+
+def test_get_member_on_non_ators_instance_reports_clear_error():
+    with pytest.raises(TypeError, match="Expected an Ators class or instance, got str"):
+        get_member("foo", "upper")
+
+
 def test_member_init_subclass():
     class A(Ators):
         a = member().constant()

@@ -330,14 +330,15 @@ impl AtorsClassInfo {
 }
 
 // Python exposed functions to access class info.
-// XXX audit
 
+/// Return the mapping of member names to `Member` descriptors for an Ators class.
 #[pyfunction]
 pub fn get_ators_members_by_name<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let info = get_class_info(cls)?;
     Ok(info.members_by_name().bind(cls.py()).clone().into_any())
 }
 
+/// Return the set of member names defined specifically on `cls`.
 #[pyfunction]
 pub fn get_ators_specific_member_names<'py>(
     cls: &Bound<'py, PyType>,
@@ -347,6 +348,7 @@ pub fn get_ators_specific_member_names<'py>(
     Ok(PyFrozenSet::new(py, info.specific_member_names())?.into_any())
 }
 
+/// Return the tuple of init-participating member names for `cls`.
 #[pyfunction]
 pub fn get_ators_init_member_names<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
@@ -360,11 +362,13 @@ pub fn get_ators_init_member_names<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bo
     Ok(PyTuple::new(py, init_member_names)?.into_any())
 }
 
+/// Return whether `cls` is configured as frozen.
 #[pyfunction]
 pub fn get_ators_frozen_flag(cls: &Bound<'_, PyType>) -> PyResult<bool> {
     Ok(get_class_info(cls)?.frozen())
 }
 
+/// Return the generic origin class for `cls`, or `None` if unspecialized.
 #[pyfunction]
 pub fn get_ators_origin<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
@@ -378,6 +382,7 @@ pub fn get_ators_origin<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, Py
         ))
 }
 
+/// Return specialization type arguments for `cls`, or `None` when unavailable.
 #[pyfunction]
 pub fn get_ators_args<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
@@ -392,6 +397,7 @@ pub fn get_ators_args<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAn
     }
 }
 
+/// Return generic type parameters for `cls`, or `None` for non-generic classes.
 #[pyfunction]
 pub fn get_ators_type_params<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
@@ -587,6 +593,7 @@ pub(crate) fn get_class_info<'py>(cls: &Bound<'py, PyType>) -> PyResult<Arc<Ator
     }
 }
 
+/// Remove class metadata for `cls` from all class-info stores.
 #[pyfunction]
 pub fn drop_class_info(cls: &Bound<'_, PyType>) {
     let py = cls.py();
@@ -601,6 +608,7 @@ pub fn drop_class_info(cls: &Bound<'_, PyType>) {
     }
 }
 
+/// Return the number of definitive class-info entries currently tracked.
 #[pyfunction]
 pub fn get_tracked_class_info_size(py: pyo3::Python<'_>) -> usize {
     let store = get_class_info_store(py);

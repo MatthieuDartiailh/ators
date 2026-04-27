@@ -5,7 +5,11 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-""""""
+"""Metaclass implementation for Ators classes.
+
+This module exposes `AtorsMeta`, the runtime responsible for building Ators
+subclasses and handling generic specialization behavior.
+"""
 
 from typing import Any, dataclass_transform
 

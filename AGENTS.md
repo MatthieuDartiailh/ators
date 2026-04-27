@@ -81,6 +81,18 @@ Performance work in `ators` must be backed by benchmark evidence.
 3. Keep benchmark documentation synchronized with actual file names and command
    examples.
 
+## Rust style conventions
+
+- Doc comments (`///`) must always appear **before** any attributes (`#[...]`).
+  Placing `///` after `#[pyfunction]`, `#[inline]`, `#[allow(...)]`, or any
+  other attribute is incorrect. Correct order:
+  ```rust
+  /// Doc comment.
+  #[pyfunction]
+  #[allow(clippy::too_many_arguments)]
+  pub fn my_fn() { … }
+  ```
+
 ## Scope guardrails
 
 - Do not revert unrelated user changes.

@@ -19,12 +19,25 @@ use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
+/// Resolve the class for a given object, which may be either an instance or a class.
 #[inline]
 fn resolve_class_for_obj<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyType>> {
-    if let Ok(cls) = obj.cast::<PyType>() {
-        Ok(cls.clone())
+    let cls = if let Ok(cls) = obj.cast::<PyType>() {
+        cls.clone()
     } else {
-        Ok(obj.get_type())
+        obj.get_type()
+    };
+
+    if cls.is_subclass_of::<AtorsBase>()? {
+        Ok(cls)
+    } else {
+        let cls_name = cls
+            .name()
+            .and_then(|name| name.extract::<String>())
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Expected an Ators class or instance, got {cls_name}"
+        )))
     }
 }
 
@@ -127,6 +140,8 @@ impl AtorsBase {
         cls: &Bound<'_, PyType>,
         // Accept and ignore positional args so metaclass __call__ can forward
         // constructor arguments to __init__ without __new__ rejecting them.
+        // Required for example when subclassing from Python and subclass uses
+        // positional args in __init__.
         _args: &Bound<'_, pyo3::types::PyTuple>,
         _kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
@@ -322,9 +337,9 @@ impl AtorsBase {
     }
 }
 
-#[inline]
 /// Get a reference to the value stored in the slot at index if any.
 /// A critical section is always used to guarantee safe concurrent access.
+#[inline]
 pub(crate) fn get_slot<'a, 'py>(
     object: &'a Bound<'py, AtorsBase>,
     index: u8,
@@ -336,11 +351,11 @@ pub(crate) fn get_slot<'a, 'py>(
     })
 }
 
-#[inline]
 /// Get an owned clone of the value stored in the slot at index if any.
 ///
 /// This helper is intended for return-oriented paths such as Member.__get__
 /// where the caller needs an owned Python reference.
+#[inline]
 pub(crate) fn get_slot_owned<'py>(object: &Bound<'py, AtorsBase>, index: u8) -> Option<Py<PyAny>> {
     let py = object.py();
     with_critical_section(object.as_any(), || {
@@ -352,8 +367,8 @@ pub(crate) fn get_slot_owned<'py>(object: &Bound<'py, AtorsBase>, index: u8) -> 
     })
 }
 
-#[inline]
 /// Set the slot at index to the specified value
+#[inline]
 pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();
     with_critical_section(object.as_any(), || {
@@ -374,7 +389,6 @@ pub(crate) enum ReplaceSlotOutcome {
     Unchanged,
 }
 
-#[inline]
 /// Atomically check frozen state, write the slot, and return the previous value.
 ///
 /// Returns `Ok(ReplaceSlotOutcome::Replaced(old))` on success where `old` is the
@@ -382,6 +396,7 @@ pub(crate) enum ReplaceSlotOutcome {
 /// Returns `Ok(ReplaceSlotOutcome::Unchanged)` if the slot already contains the
 /// exact same Python object.
 /// Returns `Err(())` if the object was frozen at write-time (write was skipped).
+#[inline]
 pub(crate) fn replace_slot<'py>(
     object: &Bound<'py, AtorsBase>,
     index: u8,
@@ -410,8 +425,8 @@ pub(crate) fn replace_slot<'py>(
     })
 }
 
-#[inline]
 /// Del the slot value at index
+#[inline]
 pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
     with_critical_section(object.as_any(), || {
         // Safety: we hold the critical section lock on this object. We write through the
@@ -514,6 +529,11 @@ fn do_freeze(obj: &Bound<'_, AtorsBase>) {
     });
 }
 
+/// Freeze an Ators instance.
+///
+/// The operation is allowed only when the class mutability policy permits it.
+/// For `InspectValues`, each configured member value is checked and freezing is
+/// rejected if a value is mutable or undecidable.
 #[pyfunction]
 pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
@@ -568,6 +588,10 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     }
 }
 
+/// Return the object after applying class-level post-construction freezing.
+///
+/// If `obj` is an `AtorsBase` instance of a frozen class, this calls `freeze`
+/// before returning the original object.
 #[pyfunction]
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
@@ -580,6 +604,7 @@ pub fn maybe_freeze_instance_after_call<'py>(
     Ok(obj)
 }
 
+/// Return whether an Ators instance is currently frozen.
 #[pyfunction]
 pub fn is_frozen<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
     with_critical_section(obj.as_any(), || {
@@ -673,6 +698,9 @@ pub fn get_member_customization_tool<'py>(
     }
 }
 
+/// Register an observer callback for a member on an observable object.
+///
+/// The callback receives an `AtorsChange` whenever the member value changes.
 #[pyfunction]
 pub fn observe<'py>(
     obj: &Bound<'py, AtorsBase>,
@@ -699,6 +727,7 @@ pub fn observe<'py>(
     ObserverPool::add(pool, &member_name, callback)
 }
 
+/// Unregister one observer callback for a member on an observable object.
 #[pyfunction]
 pub fn unobserve<'py>(
     obj: &Bound<'py, AtorsBase>,
@@ -715,6 +744,7 @@ pub fn unobserve<'py>(
     ObserverPool::remove(pool, &member_name, callback)
 }
 
+/// Enable change notifications on an observable object.
 #[pyfunction]
 pub fn enable_notifications<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     if !instance_is_observable(obj) {
@@ -733,6 +763,10 @@ pub fn enable_notifications<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     Ok(())
 }
 
+/// Disable change notifications on an object.
+///
+/// For non-observable classes this is a no-op because notifications are never
+/// emitted.
 #[pyfunction]
 pub fn disable_notifications<'py>(obj: &Bound<'py, AtorsBase>) {
     with_critical_section(obj.as_any(), || {
@@ -743,6 +777,7 @@ pub fn disable_notifications<'py>(obj: &Bound<'py, AtorsBase>) {
     });
 }
 
+/// Return whether change notifications are enabled for an object.
 #[pyfunction]
 pub fn is_notifications_enabled<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
     notifications_enabled(obj)
