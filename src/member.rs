@@ -16,7 +16,10 @@ use crate::{
 use pyo3::{
     Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
     intern, pyclass, pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
+        PyString, PyTuple, PyTupleMethods,
+    },
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -508,6 +511,23 @@ impl Member {
         Ok(())
     }
 
+    pub fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyAny>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = cls.py();
+        // Wrap the subscription item in a tuple for GenericAlias.  Arity
+        // validation (exactly 2 args) is deferred to the metaclass so that
+        // wrong-arity annotations inside a class body produce a clear error
+        // from the annotation-coerce pairing check rather than being silently
+        // absorbed by Python 3.14's lazy annotation evaluator.
+        let alias_args = match item.cast::<PyTuple>() {
+            Ok(t) => t.to_owned(),
+            Err(_) => PyTuple::new(py, [item])?,
+        };
+        Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
+    }
+
     // The class is frozen so another mutable object must be involved to
     // create a cycle and as a consequence it is not necessary to implement
     // __clear__
@@ -591,13 +611,56 @@ impl Member {
     }
 }
 
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___class_getitem__(
+        py: ::pyo3::Python<'_>,
+        cls: *mut ::pyo3::ffi::PyObject,
+        args: *mut ::pyo3::ffi::PyObject,
+        _kwargs: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+        // With METH_VARARGS | METH_CLASS, `args` is a 1-tuple containing the
+        // subscription item passed to __class_getitem__.  For Member[T1, T2],
+        // that item is the tuple (T1, T2); for Member[T1] it is just T1.
+        let args_any = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, args) };
+        let args_tuple = args_any
+            .cast_into::<PyTuple>()
+            .expect("CPython always provides a PyTuple for METH_VARARGS");
+        let item = args_tuple.get_item(0).map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "Member.__class_getitem__() takes exactly 1 argument",
+            )
+        })?;
+        let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
+        Member::__class_getitem__(&cls_bound, &item).map(|alias| alias.into_ptr())
+    }
+}
+
 #[allow(unknown_lints, non_local_definitions)]
 impl ::pyo3::impl_::pyclass::PyMethods<Member>
     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
 {
     fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
         static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
-            methods: &[],
+            methods: &[::pyo3::impl_::pymethods::PyMethodDefType::Method(
+                ::pyo3::impl_::pymethods::PyMethodDef::cfunction_with_keywords(
+                    c"__class_getitem__",
+                    {
+                        struct ClassGetItemDef;
+                        impl
+                            ::pyo3::impl_::trampoline::MethodDef<
+                                ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
+                            > for ClassGetItemDef
+                        {
+                            const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
+                                Member::__pymethod___class_getitem__;
+                        }
+                        ::pyo3::impl_::trampoline::cfunction_with_keywords::<ClassGetItemDef>
+                    },
+                    c"",
+                )
+                .flags(::pyo3::ffi::METH_CLASS),
+            )],
             slots: &[
                 ::pyo3::ffi::PyType_Slot {
                     slot: ::pyo3::ffi::Py_tp_descr_get,
