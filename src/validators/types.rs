@@ -210,6 +210,18 @@ impl LateResolvedValidator {
                 resolved = evaluate_forward_ref.call1((forward_ref,));
             }
 
+            let is_observable = self
+                .owner
+                .as_ref()
+                .and_then(|owner| {
+                    owner
+                        .bind(py)
+                        .getattr(crate::core::ATORS_OBSERVABLE)
+                        .ok()
+                        .and_then(|v| v.extract::<bool>().ok())
+                })
+                .unwrap_or(false);
+
             Py::new(
                 py,
                 build_validator_from_annotation(
@@ -233,6 +245,7 @@ impl LateResolvedValidator {
                     &get_type_tools(py)?,
                     None,
                     self.typevar_bindings.as_ref().map(|tb| tb.bind(py)),
+                    is_observable,
                 )?
                 .0
                 .type_validator,
