@@ -70,7 +70,9 @@ from ators.behaviors import Coercer, coerce, coerce_init
 )
 def test_type_inferred_coercion(ty, init, inputs, expected):
     class A(Ators):
-        a: Member[ty, Any] = getattr(member(), "coerce_init" if init else "coerce")()
+        a: ty if init else Member[ty, Any] = getattr(
+            member(), "coerce_init" if init else "coerce"
+        )()
 
     # initialize using the first input
     a = A(**{"a": inputs[0]})
@@ -103,9 +105,9 @@ def test_call_coerce(init, inputs, called, expected):
         return int(n)
 
     class A(Ators):
-        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")(
-            Coercer.CallValue(make_coerce)
-        )
+        a: int if init else Member[int, Any] = getattr(
+            member(), "coerce_init" if init else "coerce"
+        )(Coercer.CallValue(make_coerce))
 
     a = A(**{"a": inputs[0]})
     assert i == called[0]
@@ -144,9 +146,9 @@ def test_call_member_object_coerce(init, inputs, called, expected):
         return int(value)
 
     class A(Ators):
-        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")(
-            Coercer.CallNameObjectValueInit(make_coerce)
-        )
+        a: int if init else Member[int, Any] = getattr(
+            member(), "coerce_init" if init else "coerce"
+        )(Coercer.CallNameObjectValueInit(make_coerce))
 
     a = A(**{"a": inputs[0]})
     assert i == called[0]
@@ -180,7 +182,7 @@ def test_method_coerce(init, inputs, called, expected):
     init_coercion = None
 
     class A(Ators):
-        a: Member[int, Any] = member()
+        a: int if init else Member[int, Any] = member()
 
         @(coerce_init if init else coerce)(a)
         def _coerce_a(self, m, v, init):
@@ -217,7 +219,9 @@ def test_method_coerce(init, inputs, called, expected):
 @pytest.mark.parametrize("init", [False, True])
 def test_inherited_coerce_behavior(init):
     class A(Ators):
-        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")()
+        a: int if init else Member[int, Any] = getattr(
+            member(), "coerce_init" if init else "coerce"
+        )()
 
     class B(A):
         a = member().inherit()
@@ -300,7 +304,7 @@ def test_warn_on_multiple_setting_of_coerce(init):
     with pytest.warns(UserWarning):
 
         class A(Ators):
-            a: Member[int, Any] = getattr(
+            a: int if init else Member[int, Any] = getattr(
                 getattr(member(), "coerce_init" if init else "coerce")(
                     Coercer.CallValue(lambda v: 1)
                 ),
@@ -341,7 +345,9 @@ def test_coerce_without_member_annotation_raises():
 
 def test_bare_member_annotation_raises():
     """Bare Member (not subscripted) annotation must always raise TypeError."""
-    with pytest.raises(TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"):
+    with pytest.raises(
+        TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"
+    ):
 
         class A(Ators):
             x: Member = member()
@@ -349,7 +355,9 @@ def test_bare_member_annotation_raises():
 
 def test_bare_member_annotation_with_coerce_raises():
     """Bare Member annotation even with .coerce() must raise TypeError."""
-    with pytest.raises(TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"):
+    with pytest.raises(
+        TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"
+    ):
 
         class A(Ators):
             x: Member = member().coerce()
@@ -382,10 +390,10 @@ def test_member_annotation_valid_pair_succeeds():
 
 
 def test_member_annotation_coerce_init_valid():
-    """Member[T1, T2] + .coerce_init() is also a valid pair."""
+    """coerce_init() does not require Member[T1, T2] — a plain annotation works."""
 
     class A(Ators):
-        x: Member[int, Any] = member().coerce_init()
+        x: int = member().coerce_init()
 
     a = A(x="7")
     assert a.x == 7
