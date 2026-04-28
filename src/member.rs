@@ -516,22 +516,14 @@ impl Member {
         item: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = cls.py();
-        // Validate the subscription is a 2-tuple.
+        // Wrap the subscription item in a tuple for GenericAlias.  Arity
+        // validation (exactly 2 args) is deferred to the metaclass so that
+        // wrong-arity annotations inside a class body produce a clear error
+        // from the annotation-coerce pairing check rather than being silently
+        // absorbed by Python 3.14's lazy annotation evaluator.
         let alias_args = match item.cast::<PyTuple>() {
-            Ok(t) => {
-                let arg_count: usize = PyTupleMethods::len(t);
-                if arg_count != 2 {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Member[...] expects exactly 2 arguments, got {arg_count}"
-                    )));
-                }
-                PyTuple::new(py, [t.get_item(0)?, t.get_item(1)?])?
-            }
-            Err(_) => {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "Member[...] expects exactly 2 arguments, got 1",
-                ));
-            }
+            Ok(t) => t.to_owned(),
+            Err(_) => PyTuple::new(py, [item])?,
         };
         Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
     }

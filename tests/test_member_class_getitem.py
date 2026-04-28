@@ -9,8 +9,6 @@
 
 from types import GenericAlias
 
-import pytest
-
 from ators import Member
 
 # ---------------------------------------------------------------------------
@@ -45,23 +43,30 @@ def test_class_getitem_different_types():
 
 
 # ---------------------------------------------------------------------------
-# Negative cases: wrong arity
+# Arity: wrong-arity subscriptions create a GenericAlias; the error is only
+# raised later by the metaclass pairing check (see test_coercion.py).
 # ---------------------------------------------------------------------------
 
 
-def test_class_getitem_single_arg_raises_type_error():
-    """Member[int] raises TypeError (too few arguments)."""
-    with pytest.raises(TypeError, match="exactly 2 arguments, got 1"):
-        Member[int]
+def test_class_getitem_single_arg_creates_alias():
+    """Member[int] creates a GenericAlias with one arg (arity checked by metaclass)."""
+    ga = Member[int]  # type: ignore[type-arg]
+    assert isinstance(ga, GenericAlias)
+    assert ga.__origin__ is Member
+    assert ga.__args__ == (int,)
 
 
-def test_class_getitem_three_args_raises_type_error():
-    """Member[int, str, float] raises TypeError (too many arguments)."""
-    with pytest.raises(TypeError, match="exactly 2 arguments, got 3"):
-        Member[int, str, float]
+def test_class_getitem_three_args_creates_alias():
+    """Member[int, str, float] creates a GenericAlias (arity checked by metaclass)."""
+    ga = Member[int, str, float]  # type: ignore[type-arg]
+    assert isinstance(ga, GenericAlias)
+    assert ga.__origin__ is Member
+    assert ga.__args__ == (int, str, float)
 
 
-def test_class_getitem_zero_args_raises_type_error():
-    """Member[()] raises TypeError (zero arguments)."""
-    with pytest.raises(TypeError, match="exactly 2 arguments, got 0"):
-        Member[()]
+def test_class_getitem_zero_args_creates_alias():
+    """Member[()] creates a GenericAlias with zero args (arity checked by metaclass)."""
+    ga = Member[()]  # type: ignore[type-arg]
+    assert isinstance(ga, GenericAlias)
+    assert ga.__origin__ is Member
+    assert ga.__args__ == ()

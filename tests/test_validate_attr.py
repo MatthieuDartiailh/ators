@@ -142,7 +142,7 @@ def test_validate_attr_false_explicit_coerce_init_fails():
     with pytest.raises(ValueError, match="Class creation failed: attribute 'x'"):
 
         class A(Ators, validate_attr=False):
-            x: Member[int, Any] = member().coerce_init()
+            x: int = member().coerce_init()
 
 
 def test_validate_attr_false_inherited_coerce_fails():
