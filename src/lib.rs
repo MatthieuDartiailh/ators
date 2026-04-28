@@ -62,6 +62,9 @@ mod _ators {
     use self::meta::{create_ators_specialized_subclass, create_ators_subclass};
 
     #[pymodule_export]
+    use self::meta::{rust_instancecheck, rust_subclasscheck};
+
+    #[pymodule_export]
     use self::member::{
         DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PostGetattrBehavior,
         PostSetattrBehavior, PreGetattrBehavior, PreSetattrBehavior,

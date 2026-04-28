@@ -22,6 +22,7 @@ and two frontends:
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
 - `containers/test_dict.py`: Rust-backed dict method family.
+- `test_typecheck.py`: generic-aware `issubclass`/`isinstance` family.
 
 ### Shared pyperf entrypoints
 
@@ -29,7 +30,23 @@ and two frontends:
 
 ## Running Benchmarks
 
-Activate the local environment first:
+If a `.venv/` directory is present, activate it first using the
+shell-appropriate activation command.
+
+Before running benchmarks, install the package with an optimized install step:
+
+```bash
+pip install .
+# or
+uv pip install .
+```
+
+Do not use `maturin develop` as the benchmark install step. It compiles the
+extension in debug mode, which is not suitable for benchmark measurements.
+
+For regular development (non-benchmark), `maturin develop` is still appropriate.
+
+Example environment activation in PowerShell:
 
 ```bash
 & .venv/Scripts/Activate.ps1
@@ -70,6 +87,14 @@ python benchmarks/run_pyperf.py --family validation_int
 python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
 ```
+
+Export shared pyperf results to markdown:
+
+```bash
+python benchmarks/run_pyperf.py --family dict --group update_dict \
+   --implementation ators --markdown-output benchmarks/results/latest.md
+```
+
 
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
 with summary counts.
@@ -113,4 +138,7 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
 - `property_typed`: property copy-and-validate assignment baseline.
 - `ators`: Ators implementation.
 - `ators_frozen`: frozen Ators variant where relevant.
+- `ators_generic_concrete`: fully-concrete Ators generic specialisation checks.
+- `ators_generic_typevar`: TypeVar-pattern Ators generic checks.
+- `ators_generic_typevar_both`: both args are TypeVars (widest wildcard).
 - `atom`: Atom implementation, included only when available.

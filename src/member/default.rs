@@ -67,6 +67,15 @@ impl DefaultBehavior {
     }
 }
 
+/// Construct a [`DefaultBehavior::Call`] from a Python callable, validating
+/// that the callable accepts exactly zero arguments.
+pub(super) fn call_default_from_factory<'py>(
+    callable: Bound<'py, PyAny>,
+) -> PyResult<DefaultBehavior> {
+    let c: db_call::Callable = callable.extract()?;
+    Ok(DefaultBehavior::Call { callable: c })
+}
+
 impl Clone for DefaultBehavior {
     fn clone(&self) -> Self {
         Python::attach(|py| match self {

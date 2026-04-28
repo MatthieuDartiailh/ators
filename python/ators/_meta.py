@@ -15,6 +15,8 @@ from ._ators import (
     create_ators_specialized_subclass as _create_ators_specialized_subclass,
     create_ators_subclass as _create_ators_subclass,
     freeze,
+    rust_instancecheck as _rust_instancecheck,
+    rust_subclasscheck as _rust_subclasscheck,
 )
 
 
@@ -79,3 +81,9 @@ class AtorsMeta(type):
 
     def __getitem__(self, params):
         return _create_ators_specialized_subclass(self, params)
+
+    def __subclasscheck__(cls, sub):  # type: ignore[override]
+        return _rust_subclasscheck(cls, sub)
+
+    def __instancecheck__(cls, instance):  # type: ignore[override]
+        return _rust_instancecheck(cls, instance)
