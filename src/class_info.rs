@@ -465,6 +465,14 @@ fn get_or_create_ators_generic_alias_type<'py>(
             "_rust_subclasscheck",
             pyo3::wrap_pyfunction!(crate::meta::rust_subclasscheck, py)?,
         )?;
+        locals.set_item(
+            "_rust_instancecheck_alias",
+            pyo3::wrap_pyfunction!(rust_instancecheck_alias, py)?,
+        )?;
+        locals.set_item(
+            "_rust_subclasscheck_alias",
+            pyo3::wrap_pyfunction!(rust_subclasscheck_alias, py)?,
+        )?;
         py.run(
             c_str!(
                 r#"
@@ -485,12 +493,10 @@ class AtorsGenericAlias(types.GenericAlias):
         return self.__ators_specialized_class__[params]
 
     def __instancecheck__(self, instance):
-        return _rust_instancecheck(self.__ators_specialized_class__, instance)
+        return _rust_instancecheck_alias(self, instance)
 
     def __subclasscheck__(self, sub):
-        if isinstance(sub, type(self)):
-            sub = sub.__ators_specialized_class__
-        return _rust_subclasscheck(self.__ators_specialized_class__, sub)
+        return _rust_subclasscheck_alias(self, sub)
 
     def __mro_entries__(self, bases):
         del bases
@@ -715,6 +721,28 @@ pub fn get_ators_specialized_class_for_alias<'py>(
                 "Expected an AtorsGenericAlias created by Ators specialization",
             )
         })
+}
+
+/// Alias-aware instance check using the backing specialized Ators class.
+#[pyfunction]
+pub fn rust_instancecheck_alias<'py>(
+    alias: &Bound<'py, PyAny>,
+    instance: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    let cls = get_ators_specialized_class_for_alias(alias)?;
+    crate::meta::rust_instancecheck(&cls, instance)
+}
+
+/// Alias-aware subclass check using the backing specialized Ators class.
+#[pyfunction]
+pub fn rust_subclasscheck_alias<'py>(
+    alias: &Bound<'py, PyAny>,
+    sub: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    let cls = get_ators_specialized_class_for_alias(alias)?;
+    let sub_cls =
+        get_ators_specialized_class_for_alias(sub).or_else(|_| sub.cast::<PyType>().cloned())?;
+    crate::meta::rust_subclasscheck(&cls, &sub_cls)
 }
 
 /// Wrap a specialized Ators class into a cached AtorsGenericAlias.
