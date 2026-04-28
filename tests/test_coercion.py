@@ -7,9 +7,9 @@
 # --------------------------------------------------------------------------------------
 """Test coercion behavior for ators object"""
 
-import pytest
-
 from typing import Any
+
+import pytest
 
 from ators import Ators, Member, member
 from ators.behaviors import Coercer, coerce, coerce_init

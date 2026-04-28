@@ -511,6 +511,31 @@ impl Member {
         Ok(())
     }
 
+    pub fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyAny>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = cls.py();
+        // Validate the subscription is a 2-tuple.
+        let alias_args = match item.cast::<PyTuple>() {
+            Ok(t) => {
+                let arg_count: usize = PyTupleMethods::len(t);
+                if arg_count != 2 {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Member[...] expects exactly 2 arguments, got {arg_count}"
+                    )));
+                }
+                PyTuple::new(py, [t.get_item(0)?, t.get_item(1)?])?
+            }
+            Err(_) => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "Member[...] expects exactly 2 arguments, got 1",
+                ));
+            }
+        };
+        Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
+    }
+
     // The class is frozen so another mutable object must be involved to
     // create a cycle and as a consequence it is not necessary to implement
     // __clear__
@@ -614,28 +639,8 @@ impl Member {
                 "Member.__class_getitem__() takes exactly 1 argument",
             )
         })?;
-
-        // Validate the subscription is a 2-tuple.
-        let alias_args = match item.cast::<PyTuple>() {
-            Ok(t) => {
-                let arg_count: usize = PyTupleMethods::len(t);
-                if arg_count != 2 {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Member[...] expects exactly 2 arguments, got {arg_count}"
-                    )));
-                }
-                PyTuple::new(py, [t.get_item(0)?, t.get_item(1)?])?
-            }
-            Err(_) => {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "Member[...] expects exactly 2 arguments, got 1",
-                ));
-            }
-        };
-
         let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
-        let alias = PyGenericAlias::new(py, &cls_bound, alias_args.as_any())?;
-        Ok(alias.into_ptr())
+        Member::__class_getitem__(&cls_bound, &item).map(|alias| alias.into_ptr())
     }
 }
 
@@ -650,9 +655,10 @@ impl ::pyo3::impl_::pyclass::PyMethods<Member>
                     c"__class_getitem__",
                     {
                         struct ClassGetItemDef;
-                        impl ::pyo3::impl_::trampoline::MethodDef<
-                            ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
-                        > for ClassGetItemDef
+                        impl
+                            ::pyo3::impl_::trampoline::MethodDef<
+                                ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
+                            > for ClassGetItemDef
                         {
                             const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
                                 Member::__pymethod___class_getitem__;

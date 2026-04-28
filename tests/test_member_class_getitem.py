@@ -7,7 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Tests for Member.__class_getitem__."""
 
-import types
+from types import GenericAlias
 
 import pytest
 
@@ -22,7 +22,7 @@ from ators import Member
 def test_class_getitem_returns_generic_alias():
     """Member[int, str] returns a types.GenericAlias."""
     ga = Member[int, str]
-    assert isinstance(ga, types.GenericAlias)
+    assert isinstance(ga, GenericAlias)
 
 
 def test_class_getitem_origin_is_member():
@@ -40,7 +40,7 @@ def test_class_getitem_args_are_correct():
 def test_class_getitem_different_types():
     """Member[float, bytes] produces the expected alias."""
     ga = Member[float, bytes]
-    assert isinstance(ga, types.GenericAlias)
+    assert isinstance(ga, GenericAlias)
     assert ga.__origin__ is Member
     assert ga.__args__ == (float, bytes)
 

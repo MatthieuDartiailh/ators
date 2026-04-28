@@ -757,7 +757,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         // The `effective_ann` resolved here replaces the outer `Member[T1, T2]`
         // with its first type argument (T1) for subsequent validator inference.
         let attr_name: String = name.extract()?;
-        let has_coerce = builder.coercer().is_some() || builder.init_coercer().is_some();
+        let has_coerce = builder.coercer().is_some();
 
         // Track whether `effective_ann` differs from the original `ann`
         // so the validate_attr=False path can reuse the already-computed
@@ -832,8 +832,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             } else {
                 origin.clone()
             };
-            let is_final = effective_origin.is(&tools.types.final_)
-                || effective_ann.is(&tools.types.final_);
+            let is_final =
+                effective_origin.is(&tools.types.final_) || effective_ann.is(&tools.types.final_);
             if is_final {
                 match builder.pre_setattr() {
                     Some(PreSetattrBehavior::Constant {}) => {}
