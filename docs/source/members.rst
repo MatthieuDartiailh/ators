@@ -3,22 +3,6 @@ Members
 
 Members are the core building blocks of Ators. They act as descriptors that manage attribute access, validation, and behaviors.
 
-Generic Alias Support
----------------------
-
-``Member`` supports subscription with exactly two type parameters, returning a
-:class:`types.GenericAlias` that can be used for type-annotation purposes::
-
-    from ators import Member
-
-    # Creates a GenericAlias with __origin__ = Member and __args__ = (int, str)
-    alias = Member[int, str]
-
-    assert alias.__origin__ is Member
-    assert alias.__args__ == (int, str)
-
-Exactly two type arguments are required; any other count raises :exc:`TypeError`.
-
 Internal Workings
 -----------------
 
