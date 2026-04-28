@@ -119,6 +119,15 @@ pub fn build_validator_from_annotation<'py>(
     ctx_provider: Option<&Bound<'py, PyAny>>,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
+    // Ators generic specializations can be represented as GenericAlias wrappers
+    // on the Python side; unwrap them to the canonical specialized class for
+    // validator inference.
+    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))? {
+        ann.getattr(intern!(name.py(), "__ators_specialized_class__"))?
+    } else {
+        ann.clone()
+    };
+
     if ann.is_instance_of::<PyString>() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Str annotations ({}) are not supported in ators classes, use ForwardRef instead",
@@ -129,7 +138,7 @@ pub fn build_validator_from_annotation<'py>(
             Validator::new(
                 TypeValidator::ForwardValidator {
                     late_validator: LateResolvedValidator::new(
-                        ann,
+                        &ann,
                         ctx_provider,
                         type_containers,
                         name,
@@ -163,13 +172,13 @@ pub fn build_validator_from_annotation<'py>(
     // Applicable on any type and return None for non generic types
     // Using this rather than is_instance is easier to get right since
     // some generics such as Literal use specific private classes.
-    let origin = tools.get_origin.call1((ann,))?;
+    let origin = tools.get_origin.call1((&ann,))?;
 
     // In 3.14, Union[int, float] and int | float share the same type
     if !origin.is_none() {
         // FIXME extract in a dedicated function since it will be expanded
         // to cover list, dict, Numpy.NDArray etc
-        let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+        let args = tools.get_args.call1((&ann,))?.cast_into::<PyTuple>()?;
         if origin.is(&tools.types.literal) {
             Ok((
                 Validator::new(
@@ -433,7 +442,7 @@ pub fn build_validator_from_annotation<'py>(
         }
     } else if ann.is_instance(&tools.types.type_var)? {
         if let Some(bindings) = typevar_bindings
-            && let Some(bound_ann) = bindings.get_item(ann)?
+            && let Some(bound_ann) = bindings.get_item(&ann)?
         {
             return build_validator_from_annotation(
                 name,

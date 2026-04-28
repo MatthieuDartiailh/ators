@@ -16,6 +16,7 @@ use pyo3::{
 use crate::utils::{GenericAttributesMap, TypeMutabilityMap};
 
 mod annotations;
+mod class_info;
 mod containers;
 mod core;
 mod member;
@@ -54,12 +55,21 @@ mod _ators {
 
     #[pymodule_export]
     use self::core::{
-        AtorsBase, PicklePolicy, disable_notifications, enable_notifications, freeze, get_member,
+        AtorsBase, disable_notifications, enable_notifications, freeze, get_member,
         get_member_customization_tool, get_members, get_members_by_tag,
-        get_members_by_tag_and_value, is_frozen, is_notifications_enabled, observe, unobserve,
+        get_members_by_tag_and_value, is_frozen, is_notifications_enabled,
+        maybe_freeze_instance_after_call, observe, unobserve,
     };
     #[pymodule_export]
     use self::meta::{create_ators_specialized_subclass, create_ators_subclass};
+
+    #[pymodule_export]
+    use self::class_info::{
+        MembersByNameMapping, PicklePolicy, create_ators_specialized_alias, drop_class_info,
+        get_ators_args, get_ators_frozen_flag, get_ators_init_member_names,
+        get_ators_members_by_name, get_ators_origin, get_ators_specific_member_names,
+        get_ators_type_params, get_tracked_class_info_size,
+    };
 
     #[pymodule_export]
     use self::meta::{rust_instancecheck, rust_subclasscheck};

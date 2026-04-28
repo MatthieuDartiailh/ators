@@ -5,7 +5,11 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-""""""
+"""Public Python API for Ators.
+
+This module re-exports the core Rust extension types/functions and provides
+the user-facing `Ators` base class built on top of `AtorsMeta`.
+"""
 
 from ._ators import (
     AtorsBase as _Base,
@@ -58,7 +62,11 @@ def __newobj__(cls, *args):
 
 
 class Ators(_Base, metaclass=_Meta):
-    """"""
+    """Base class for Ators models.
+
+    Subclasses declare members in the class body and receive validated,
+    slotted storage plus optional freezing and observation support.
+    """
 
     def __reduce_ex__(self, proto):
         """An implementation of the reduce protocol.

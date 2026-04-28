@@ -7,6 +7,8 @@
 |----------------------------------------------------------------------------*/
 /// Utility functions and structures used across the codebase, not specific to any
 /// particular aspect of the library.
+use crate::class_info::get_class_info;
+use crate::core::AtorsBase;
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
@@ -108,9 +110,9 @@ pub(crate) use create_behavior_callable_checker;
 // This approach allows to implement an equivalent of custom constructor
 // for enums
 
-#[allow(dead_code)]
 /// Wrapper allowing to hash and compare for eq Py<PyType> for use in HashMap
 /// while guaranteeing that the underlying Python type remain valid.
+#[allow(dead_code)]
 struct PyTypeWrap {
     type_: Py<PyType>,
     id: isize,
@@ -149,6 +151,7 @@ pub struct GenericAttributesMap {
 }
 
 impl GenericAttributesMap {
+    /// Create an empty generic-attributes registry.
     pub fn new(py: Python<'_>) -> Py<GenericAttributesMap> {
         Py::new(
             py,
@@ -159,6 +162,7 @@ impl GenericAttributesMap {
         .expect("GenericAttributesMap creation cannot fail.")
     }
 
+    /// Return registered attribute names for `type_`, if any.
     pub fn get_attributes(&self, type_: &Bound<'_, PyType>) -> Option<&Vec<String>> {
         self.map.get(&type_.into())
     }
@@ -175,10 +179,6 @@ impl GenericAttributesMap {
         Ok(())
     }
 }
-
-use crate::core::AtorsBase;
-
-use crate::meta::ATORS_FROZEN;
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
 #[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]
@@ -209,6 +209,7 @@ pub struct TypeMutabilityMap {
 }
 
 impl TypeMutabilityMap {
+    /// Create a mutability registry pre-populated with common immutable builtins.
     pub fn new(py: Python<'_>) -> Py<TypeMutabilityMap> {
         let mut map = HashMap::default();
 
@@ -254,13 +255,13 @@ impl TypeMutabilityMap {
         Ok(())
     }
 
+    /// Return mutability of a Python type based on Ators/dataclass rules and registry data.
     pub fn get_type_mutability<'py>(&self, type_: &Bound<'py, PyType>) -> Mutability {
         let py = type_.py();
         if let Ok(t) = type_.cast::<AtorsBase>() {
-            if t.getattr(ATORS_FROZEN)
-                .expect("Subclass of AtorsBase must have __ators_frozen__ set")
-                .extract::<bool>()
-                .expect("__ators_frozen__ should always be a bool")
+            if get_class_info(&t.get_type())
+                .expect("Subclass of AtorsBase must have class info")
+                .frozen()
             {
                 Mutability::Immutable
             } else {
@@ -285,6 +286,7 @@ impl TypeMutabilityMap {
         }
     }
 
+    /// Return mutability of a concrete object, including instance-level inspection hooks.
     pub fn get_object_mutability<'py>(&self, obj: &Bound<'py, PyAny>) -> PyResult<Mutability> {
         let obj_type = obj.get_type();
         let py = obj.py();

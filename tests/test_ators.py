@@ -7,6 +7,9 @@
 # --------------------------------------------------------------------------------------
 """Test default behavior for ators object"""
 
+import gc
+import weakref
+
 import pytest
 
 from ators import (
@@ -18,6 +21,7 @@ from ators import (
     get_members_by_tag_and_value,
     member,
 )
+from ators._ators import get_tracked_class_info_size
 from ators.behaviors import DelAttr, PreSetAttr
 
 
@@ -50,7 +54,7 @@ def test_member_constant():
     assert isinstance(A.a.delattr, DelAttr.Undeletable)
 
 
-@pytest.mark.parametrize("kwargs", [{}, {"a": 2}, {"b": 2}, {"a": 3, "b": 4}])
+@pytest.mark.parametrize("kwargs", [{}, {"a": 2}, {"a": 3, "b": 4}])
 def test_ators_init(kwargs):
     class A(Ators):
         a: int
@@ -64,6 +68,15 @@ def test_ators_init(kwargs):
             a.a
 
     assert a.b == kwargs.get("b", 1)
+
+
+def test_ators_init_missing_required_value():
+    class A(Ators):
+        a: int
+        b: int = 1
+
+    with pytest.raises(TypeError, match="Missing required init value"):
+        A(b=2)
 
 
 def test_member_access_fucntions():
@@ -80,6 +93,16 @@ def test_member_access_fucntions():
             assert m.name == k
             assert v == {"a": 1, "b": 2}[k]
         assert list(get_members_by_tag_and_value(obj, "t", 1)) == ["a"]
+
+
+def test_get_member_on_non_ators_class_reports_clear_error():
+    with pytest.raises(TypeError, match="Expected an Ators class or instance, got int"):
+        get_member(int, "imag")
+
+
+def test_get_member_on_non_ators_instance_reports_clear_error():
+    with pytest.raises(TypeError, match="Expected an Ators class or instance, got str"):
+        get_member("foo", "upper")
 
 
 def test_member_init_subclass():
@@ -100,10 +123,53 @@ def test_member_init_subclass():
     assert isinstance(B.b.pre_setattr, PreSetAttr.Constant)
     assert isinstance(B.b.delattr, DelAttr.Undeletable)
     assert B.b.metadata == {"a": 1}
-    assert B.__ators_members__["a"] is B.a
-    assert B.__ators_members__["b"] is B.b
-    assert B.a in B.__ators_specific_members__
-    assert B.b in B.__ators_specific_members__
+    assert get_members(B)["a"] is B.a
+    assert get_members(B)["b"] is B.b
 
     with pytest.raises(RuntimeError):
         get_member_customization_tool(B)
+
+
+def test_metadata_available_during_init_subclass():
+    seen = {}
+
+    class A(Ators):
+        a = member()
+        _b = member()
+
+        def __init_subclass__(cls):
+            seen["members"] = get_members(cls)
+            seen["frozen"] = cls.__ators_frozen__
+
+    class B(A):
+        pass
+
+    assert "a" in seen["members"]
+    assert seen["frozen"] is False
+    assert "a" in get_members(B)
+
+
+def test_members_mapping_is_immutable():
+    class A(Ators):
+        a = member()
+
+    members = get_members(A)
+    assert members["a"] is A.a
+
+
+def test_class_info_is_removed_when_class_is_collected():
+    before = get_tracked_class_info_size()
+
+    def _build():
+        class Temp(Ators):
+            a = member()
+
+        return Temp
+
+    temp = _build()
+    assert get_tracked_class_info_size() == before + 1
+    w = weakref.ref(temp)
+    del temp
+    gc.collect()
+    assert w() is None
+    assert get_tracked_class_info_size() == before

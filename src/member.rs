@@ -155,6 +155,10 @@ impl Member {
         &self.validator
     }
 
+    pub fn has_default(&self) -> bool {
+        !matches!(self.default, DefaultBehavior::NoDefault {})
+    }
+
     pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         Member {
             name: self.name.clone(),

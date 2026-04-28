@@ -72,6 +72,19 @@ def test_freezing_with_forward_ref_to_frozen():
     assert a.a.b == 42
 
 
+def test_frozen_class_custom_init_without_super_still_freezes():
+    class A(Ators, frozen=True):
+        a: int
+
+        def __init__(self, value: int):
+            self.a = value
+
+    a = A(1)
+    assert is_frozen(a)
+    with pytest.raises(TypeError):
+        a.a = 2
+
+
 class ForwardMutableA(Ators):
     a: LateMutableB
 

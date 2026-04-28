@@ -5,18 +5,24 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-""""""
+"""Metaclass implementation for Ators classes.
 
-from typing import Any, Mapping, dataclass_transform
+This module exposes `AtorsMeta`, the runtime responsible for building Ators
+subclasses and handling generic specialization behavior.
+"""
+
+from typing import Any, dataclass_transform
 
 from ._ators import (
-    Member,
     PicklePolicy,
-    create_ators_specialized_subclass as _create_ators_specialized_subclass,
+    create_ators_specialized_alias as _create_ators_specialized_alias,
     create_ators_subclass as _create_ators_subclass,
-    freeze,
-    rust_instancecheck as _rust_instancecheck,
-    rust_subclasscheck as _rust_subclasscheck,
+    drop_class_info as _drop_class_info,
+    get_ators_args as _get_ators_args,
+    get_ators_frozen_flag as _get_ators_frozen_flag,
+    get_ators_origin as _get_origin,
+    get_ators_type_params as _get_ators_type_params,
+    maybe_freeze_instance_after_call as _maybe_freeze_instance_after_call,
 )
 
 
@@ -40,9 +46,9 @@ class AtorsMeta(type):
 
     """
 
-    __ators_members__: Mapping[str, Member]
-    __ators_specific_members__: frozenset[str]
-    __ators_freeze__: bool
+    __ators_frozen__: bool
+    __origin__: type | None
+    __args__: tuple[type, ...] | None
 
     def __new__(
         meta,
@@ -74,16 +80,27 @@ class AtorsMeta(type):
         )
 
     def __call__(self, *args, **kwds):
-        new = super().__call__(*args, **kwds)
-        if self.__ators_frozen__:
-            freeze(new)
-        return new
+        return _maybe_freeze_instance_after_call(super().__call__(*args, **kwds))
+
+    @property
+    def __ators_frozen__(cls) -> bool:
+        return _get_ators_frozen_flag(cls)
+
+    @property
+    def __origin__(cls) -> type | None:
+        return _get_origin(cls)
+
+    @property
+    def __args__(cls) -> tuple[type, ...] | None:
+        return _get_ators_args(cls)
+
+    @property
+    def __type_params__(cls) -> tuple[Any, ...]:
+        tps = _get_ators_type_params(cls)
+        return () if tps is None else tps
 
     def __getitem__(self, params):
-        return _create_ators_specialized_subclass(self, params)
+        return _create_ators_specialized_alias(self, params)
 
-    def __subclasscheck__(cls, sub):  # type: ignore[override]
-        return _rust_subclasscheck(cls, sub)
-
-    def __instancecheck__(cls, instance):  # type: ignore[override]
-        return _rust_instancecheck(cls, instance)
+    def __del__(cls):
+        _drop_class_info(cls)

@@ -7,25 +7,39 @@
 |----------------------------------------------------------------------------*/
 /// Core Ators object and related utilities.
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyResult, intern, pyclass, pyfunction, pymethods,
     sync::critical_section::with_critical_section,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyString, PyType,
-        PyTypeMethods,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyType, PyTypeMethods},
 };
 use std::cell::UnsafeCell;
 
+use crate::class_info::{ClassMutability, get_class_info};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
 use crate::utils::Mutability;
 
-pub static ATORS_MEMBERS: &str = "__ators_members__";
-pub static ATORS_MEMBER_CUSTOMIZER: &str = "__ators_member_customizer__";
-pub static ATORS_MEMBERS_MUTABILITY: &str = "__ators_members_mutability__";
-pub static ATORS_OBSERVABLE: &str = "__ators_observable__";
-pub static ATORS_PICKLE_POLICY: &str = "__ators_pickle_policy__";
+/// Resolve the class for a given object, which may be either an instance or a class.
+#[inline]
+fn resolve_class_for_obj<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyType>> {
+    let cls = if let Ok(cls) = obj.cast::<PyType>() {
+        cls.clone()
+    } else {
+        obj.get_type()
+    };
+
+    if cls.is_subclass_of::<AtorsBase>()? {
+        Ok(cls)
+    } else {
+        let cls_name = cls
+            .name()
+            .and_then(|name| name.extract::<String>())
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Expected an Ators class or instance, got {cls_name}"
+        )))
+    }
+}
 
 /// Inner mutable state of an AtorsBase instance, stored in an UnsafeCell to allow
 /// interior mutability while keeping AtorsBase frozen.
@@ -50,47 +64,94 @@ pub struct AtorsBase {
 // the GIL is enabled (holds for both GIL and free-threaded builds).
 unsafe impl Sync for AtorsBase {}
 
-#[pyclass(module = "ators._ators", frozen, from_py_object)]
-#[derive(Debug, Clone)]
-pub enum ClassMutability {
-    #[pyo3(constructor = ())]
-    Immutable {},
-    #[pyo3(constructor = ())]
-    Mutable {},
-    #[pyo3(constructor = (values))]
-    InspectValues { values: Vec<String> },
+#[cold]
+fn init_kwargs_error(
+    kwargs: &Bound<'_, PyDict>,
+    class_info: &crate::class_info::AtorsClassInfo,
+) -> PyErr {
+    let py = kwargs.py();
+    let mut missing_required = Vec::new();
+    for name in class_info.required_init_member_names() {
+        let key = name.bind(py);
+        if kwargs
+            .get_item(key)
+            .expect("Dict lookup should not fail for string keys")
+            .is_none()
+        {
+            missing_required.push(
+                key.extract::<String>()
+                    .expect("Class info stores only valid Python string keys"),
+            );
+        }
+    }
+    let mut unknown = Vec::new();
+    for (k, _) in kwargs.iter() {
+        if let Ok(name) = k.extract::<String>()
+            && !class_info.is_init_member_name(py, &name)
+        {
+            unknown.push(name);
+        }
+    }
+    if !missing_required.is_empty() {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Missing required init value(s): {}",
+            missing_required.join(", ")
+        ))
+    } else if !unknown.is_empty() {
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Cannot pass init value(s) for non-init member(s): {}",
+            unknown.join(", ")
+        ))
+    } else {
+        pyo3::exceptions::PyTypeError::new_err("Invalid init kwargs for Ators instance")
+    }
 }
 
-#[pyclass(module = "ators._ators", frozen, from_py_object, eq, eq_int)]
-#[derive(Debug, Clone, PartialEq)]
-pub enum PicklePolicy {
-    /// Include all members in pickle state (default).
-    #[pyo3(name = "ALL")]
-    All,
-    /// Exclude all members from pickle state.
-    #[pyo3(name = "NONE")]
-    None,
-    /// Include only public members (those not starting with `_`) in pickle state.
-    #[pyo3(name = "PUBLIC")]
-    Public,
+#[cold]
+fn set_init_value_after_setattr_error<'py>(
+    slf: &Bound<'py, AtorsBase>,
+    class_info: &crate::class_info::AtorsClassInfo,
+    key: &Bound<'py, PyString>,
+    value: &Bound<'py, PyAny>,
+    err: PyErr,
+) -> PyResult<()> {
+    let py = slf.py();
+    let key_name: String = key.extract()?;
+    let members = class_info.members_by_name_ref(py);
+    let member = members
+        .get(&key_name)
+        .ok_or_else(|| pyo3::exceptions::PyAttributeError::new_err("Unknown init member"))?
+        .bind(py)
+        .clone();
+    if let Some(r) = member_coerce_init(&member, slf, value) {
+        let coerced_v = r?;
+        slf.setattr(key, coerced_v).map(|_| ())
+    } else {
+        Err(err)
+    }
 }
 
 #[pymethods]
 impl AtorsBase {
     #[new]
-    #[pyo3(signature = (**_kwargs))]
+    #[pyo3(signature = (*_args, **_kwargs))]
     #[classmethod]
-    fn py_new(cls: &Bound<'_, PyType>, _kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn py_new(
+        cls: &Bound<'_, PyType>,
+        // Accept and ignore positional args so metaclass __call__ can forward
+        // constructor arguments to __init__ without __new__ rejecting them.
+        // Required for example when subclassing from Python and subclass uses
+        // positional args in __init__.
+        _args: &Bound<'_, pyo3::types::PyTuple>,
+        _kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         let py = cls.py();
-        let slots_count = cls.getattr(intern!(py, ATORS_MEMBERS))?.len()?;
+        let class_info = get_class_info(cls)?;
+        let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
         // so later accesses can skip the critical section.
-        let is_observable = cls
-            .getattr(ATORS_OBSERVABLE)
-            .ok()
-            .and_then(|v| v.extract::<bool>().ok())
-            .unwrap_or(false);
+        let is_observable = class_info.observable();
         if slots_count > (u8::MAX as usize) {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The class {} has more than 255 members which is not supported.",
@@ -117,6 +178,57 @@ impl AtorsBase {
         })
     }
 
+    #[pyo3(signature = (**kwargs))]
+    pub fn __init__(
+        slf: &Bound<'_, AtorsBase>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let class_info = get_class_info(&slf.get_type())?;
+        let Some(kwargs) = kwargs else {
+            return Ok(());
+        };
+
+        let mut consumed = 0usize;
+        for required_name in class_info.required_init_member_names() {
+            let required_key = required_name.bind(slf.py());
+            if let Some(value) = kwargs.get_item(required_key)? {
+                if let Err(err) = slf.setattr(required_key, value.clone()) {
+                    set_init_value_after_setattr_error(
+                        slf,
+                        &class_info,
+                        required_key,
+                        &value,
+                        err,
+                    )?;
+                }
+                consumed += 1;
+            } else {
+                return Err(init_kwargs_error(kwargs, &class_info));
+            }
+        }
+        if consumed != kwargs.len() {
+            for optional_name in class_info.optional_init_member_names() {
+                let optional_key = optional_name.bind(slf.py());
+                if let Some(value) = kwargs.get_item(optional_key)? {
+                    if let Err(err) = slf.setattr(optional_key, value.clone()) {
+                        set_init_value_after_setattr_error(
+                            slf,
+                            &class_info,
+                            optional_key,
+                            &value,
+                            err,
+                        )?;
+                    }
+                    consumed += 1;
+                }
+            }
+        }
+        if consumed != kwargs.len() {
+            return Err(init_kwargs_error(kwargs, &class_info));
+        }
+        Ok(())
+    }
+
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
@@ -136,59 +248,19 @@ impl AtorsBase {
         }
     }
 
-    #[pyo3(signature = (**kwargs))]
-    pub fn __init__(
-        slf: &Bound<'_, AtorsBase>,
-        kwargs: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<()> {
-        let Some(kwargs) = kwargs else {
-            return Ok(());
-        };
-        let members = slf.getattr(ATORS_MEMBERS)?.cast_into::<PyMapping>()?;
-        for (k, v) in kwargs.iter() {
-            let key = k.cast::<PyString>()?;
-            if !members.get_item(key)?.cast::<Member>()?.get().init {
-                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Cannot pass an init value for member '{key}' because it is not marked as init."
-                )));
-            }
-            match slf.setattr(key, v.clone()) {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    // FIXME use cold_branch once Rust 1.95 is out
-                    let m = members.get_item(key)?.cast_into::<Member>()?;
-                    if let Some(r) = member_coerce_init(&m, slf, &v) {
-                        let coerced_v = r?;
-                        slf.setattr(key, coerced_v).map(|_| ())
-                    } else {
-                        Err(err)
-                    }
-                }
-            }?
-        }
-        Ok(())
-    }
-
     pub fn __getstate__<'py>(slf: &Bound<'py, AtorsBase>) -> PyResult<Bound<'py, PyDict>> {
         let py = slf.py();
         let cls = slf.get_type();
-
-        let members = cls
-            .getattr(intern!(py, ATORS_MEMBERS))?
-            .cast_into::<PyMapping>()?;
+        let class_info = get_class_info(&cls)?;
 
         let state = PyDict::new(py);
-        for item in members.items()?.try_iter()? {
-            let item = item?;
-            let (name, member_obj) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-            let name_str: String = name.extract()?;
-            let member = member_obj.cast_into::<Member>()?;
-            let mb = member.get();
+        for (name_str, member) in class_info.members_by_name_ref(py).iter() {
+            let mb = member.bind(py).get();
 
             if mb.pickle
                 && let Some(value) = get_slot_owned(slf, mb.index())
             {
-                state.set_item(&name_str, value.into_bound(py))?;
+                state.set_item(name_str, value.into_bound(py))?;
             }
         }
 
@@ -204,27 +276,24 @@ impl AtorsBase {
 
         let py = slf.py();
         let cls = slf.get_type();
-
-        let members = cls
-            .getattr(intern!(py, ATORS_MEMBERS))?
-            .cast_into::<PyMapping>()?;
-
-        // Validate all keys are known members
-        for (key, _) in state.iter() {
-            let key_str: String = key.extract()?;
-            if !members.contains(&key)? {
-                return Err(pyo3::exceptions::PyKeyError::new_err(format!(
-                    "Unknown member '{}' for {}",
-                    key_str,
-                    cls.name()?
-                )));
-            }
-        }
+        let class_info = get_class_info(&cls)?;
 
         // Restore values
         for (key, value) in state.iter() {
-            let member = members.get_item(&key)?.cast_into::<Member>()?;
-            let mb = member.get();
+            let key_str: String = key.extract()?;
+            let members = class_info.members_by_name_ref(py);
+            let member = members.get(&key_str).ok_or_else(|| {
+                let cls_name = cls
+                    .name()
+                    .ok()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                pyo3::exceptions::PyKeyError::new_err(format!(
+                    "Unknown member '{}' for {}",
+                    key_str, cls_name
+                ))
+            })?;
+            let mb = member.bind(py).get();
 
             // For container members: restore metadata before slot assignment.
             // `item_bv` is a `BoxedValidator(Box<Validator>)`; `item_bv.0` is the
@@ -268,9 +337,9 @@ impl AtorsBase {
     }
 }
 
-#[inline]
 /// Get a reference to the value stored in the slot at index if any.
 /// A critical section is always used to guarantee safe concurrent access.
+#[inline]
 pub(crate) fn get_slot<'a, 'py>(
     object: &'a Bound<'py, AtorsBase>,
     index: u8,
@@ -282,11 +351,11 @@ pub(crate) fn get_slot<'a, 'py>(
     })
 }
 
-#[inline]
 /// Get an owned clone of the value stored in the slot at index if any.
 ///
 /// This helper is intended for return-oriented paths such as Member.__get__
 /// where the caller needs an owned Python reference.
+#[inline]
 pub(crate) fn get_slot_owned<'py>(object: &Bound<'py, AtorsBase>, index: u8) -> Option<Py<PyAny>> {
     let py = object.py();
     with_critical_section(object.as_any(), || {
@@ -298,8 +367,8 @@ pub(crate) fn get_slot_owned<'py>(object: &Bound<'py, AtorsBase>, index: u8) -> 
     })
 }
 
-#[inline]
 /// Set the slot at index to the specified value
+#[inline]
 pub(crate) fn set_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8, value: &Bound<'py, PyAny>) {
     let py = object.py();
     with_critical_section(object.as_any(), || {
@@ -320,7 +389,6 @@ pub(crate) enum ReplaceSlotOutcome {
     Unchanged,
 }
 
-#[inline]
 /// Atomically check frozen state, write the slot, and return the previous value.
 ///
 /// Returns `Ok(ReplaceSlotOutcome::Replaced(old))` on success where `old` is the
@@ -328,6 +396,7 @@ pub(crate) enum ReplaceSlotOutcome {
 /// Returns `Ok(ReplaceSlotOutcome::Unchanged)` if the slot already contains the
 /// exact same Python object.
 /// Returns `Err(())` if the object was frozen at write-time (write was skipped).
+#[inline]
 pub(crate) fn replace_slot<'py>(
     object: &Bound<'py, AtorsBase>,
     index: u8,
@@ -356,8 +425,8 @@ pub(crate) fn replace_slot<'py>(
     })
 }
 
-#[inline]
 /// Del the slot value at index
+#[inline]
 pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
     with_critical_section(object.as_any(), || {
         // Safety: we hold the critical section lock on this object. We write through the
@@ -460,69 +529,82 @@ fn do_freeze(obj: &Bound<'_, AtorsBase>) {
     });
 }
 
+/// Freeze an Ators instance.
+///
+/// The operation is allowed only when the class mutability policy permits it.
+/// For `InspectValues`, each configured member value is checked and freezing is
+/// rejected if a value is mutable or undecidable.
 #[pyfunction]
 pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     let py = obj.py();
 
     // Check class mutability to determine if freezing is allowed
     let class_type = obj.get_type();
-    match class_type.getattr(ATORS_MEMBERS_MUTABILITY) {
-        Ok(mutability_obj) => {
-            let mutability_enum = mutability_obj.extract::<ClassMutability>()?;
-            match mutability_enum {
-                ClassMutability::Immutable {} => {
-                    // All members are immutable, allow freezing
-                    do_freeze(obj);
-                    Ok(())
-                }
-                ClassMutability::Mutable {} => {
-                    // Some member type is mutable, cannot freeze
-                    Err(pyo3::exceptions::PyTypeError::new_err(
-                        "Cannot freeze an object with mutable member types",
-                    ))
-                }
-                ClassMutability::InspectValues { values } => {
-                    // Inspect each attribute and check if it's mutable
-                    let members_dict = class_type.getattr(ATORS_MEMBERS)?;
-                    let ty_mutability_map = get_type_mutability_map(py);
-
-                    for attr_name in &values {
-                        let member_obj = PyAnyMethods::get_item(&members_dict, attr_name)?
-                            .cast_into::<Member>()?;
-
-                        // Get the slot index and retrieve the value
-                        if let Some(slot_value) = get_slot(obj, member_obj.get().index()) {
-                            let attr_bound = slot_value.bind(py);
-                            let attr_mutability =
-                                with_critical_section(ty_mutability_map.as_any(), || {
-                                    ty_mutability_map.borrow().get_object_mutability(attr_bound)
-                                })?;
-                            match attr_mutability {
-                                Mutability::Mutable | Mutability::Undecidable => {
-                                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "Cannot freeze object: member '{}' contains potentially mutable value",
-                                        attr_name
-                                    )));
-                                }
-                                Mutability::Immutable => {}
-                            }
+    let class_info = get_class_info(&class_type)?;
+    if let Some(mutability) = class_info.mutability() {
+        match mutability {
+            ClassMutability::Immutable {} => {
+                do_freeze(obj);
+                Ok(())
+            }
+            ClassMutability::Mutable {} => Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot freeze an object with mutable member types",
+            )),
+            ClassMutability::InspectValues { values } => {
+                let ty_mutability_map = get_type_mutability_map(py);
+                for attr_name in values {
+                    let members = class_info.members_by_name_ref(py);
+                    let member = members.get(attr_name).ok_or_else(|| {
+                        pyo3::exceptions::PyAttributeError::new_err(format!(
+                            "Unknown member '{attr_name}'"
+                        ))
+                    })?;
+                    if let Some(slot_value) = get_slot(obj, member.bind(py).get().index()) {
+                        let attr_bound = slot_value.bind(py);
+                        let attr_mutability =
+                            with_critical_section(ty_mutability_map.as_any(), || {
+                                ty_mutability_map.borrow().get_object_mutability(attr_bound)
+                            })?;
+                        if matches!(
+                            attr_mutability,
+                            Mutability::Mutable | Mutability::Undecidable
+                        ) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot freeze object: member '{}' contains potentially mutable value",
+                                attr_name
+                            )));
                         }
                     }
-
-                    // All inspected attributes are immutable, allow freezing
-                    do_freeze(obj);
-                    Ok(())
                 }
+                do_freeze(obj);
+                Ok(())
             }
         }
-        Err(_) => Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-            "Class {} is missing the required attribute '{}' to determine mutability",
+    } else {
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "Class {} mutability cannot be determined at this stage.",
             class_type.name().expect("Type object always has a name"),
-            ATORS_MEMBERS_MUTABILITY
-        ))),
+        )))
     }
 }
 
+/// Return the object after applying class-level post-construction freezing.
+///
+/// If `obj` is an `AtorsBase` instance of a frozen class, this calls `freeze`
+/// before returning the original object.
+#[pyfunction]
+pub fn maybe_freeze_instance_after_call<'py>(
+    obj: Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if let Ok(instance) = obj.cast::<AtorsBase>()
+        && get_class_info(&instance.get_type())?.frozen()
+    {
+        freeze(instance)?;
+    }
+    Ok(obj)
+}
+
+/// Return whether an Ators instance is currently frozen.
 #[pyfunction]
 pub fn is_frozen<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
     with_critical_section(obj.as_any(), || {
@@ -537,16 +619,23 @@ pub fn get_member<'py>(
     obj: Bound<'py, PyAny>,
     member_name: Bound<'py, PyString>,
 ) -> PyResult<Bound<'py, Member>> {
-    Ok(obj
-        .getattr(ATORS_MEMBERS)?
-        .get_item(member_name)?
-        .cast_into()?)
+    let cls = resolve_class_for_obj(&obj)?;
+    let info = get_class_info(&cls)?;
+    let name: String = member_name.extract()?;
+    info.members_by_name_ref(obj.py())
+        .get(&name)
+        .map(|m| m.bind(obj.py()).clone())
+        .ok_or_else(|| {
+            pyo3::exceptions::PyAttributeError::new_err(format!("Unknown member '{name}'"))
+        })
 }
 
-/// Retrieve all members from an Ators objetc.
+/// Retrieve all members from an Ators object.
 #[pyfunction]
-pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
-    obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.copy()
+pub fn get_members<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let cls = resolve_class_for_obj(obj)?;
+    let info = get_class_info(&cls)?;
+    Ok(info.members_by_name().bind(obj.py()).clone().into_any())
 }
 
 /// Retrieve all members with a specific metadata key and the value associated with it.
@@ -557,11 +646,14 @@ pub fn get_members_by_tag<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = obj.py();
     let members = PyDict::new(obj.py());
-    for (k, v) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
-        if let Some(m) = v.cast::<Member>()?.get().metadata()
+    let cls = resolve_class_for_obj(obj)?;
+    let info = get_class_info(&cls)?;
+    for (name, v) in info.members_by_name_ref(py).iter() {
+        let member = v.bind(py);
+        if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
         {
-            members.set_item(&k, (v.clone(), m[&tag].clone_ref(py)))?;
+            members.set_item(name, (member, m[&tag].clone_ref(py)))?;
         }
     }
     Ok(members)
@@ -575,13 +667,17 @@ pub fn get_members_by_tag_and_value<'py>(
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let members = PyDict::new(obj.py());
-    for (k, member) in obj.getattr(ATORS_MEMBERS)?.cast::<PyDict>()?.iter() {
-        if let Some(m) = member.cast::<Member>()?.get().metadata()
+    let py = obj.py();
+    let cls = resolve_class_for_obj(obj)?;
+    let info = get_class_info(&cls)?;
+    for (name, member) in info.members_by_name_ref(py).iter() {
+        let member = member.bind(py);
+        if let Some(m) = member.get().metadata()
             && m.contains_key(&tag)
             // If comparison fails the member should not be included
             && value.as_any().eq(&m[&tag]).unwrap_or(false)
         {
-            members.set_item(&k, member.clone())?;
+            members.set_item(name, member)?;
         }
     }
     Ok(members)
@@ -592,17 +688,19 @@ pub fn get_members_by_tag_and_value<'py>(
 pub fn get_member_customization_tool<'py>(
     cls: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, MemberCustomizationTool>> {
-    let attr = cls.getattr(ATORS_MEMBER_CUSTOMIZER)?;
-    if attr.is_none() {
+    if let Some(tool) = get_class_info(cls.cast::<PyType>()?)?.customizer() {
+        Ok(tool.bind(cls.py()).clone())
+    } else {
         Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Member customization is only possible during __init_subclass__ for class {}",
             cls.get_type().name().unwrap()
         )))
-    } else {
-        Ok(attr.cast_into::<MemberCustomizationTool>()?)
     }
 }
 
+/// Register an observer callback for a member on an observable object.
+///
+/// The callback receives an `AtorsChange` whenever the member value changes.
 #[pyfunction]
 pub fn observe<'py>(
     obj: &Bound<'py, AtorsBase>,
@@ -615,10 +713,11 @@ pub fn observe<'py>(
         ));
     }
 
-    let obj_type = obj.get_type();
-    let members_obj = obj_type.getattr(ATORS_MEMBERS)?;
-    let members = members_obj.cast::<PyDict>()?;
-    if !members.contains(&member_name)? {
+    let class_info = get_class_info(&obj.get_type())?;
+    if !class_info
+        .members_by_name_ref(obj.py())
+        .contains_key(&member_name)
+    {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
             "Unknown member '{member_name}'"
         )));
@@ -628,6 +727,7 @@ pub fn observe<'py>(
     ObserverPool::add(pool, &member_name, callback)
 }
 
+/// Unregister one observer callback for a member on an observable object.
 #[pyfunction]
 pub fn unobserve<'py>(
     obj: &Bound<'py, AtorsBase>,
@@ -644,6 +744,7 @@ pub fn unobserve<'py>(
     ObserverPool::remove(pool, &member_name, callback)
 }
 
+/// Enable change notifications on an observable object.
 #[pyfunction]
 pub fn enable_notifications<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     if !instance_is_observable(obj) {
@@ -662,6 +763,10 @@ pub fn enable_notifications<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     Ok(())
 }
 
+/// Disable change notifications on an object.
+///
+/// For non-observable classes this is a no-op because notifications are never
+/// emitted.
 #[pyfunction]
 pub fn disable_notifications<'py>(obj: &Bound<'py, AtorsBase>) {
     with_critical_section(obj.as_any(), || {
@@ -672,6 +777,7 @@ pub fn disable_notifications<'py>(obj: &Bound<'py, AtorsBase>) {
     });
 }
 
+/// Return whether change notifications are enabled for an object.
 #[pyfunction]
 pub fn is_notifications_enabled<'py>(obj: &Bound<'py, AtorsBase>) -> bool {
     notifications_enabled(obj)
