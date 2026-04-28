@@ -9,7 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use pyo3::{
-    Bound, Py, PyAny, PyResult, intern, pyclass, pyfunction, pymethods,
+    Bound, Py, PyAny, PyErr, PyResult,
+    ffi::c_str,
+    intern, pyclass, pyfunction, pymethods,
     sync::PyOnceLock,
     types::{PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyString, PyTuple, PyType},
 };
@@ -409,10 +411,25 @@ pub fn get_ators_type_params<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'p
     }
 }
 
+/// Create (or reuse) a specialized Ators class for generic parameters.
+///
+/// This is the Python-facing entry point used by `AtorsMeta.__getitem__`.
+#[pyfunction]
+pub fn create_ators_specialized_alias<'py>(
+    cls: &Bound<'py, PyType>,
+    params: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let specialized = crate::meta::create_ators_specialized_subclass(cls, params)?;
+    let specialized_type = specialized.cast::<PyType>()?;
+    wrap_ators_specialized_class(specialized_type)
+}
+
 struct ClassInfoStore {
     definitive: HashMap<usize, Arc<AtorsClassInfo>>,
     temporary: HashMap<String, Arc<AtorsClassInfo>>,
     pending_specialization_bindings: HashMap<String, Py<PyDict>>,
+    alias_by_specialized: HashMap<usize, Py<PyAny>>,
+    specialized_by_alias: HashMap<usize, Py<PyType>>,
 }
 
 impl ClassInfoStore {
@@ -421,11 +438,81 @@ impl ClassInfoStore {
             definitive: HashMap::new(),
             temporary: HashMap::new(),
             pending_specialization_bindings: HashMap::new(),
+            alias_by_specialized: HashMap::new(),
+            specialized_by_alias: HashMap::new(),
         }
     }
 }
 
 static CLASS_INFO_STORE: PyOnceLock<RwLock<ClassInfoStore>> = PyOnceLock::new();
+static ATORS_GENERIC_ALIAS_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+fn get_or_create_ators_generic_alias_type<'py>(
+    py: pyo3::Python<'py>,
+) -> PyResult<Bound<'py, PyType>> {
+    let alias_cls = ATORS_GENERIC_ALIAS_TYPE.get_or_try_init(py, || {
+        let locals = PyDict::new(py);
+        locals.set_item("types", py.import(c_str!("types"))?)?;
+        locals.set_item(
+            "_get_ators_specialized_class_for_alias",
+            pyo3::wrap_pyfunction!(get_ators_specialized_class_for_alias, py)?,
+        )?;
+        locals.set_item(
+            "_rust_instancecheck",
+            pyo3::wrap_pyfunction!(crate::meta::rust_instancecheck, py)?,
+        )?;
+        locals.set_item(
+            "_rust_subclasscheck",
+            pyo3::wrap_pyfunction!(crate::meta::rust_subclasscheck, py)?,
+        )?;
+        py.run(
+            c_str!(
+                r#"
+class AtorsGenericAlias(types.GenericAlias):
+    """GenericAlias-compatible view over a specialized Ators class."""
+
+    def __getattribute__(self, name: str):
+        if name == "__type_params__":
+            return self.__ators_specialized_class__.__type_params__
+        if name == "__ators_specialized_class__":
+            return _get_ators_specialized_class_for_alias(self)
+        return super().__getattribute__(name)
+
+    def __call__(self, *args, **kwargs):
+        return self.__ators_specialized_class__(*args, **kwargs)
+
+    def __getitem__(self, params):
+        return self.__ators_specialized_class__[params]
+
+    def __instancecheck__(self, instance):
+        return _rust_instancecheck(self.__ators_specialized_class__, instance)
+
+    def __subclasscheck__(self, sub):
+        if isinstance(sub, type(self)):
+            sub = sub.__ators_specialized_class__
+        return _rust_subclasscheck(self.__ators_specialized_class__, sub)
+
+    def __mro_entries__(self, bases):
+        del bases
+        return (self.__ators_specialized_class__,)
+
+    def __getattr__(self, name: str):
+        return getattr(self.__ators_specialized_class__, name)
+"#
+            ),
+            Some(&locals),
+            None,
+        )?;
+        let alias_cls = locals
+            .get_item("AtorsGenericAlias")?
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Failed to create AtorsGenericAlias")
+            })?
+            .cast_into::<PyType>()?;
+        Ok::<Py<PyType>, PyErr>(alias_cls.unbind())
+    })?;
+    Ok(alias_cls.clone_ref(py).into_bound(py))
+}
 
 #[inline]
 fn get_class_info_store<'py>(py: pyo3::Python<'py>) -> &'py RwLock<ClassInfoStore> {
@@ -602,15 +689,87 @@ pub fn drop_class_info(cls: &Bound<'_, PyType>) {
     let store = get_class_info_store(py);
     let mut store = store.write().expect("Class info store write lock poisoned");
     store.definitive.remove(&key);
+    if let Some(alias) = store.alias_by_specialized.remove(&key) {
+        store.specialized_by_alias.remove(&alias.as_ptr().addr());
+    }
     if let Some(fqname) = fqname {
         store.temporary.remove(&fqname);
         store.pending_specialization_bindings.remove(&fqname);
     }
 }
 
+/// Return the backing specialized Ators class for an AtorsGenericAlias instance.
+#[pyfunction]
+pub fn get_ators_specialized_class_for_alias<'py>(
+    alias: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyType>> {
+    let key = alias.as_ptr().addr();
+    let store = get_class_info_store(alias.py());
+    let store = store.read().expect("Class info store read lock poisoned");
+    store
+        .specialized_by_alias
+        .get(&key)
+        .map(|cls| cls.bind(alias.py()).clone())
+        .ok_or_else(|| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "Expected an AtorsGenericAlias created by Ators specialization",
+            )
+        })
+}
+
+/// Wrap a specialized Ators class into a cached AtorsGenericAlias.
+#[pyfunction]
+pub fn wrap_ators_specialized_class<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
+    let py = cls.py();
+    let info = get_class_info(cls)?;
+    let Some(generic) = info.generic() else {
+        return Ok(cls.clone().into_any());
+    };
+    if generic.origin().is_none() {
+        return Ok(cls.clone().into_any());
+    }
+
+    let cls_key = class_key(cls);
+    let store = get_class_info_store(py);
+    if let Some(alias) = store
+        .read()
+        .expect("Class info store read lock poisoned")
+        .alias_by_specialized
+        .get(&cls_key)
+    {
+        return Ok(alias.bind(py).clone());
+    }
+
+    let alias_cls = get_or_create_ators_generic_alias_type(py)?;
+    let origin = generic
+        .origin()
+        .expect("Checked above that specialized classes have an origin")
+        .bind(py)
+        .clone();
+    let args = PyTuple::new(py, generic.args().iter().map(|a| a.bind(py)))?;
+    let alias = alias_cls.call1((origin, args))?;
+    let alias_key = alias.as_ptr().addr();
+
+    {
+        let mut store = store.write().expect("Class info store write lock poisoned");
+        store
+            .alias_by_specialized
+            .insert(cls_key, alias.clone().unbind());
+        store
+            .specialized_by_alias
+            .insert(alias_key, cls.clone().unbind());
+    }
+    Ok(alias)
+}
+
 /// Return the number of definitive class-info entries currently tracked.
 #[pyfunction]
 pub fn get_tracked_class_info_size(py: pyo3::Python<'_>) -> usize {
+    // Keep this debugging helper deterministic across test runs by forcing a
+    // collection cycle before counting tracked classes.
+    let _ = py
+        .import(intern!(py, "gc"))
+        .and_then(|gc| gc.call_method0(intern!(py, "collect")));
     let store = get_class_info_store(py);
     store
         .read()

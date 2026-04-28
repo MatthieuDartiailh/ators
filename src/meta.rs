@@ -1161,21 +1161,14 @@ pub fn create_ators_subclass<'py>(
     for (member_name, member) in &members_by_name {
         let member = member.bind(py).get();
         if member.init {
+            let n = PyString::new(py, member_name).unbind();
             if member.has_default() {
-                optional_init_member_names.push(member_name.clone());
+                optional_init_member_names.push(n);
             } else {
-                required_init_member_names.push(member_name.clone());
+                required_init_member_names.push(n);
             }
         }
     }
-    let optional_init_member_names = optional_init_member_names
-        .iter()
-        .map(|name| PyString::new(py, name).unbind())
-        .collect();
-    let required_init_member_names = required_init_member_names
-        .iter()
-        .map(|name| PyString::new(py, name).unbind())
-        .collect();
     let class_info = AtorsClassInfo::new(
         py,
         frozen,
