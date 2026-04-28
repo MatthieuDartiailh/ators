@@ -759,7 +759,13 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         let attr_name: String = name.extract()?;
         let has_coerce = builder.coercer().is_some() || builder.init_coercer().is_some();
 
-        let effective_ann: Bound<'py, PyAny> = if ann.is(member_type.as_any()) {
+        // Track whether `effective_ann` differs from the original `ann`
+        // so the validate_attr=False path can reuse the already-computed
+        // `origin` instead of making a redundant `get_origin` call.
+        let effective_ann: Bound<'py, PyAny>;
+        let ann_replaced: bool;
+
+        if ann.is(member_type.as_any()) {
             // Bare `Member` annotation — never valid.
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Attribute '{attr_name}': Member must be subscripted as Member[T1, T2]."
@@ -781,7 +787,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                 )));
             }
             // Use T1 (the first type arg) for validator inference.
-            args.get_item(0)?
+            effective_ann = args.get_item(0)?;
+            ann_replaced = true;
         } else {
             if has_coerce {
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -789,8 +796,9 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                      Member[T1, T2] annotation."
                 )));
             }
-            ann.clone()
-        };
+            effective_ann = ann.clone();
+            ann_replaced = false;
+        }
 
         if validate_attr {
             // Analyze the annotation to configure the builder
@@ -816,7 +824,14 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             // When validate_attr=False, skip building type/value validators and
             // coercers.  Only Final semantics (read-only + undeletable) are
             // still enforced; everything else is treated as untyped.
-            let effective_origin = tools.get_origin.call1((&effective_ann,))?;
+            // Reuse the already-computed `origin` when the annotation was not
+            // replaced (the common non-Member case) to avoid a redundant
+            // `get_origin` Python call.
+            let effective_origin = if ann_replaced {
+                tools.get_origin.call1((&effective_ann,))?
+            } else {
+                origin.clone()
+            };
             let is_final = effective_origin.is(&tools.types.final_)
                 || effective_ann.is(&tools.types.final_);
             if is_final {
