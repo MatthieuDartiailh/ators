@@ -7,11 +7,11 @@
 # --------------------------------------------------------------------------------------
 """Tests for the validate_attr metaclass option."""
 
-from typing import ClassVar, Final
+from typing import Any, ClassVar, Final
 
 import pytest
 
-from ators import Ators, get_member, member
+from ators import Ators, Member, get_member, member
 from ators.behaviors import DelAttr, PreSetAttr
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ def test_validate_attr_false_explicit_coerce_fails():
     with pytest.raises(ValueError, match="Class creation failed: attribute 'x'"):
 
         class A(Ators, validate_attr=False):
-            x: int = member().coerce()
+            x: Member[int, Any] = member().coerce()
 
 
 def test_validate_attr_false_explicit_coerce_init_fails():
@@ -142,14 +142,14 @@ def test_validate_attr_false_explicit_coerce_init_fails():
     with pytest.raises(ValueError, match="Class creation failed: attribute 'x'"):
 
         class A(Ators, validate_attr=False):
-            x: int = member().coerce_init()
+            x: Member[int, Any] = member().coerce_init()
 
 
 def test_validate_attr_false_inherited_coerce_fails():
     """Inherited coercer from a base class raises ValueError when validate_attr=False."""
 
     class Base(Ators):
-        x: int = member().coerce()
+        x: Member[int, Any] = member().coerce()
 
     with pytest.raises(ValueError, match="Class creation failed: attribute 'x'"):
 

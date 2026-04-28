@@ -9,7 +9,9 @@
 
 import pytest
 
-from ators import Ators, member
+from typing import Any
+
+from ators import Ators, Member, member
 from ators.behaviors import Coercer, coerce, coerce_init
 
 
@@ -68,7 +70,7 @@ from ators.behaviors import Coercer, coerce, coerce_init
 )
 def test_type_inferred_coercion(ty, init, inputs, expected):
     class A(Ators):
-        a: ty = getattr(member(), "coerce_init" if init else "coerce")()
+        a: Member[ty, Any] = getattr(member(), "coerce_init" if init else "coerce")()
 
     # initialize using the first input
     a = A(**{"a": inputs[0]})
@@ -101,7 +103,7 @@ def test_call_coerce(init, inputs, called, expected):
         return int(n)
 
     class A(Ators):
-        a: int = getattr(member(), "coerce_init" if init else "coerce")(
+        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")(
             Coercer.CallValue(make_coerce)
         )
 
@@ -142,7 +144,7 @@ def test_call_member_object_coerce(init, inputs, called, expected):
         return int(value)
 
     class A(Ators):
-        a: int = getattr(member(), "coerce_init" if init else "coerce")(
+        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")(
             Coercer.CallNameObjectValueInit(make_coerce)
         )
 
@@ -178,7 +180,7 @@ def test_method_coerce(init, inputs, called, expected):
     init_coercion = None
 
     class A(Ators):
-        a: int = member()
+        a: Member[int, Any] = member()
 
         @(coerce_init if init else coerce)(a)
         def _coerce_a(self, m, v, init):
@@ -215,7 +217,7 @@ def test_method_coerce(init, inputs, called, expected):
 @pytest.mark.parametrize("init", [False, True])
 def test_inherited_coerce_behavior(init):
     class A(Ators):
-        a: int = getattr(member(), "coerce_init" if init else "coerce")()
+        a: Member[int, Any] = getattr(member(), "coerce_init" if init else "coerce")()
 
     class B(A):
         a = member().inherit()
@@ -298,7 +300,7 @@ def test_warn_on_multiple_setting_of_coerce(init):
     with pytest.warns(UserWarning):
 
         class A(Ators):
-            a: int = getattr(
+            a: Member[int, Any] = getattr(
                 getattr(member(), "coerce_init" if init else "coerce")(
                     Coercer.CallValue(lambda v: 1)
                 ),
@@ -314,3 +316,76 @@ def test_warn_on_useless_coercion(init):
             a = getattr(member(), "coerce_init" if init else "coerce")(
                 Coercer.CallValue(lambda v: 1)
             )
+
+
+# ---------------------------------------------------------------------------
+# Annotation-coerce pairing contract tests
+# ---------------------------------------------------------------------------
+
+
+def test_member_annotation_without_coerce_raises():
+    """Member[T1, T2] annotation without .coerce() on RHS must raise TypeError."""
+    with pytest.raises(TypeError, match="requires an explicitly coerced RHS member"):
+
+        class A(Ators):
+            x: Member[int, Any] = member()
+
+
+def test_coerce_without_member_annotation_raises():
+    """A plain type annotation with .coerce() on RHS must raise TypeError."""
+    with pytest.raises(TypeError, match="requires a Member\\[T1, T2\\] annotation"):
+
+        class A(Ators):
+            x: int = member().coerce()
+
+
+def test_bare_member_annotation_raises():
+    """Bare Member (not subscripted) annotation must always raise TypeError."""
+    with pytest.raises(TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"):
+
+        class A(Ators):
+            x: Member = member()
+
+
+def test_bare_member_annotation_with_coerce_raises():
+    """Bare Member annotation even with .coerce() must raise TypeError."""
+    with pytest.raises(TypeError, match="Member must be subscripted as Member\\[T1, T2\\]"):
+
+        class A(Ators):
+            x: Member = member().coerce()
+
+
+def test_member_annotation_wrong_arity_one_raises():
+    """Member[T1] (single type arg) annotation must raise TypeError."""
+    with pytest.raises(TypeError, match="expects exactly 2 type arguments, got 1"):
+
+        class A(Ators):
+            x: Member[int] = member().coerce()  # type: ignore[type-arg]
+
+
+def test_member_annotation_wrong_arity_three_raises():
+    """Member[T1, T2, T3] (three type args) annotation must raise TypeError."""
+    with pytest.raises(TypeError, match="expects exactly 2 type arguments, got 3"):
+
+        class A(Ators):
+            x: Member[int, str, float] = member().coerce()  # type: ignore[type-arg]
+
+
+def test_member_annotation_valid_pair_succeeds():
+    """Member[T1, T2] + .coerce() is the only valid annotated-coerce form."""
+
+    class A(Ators):
+        x: Member[int, Any] = member().coerce()
+
+    a = A(x="42")
+    assert a.x == 42
+
+
+def test_member_annotation_coerce_init_valid():
+    """Member[T1, T2] + .coerce_init() is also a valid pair."""
+
+    class A(Ators):
+        x: Member[int, Any] = member().coerce_init()
+
+    a = A(x="7")
+    assert a.x == 7
