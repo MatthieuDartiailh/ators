@@ -772,6 +772,9 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             )));
         } else if origin.is(member_type.as_any()) {
             // `Member[T1, T2]` annotation: validate arity and require coerce.
+            // This is done here because raising in __class_getitem__ simply turns 
+            // the annotations into a forward reference which leads to 
+            // generating poor and late error messages.
             let args = tools.get_args.call1((&ann,))?.cast_into::<PyTuple>()?;
             let arg_count = args.len();
             if arg_count != 2 {
