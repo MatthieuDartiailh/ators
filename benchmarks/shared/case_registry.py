@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from benchmarks.shared.assignment_registry import select_assignment_cases
 from benchmarks.shared.container_registry import select_container_cases
 from benchmarks.shared.descriptor_registry import select_descriptor_cases
+from benchmarks.shared.init_registry import select_init_cases
 from benchmarks.shared.registry_types import BenchmarkCase
 from benchmarks.shared.typecheck_registry import select_typecheck_cases
 from benchmarks.shared.validation_registry import select_validation_cases
@@ -42,6 +43,11 @@ def _registered_selectors() -> list[CaseSelector]:
             implementations=implementations,
         ),
         lambda families, groups, implementations: select_container_cases(
+            families=families,
+            groups=groups,
+            implementations=implementations,
+        ),
+        lambda families, groups, implementations: select_init_cases(
             families=families,
             groups=groups,
             implementations=implementations,

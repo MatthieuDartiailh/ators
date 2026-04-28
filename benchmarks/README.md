@@ -17,6 +17,7 @@ and two frontends:
 - `test_set_untyped.py`: untyped `__set__` writes.
 - `test_set_untyped_alternating.py`: alternating untyped writes.
 - `test_get_descriptor.py`: class-level descriptor reads.
+- `test_init.py`: object construction (`no_validators` and `init_coercion` groups).
 - `validators/test_validation_*.py`: typed validation families.
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
@@ -26,15 +27,6 @@ and two frontends:
 ### Shared pyperf entrypoints
 
 - `run_pyperf.py`: suite-wide case listing and execution frontend.
-- `bench_get_untyped.py`: convenience runner for `get_untyped`.
-- `bench_set_untyped.py`: convenience runner for `set_untyped`.
-- `bench_set_untyped_alternating.py`: convenience runner for alternating set.
-- `bench_get_descriptor.py`: convenience runner for `get_descriptor`.
-- `bench_validation.py`: convenience runner for validation families.
-- `containers/bench_list.py`: convenience runner for list method family.
-- `containers/bench_set.py`: convenience runner for set method family.
-- `containers/bench_dict.py`: convenience runner for dict method family.
-- `bench_typecheck.py`: convenience runner for `typecheck` family.
 
 ## Running Benchmarks
 
@@ -126,8 +118,6 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
    `benchmarks/shared/pytest_frontend.py`.
 
 4. Add a pyperf wrapper when useful.
-   Prefer `python benchmarks/run_pyperf.py --family <name>` for general use.
-   Add a `bench_*.py` helper only if it improves local ergonomics.
 
 5. Verify both frontends.
    Run pytest smoke checks:
