@@ -642,7 +642,7 @@ impl NotifyingList {
                     item: Some(nested_bv),
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsList>() {
-                        AtorsList::restore(&nested, (*nested_bv.0).clone(), member_name, object);
+                        AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
                     }
                 }
                 TypeValidator::NotifyingList {
@@ -650,7 +650,7 @@ impl NotifyingList {
                 } => {
                     if let Ok(nested) = list_item.cast::<NotifyingList>() {
                         NotifyingList::restore(
-                            &nested,
+                            nested,
                             (*nested_bv.0).clone(),
                             member_name,
                             object,
@@ -661,7 +661,7 @@ impl NotifyingList {
                     item: Some(nested_bv),
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsSet>() {
-                        AtorsSet::restore(&nested, (*nested_bv.0).clone(), member_name, object);
+                        AtorsSet::restore(nested, (*nested_bv.0).clone(), member_name, object);
                     }
                 }
                 TypeValidator::Dict {
@@ -669,7 +669,7 @@ impl NotifyingList {
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsDict>() {
                         AtorsDict::restore(
-                            &nested,
+                            nested,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
                             member_name,
@@ -723,7 +723,7 @@ impl NotifyingList {
 
         // Check if parent has disabled notifications (parent always wins)
         let obj_bound = object.bind(py);
-        if !crate::core::notifications_enabled(&obj_bound) {
+        if !crate::core::notifications_enabled(obj_bound) {
             return Ok(());
         }
 
@@ -743,14 +743,14 @@ impl NotifyingList {
             ListChange::new(
                 object.clone_ref(py),
                 member_name.clone(),
-                py.None().into(),
+                py.None(),
                 newvalue,
                 operations,
             ),
         )?;
 
         // Get the observer pool and fire
-        let pool = crate::core::get_observer_pool(&obj_bound);
+        let pool = crate::core::get_observer_pool(obj_bound);
         let errors = crate::observers::ObserverPool::fire(pool, &member_name, change.as_super())?;
 
         if !errors.is_empty() {
@@ -1055,7 +1055,7 @@ impl NotifyingList {
                 let start_index = py_list.len();
                 for (offset, item_py) in original.iter().enumerate() {
                     let item = item_py.bind(py);
-                    py_list.append(&item)?;
+                    py_list.append(item)?;
 
                     let operation = Operation::Added {
                         item: item_py.clone_ref(py),

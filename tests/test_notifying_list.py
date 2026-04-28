@@ -124,3 +124,11 @@ def test_notifying_list_member_validates_after_pickle_restore():
     assert len(changes) == 1
     assert isinstance(changes[0], ListChange)
     assert len(changes[0].operations) == 2
+
+
+def test_notifying_list_forbidden_in_non_observable_class():
+    """NotifyingList cannot be used in a non-observable class."""
+    with pytest.raises(TypeError, match="NotifyingList can only be used in observable classes"):
+
+        class _NonObservable(Ators, observable=False):
+            items: NotifyingList[int] = member()

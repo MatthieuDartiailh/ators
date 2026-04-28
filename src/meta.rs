@@ -850,6 +850,7 @@ pub fn create_ators_subclass<'py>(
         type_containers,
         typevar_bindings.as_ref(),
         validate_attr,
+        is_observable,
     )?;
 
     // Collect the new members defined in this class that require the owning
