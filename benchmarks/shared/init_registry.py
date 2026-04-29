@@ -17,14 +17,14 @@ Each group is parameterised over 1, 10 and 100 attributes so that fixed and
 per-attribute overhead can be distinguished.
 """
 
-import importlib.util
 from functools import partial
 from typing import Any, Callable
 
 from ators import Ators, member
 from benchmarks.shared.registry_types import BenchmarkCase
+from benchmarks.shared.runtime import atom_benchmarks_available
 
-ATOM_AVAILABLE = bool(importlib.util.find_spec("atom"))
+ATOM_AVAILABLE = atom_benchmarks_available()
 
 if ATOM_AVAILABLE:
     from atom.api import Atom, Value
