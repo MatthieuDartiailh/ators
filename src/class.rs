@@ -12,9 +12,10 @@ pub mod info;
 pub mod meta;
 
 pub use self::base::{
-    AtorsBase, disable_notifications, enable_notifications, freeze, get_member,
-    get_member_customization_tool, get_members, get_members_by_tag, get_members_by_tag_and_value,
-    is_frozen, is_notifications_enabled, maybe_freeze_instance_after_call, observe, unobserve,
+    AtorsBase, disable_notifications, enable_notifications, freeze, get_event, get_events,
+    get_member, get_member_customization_tool, get_members, get_members_by_tag,
+    get_members_by_tag_and_value, is_frozen, is_notifications_enabled,
+    maybe_freeze_instance_after_call, observe, unobserve,
 };
 pub use self::generic::create_ators_specialized_subclass;
 pub use self::info::{

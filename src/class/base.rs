@@ -14,6 +14,7 @@ use pyo3::{
 use std::cell::UnsafeCell;
 
 use crate::class::info::{ClassMutability, get_class_info};
+use crate::event::Event;
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
@@ -698,6 +699,36 @@ pub fn get_member_customization_tool<'py>(
     }
 }
 
+/// Retrieve a single Event from an Ators object by name.
+#[pyfunction]
+pub fn get_event<'py>(
+    obj: Bound<'py, PyAny>,
+    event_name: Bound<'py, PyString>,
+) -> PyResult<Bound<'py, Event>> {
+    let cls = resolve_class_for_obj(&obj)?;
+    let info = get_class_info(&cls)?;
+    let name: String = event_name.extract()?;
+    info.events_by_name()
+        .get(&name)
+        .map(|e| e.bind(obj.py()).clone())
+        .ok_or_else(|| {
+            pyo3::exceptions::PyAttributeError::new_err(format!("Unknown event '{name}'"))
+        })
+}
+
+/// Retrieve all events from an Ators object as a dict of {name: Event}.
+#[pyfunction]
+pub fn get_events<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    let cls = resolve_class_for_obj(obj)?;
+    let py = obj.py();
+    let info = get_class_info(&cls)?;
+    let result = PyDict::new(py);
+    for (name, event) in info.events_by_name().iter() {
+        result.set_item(name, event.bind(py))?;
+    }
+    Ok(result)
+}
+
 /// Register an observer callback for a member on an observable object.
 ///
 /// The callback receives an `AtorsChange` whenever the member value changes.
@@ -717,6 +748,7 @@ pub fn observe<'py>(
     if !class_info
         .members_by_name_ref(obj.py())
         .contains_key(&member_name)
+        && !class_info.events_by_name().contains_key(&member_name)
     {
         return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
             "Unknown member '{member_name}'"

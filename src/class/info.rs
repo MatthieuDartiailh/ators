@@ -15,6 +15,7 @@ use pyo3::{
 };
 
 use crate::class::generic::wrap_ators_specialized_class;
+use crate::event::Event;
 use crate::member::{Member, MemberCustomizationTool};
 
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
@@ -203,6 +204,8 @@ pub(crate) struct AtorsClassInfo {
     method_names: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
+    events_by_name: HashMap<String, Py<Event>>,
+    specific_event_names: HashSet<String>,
 }
 
 impl AtorsClassInfo {
@@ -220,6 +223,8 @@ impl AtorsClassInfo {
         method_names: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
+        events_by_name: HashMap<String, Py<Event>>,
+        specific_event_names: HashSet<String>,
     ) -> PyResult<Self> {
         let members_by_name = Py::new(
             py,
@@ -237,6 +242,8 @@ impl AtorsClassInfo {
             method_names,
             generic,
             customizer_tool,
+            events_by_name,
+            specific_event_names,
         })
     }
 
@@ -327,6 +334,14 @@ impl AtorsClassInfo {
 
     pub(crate) fn generic(&self) -> Option<&AtorsGenericInfo> {
         self.generic.as_ref()
+    }
+
+    pub(crate) fn events_by_name(&self) -> &HashMap<String, Py<Event>> {
+        &self.events_by_name
+    }
+
+    pub(crate) fn specific_event_names(&self) -> &HashSet<String> {
+        &self.specific_event_names
     }
 }
 
