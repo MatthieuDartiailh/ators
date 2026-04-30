@@ -23,6 +23,7 @@ use crate::{
         get_class_info_store, insert_definitive_class_info, insert_pending_specialization_bindings,
         pop_definitive_class_info,
     },
+    event::EventBuilder,
     member::MemberBuilder,
     utils::{is_any_type, is_type_var},
 };
@@ -647,6 +648,14 @@ pub fn create_ators_specialized_subclass<'py>(
             let mut inherited_builder = MemberBuilder::default();
             inherited_builder.set_inherit(true);
             namespace.set_item(member_name, Bound::new(py, inherited_builder)?)?;
+        }
+    }
+
+    for event_name in cls_info.events_by_name().keys() {
+        if annotations.contains(event_name)? {
+            let mut inherited_builder = EventBuilder::default();
+            inherited_builder.inherit = true;
+            namespace.set_item(event_name, Bound::new(py, inherited_builder)?)?;
         }
     }
 
