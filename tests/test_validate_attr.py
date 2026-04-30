@@ -11,7 +11,7 @@ from typing import ClassVar, Final
 
 import pytest
 
-from ators import Ators, get_member, member
+from ators import Ators, get_member, get_members, member
 from ators.behaviors import DelAttr, PreSetAttr
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def test_validate_attr_false_classvar_parameterized():
     assert A.cls_attr == 42
     a = A(x="hello")
     a.x = "hello2"
-    assert "cls_attr" not in dir(type(a).__ators_members__)
+    assert "cls_attr" not in dir(get_members(type(a)))
 
 
 def test_validate_attr_false_classvar_bare():
