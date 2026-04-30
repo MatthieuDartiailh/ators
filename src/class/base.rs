@@ -56,6 +56,12 @@ struct InnerAtors {
 #[pyclass(module = "ators._ators", subclass, frozen)]
 pub struct AtorsBase {
     inner: UnsafeCell<InnerAtors>,
+    /// Whether the class this instance belongs to has unresolved abstract methods.
+    /// Set once at construction time and never mutated thereafter.
+    /// Always `false` for any live instance because `py_new` rejects abstract
+    /// classes before allocating; stored here so Rust helpers can query
+    /// abstractness from the instance without an additional class-info lookup.
+    pub(crate) has_abstract_methods: bool,
 }
 
 // Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
@@ -147,6 +153,22 @@ impl AtorsBase {
     ) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
+
+        // Reject instantiation of classes with unresolved abstract methods.
+        // This check is performed in Rust using the cached set in class info,
+        // so no additional Python attribute lookup is required.
+        let abstract_methods = class_info.abstract_methods();
+        if !abstract_methods.is_empty() {
+            let cls_name = cls.name()?.to_string();
+            let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Can't instantiate abstract class {} with abstract method(s): {}",
+                cls_name,
+                names.join(", ")
+            )));
+        }
+
         let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
@@ -175,6 +197,7 @@ impl AtorsBase {
                 is_observable,
                 slots,
             }),
+            has_abstract_methods: false,
         })
     }
 

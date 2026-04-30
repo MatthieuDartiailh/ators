@@ -12,9 +12,9 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
     sync::critical_section::with_critical_section,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFunction, PyListMethods,
-        PyMapping, PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods,
-        PyType, PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFunction, PyListMethods, PyMapping,
+        PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType,
+        PyTypeMethods,
     },
 };
 
@@ -753,11 +753,6 @@ pub fn create_ators_subclass<'py>(
         .with_members(py, updated_members_by_name)?
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
-
-    // Set __abstractmethods__ on the class so Python introspection works and
-    // ABCMeta-compatible tooling can detect abstract classes.
-    let abs_frozenset = PyFrozenSet::new(py, final_class_info.abstract_methods())?;
-    cls.setattr(intern!(py, "__abstractmethods__"), abs_frozenset)?;
 
     insert_definitive_class_info(py, &cls, final_class_info);
 

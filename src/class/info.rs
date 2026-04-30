@@ -356,6 +356,20 @@ pub fn get_ators_specific_member_names<'py>(
     Ok(PyFrozenSet::new(py, info.specific_member_names())?.into_any())
 }
 
+/// Return the frozenset of unresolved abstract method names for `cls`.
+///
+/// This is the Rust-backed data source for the `__abstractmethods__` property
+/// on `AtorsMeta`; the set is computed at class creation time and stored in
+/// class info rather than as a writable class attribute.
+#[pyfunction]
+pub fn get_ators_abstract_methods<'py>(
+    cls: &Bound<'py, PyType>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = cls.py();
+    let info = get_class_info(cls)?;
+    Ok(PyFrozenSet::new(py, info.abstract_methods())?.into_any())
+}
+
 /// Return the tuple of init-participating member names for `cls`.
 #[pyfunction]
 pub fn get_ators_init_member_names<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
