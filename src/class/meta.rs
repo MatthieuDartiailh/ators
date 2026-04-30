@@ -359,7 +359,10 @@ pub fn create_ators_subclass<'py>(
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(&k)?;
             methods_by_name.insert(k.extract::<String>()?);
-        } else if let Ok(mb) = v.clone().cast_into::<MemberBuilder>() {
+        } else if v.is_exact_instance_of::<MemberBuilder>() {
+            let mb = v
+                .cast_into::<MemberBuilder>()
+                .expect("is_exact_instance_of::<MemberBuilder> guarantees this succeeds");
             let mb_id: usize = mb.as_ptr().addr();
             if unannotated_member_builder_ids.contains_key(&mb_id) {
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(

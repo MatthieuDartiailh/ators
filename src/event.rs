@@ -175,6 +175,14 @@ impl Event {
     }
 }
 
+// ─── Manual descriptor slot implementations ─────────────────────────────────
+//
+// PyO3's `#[pymethods]` macro does not yet generate `Py_tp_descr_get`,
+// `Py_tp_descr_set`, or `Py_tp_traverse` slots.  The code below mirrors the
+// hand-written slot wiring found in `member.rs` and is the same pattern used
+// for `Member`.  It must remain until pyo3 exposes descriptor-slot support
+// through the macro API.
+
 impl Event {
     #[inline]
     unsafe fn slot_self<'py>(

@@ -215,8 +215,6 @@ def test_event_notification_disabled_skips():
     a = A()
     observe(a, "clicked", lambda c: hits.append(c.newvalue))
 
-    from ators import disable_notifications
-
     disable_notifications(a)
     a.clicked = 5
     assert hits == []
