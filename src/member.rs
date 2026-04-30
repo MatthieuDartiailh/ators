@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{
+    class::base::{
         AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, notify_member_change,
         replace_slot, set_slot,
     },
@@ -156,6 +156,10 @@ impl Member {
 
     pub fn validator(&self) -> &Validator {
         &self.validator
+    }
+
+    pub fn has_default(&self) -> bool {
+        !matches!(self.default, DefaultBehavior::NoDefault {})
     }
 
     pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
@@ -447,7 +451,7 @@ impl Member {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
 
         // Only read the current slot value when pre_setattr actually uses it.
         // The frozen check is deferred to replace_slot to avoid an extra
@@ -498,7 +502,7 @@ impl Member {
         self_: PyRef<'py, Member>,
         object: Bound<'py, PyAny>,
     ) -> pyo3::PyResult<()> {
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
         self_.delattr.del(&self_, object)
     }
 

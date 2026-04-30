@@ -42,7 +42,7 @@ impl DefaultBehavior {
     pub(crate) fn default<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
-        object: &Bound<'py, crate::core::AtorsBase>,
+        object: &Bound<'py, crate::class::base::AtorsBase>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Self::NoDefault {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(

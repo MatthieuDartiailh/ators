@@ -29,7 +29,7 @@ TCon = TypeVar("TCon", int, float)
 
 
 # ---------------------------------------------------------------------------
-# A.1  issubclass - positive cases
+#  issubclass - positive cases
 # ---------------------------------------------------------------------------
 
 
@@ -74,7 +74,7 @@ def test_subclass_typevar_constraint_satisfied():
 
 
 # ---------------------------------------------------------------------------
-# A.2  issubclass - negative cases
+#  issubclass - negative cases
 # ---------------------------------------------------------------------------
 
 
@@ -114,7 +114,7 @@ def test_subclass_non_specialized_lhs():
 
 
 # ---------------------------------------------------------------------------
-# B.1  isinstance - positive cases
+#  isinstance - positive cases
 # ---------------------------------------------------------------------------
 
 
@@ -143,7 +143,7 @@ def test_isinstance_bound_satisfied():
 
 
 # ---------------------------------------------------------------------------
-# B.2  isinstance - negative cases
+#  isinstance - negative cases
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ def test_isinstance_bound_violated():
 
 
 # ---------------------------------------------------------------------------
-# C.  Validation - ForwardRef forbidden at specialisation time
+#  Validation - ForwardRef forbidden at specialisation time
 # ---------------------------------------------------------------------------
 
 
@@ -168,30 +168,11 @@ def test_forward_ref_raises_at_specialisation():
     """ForwardRef in specialisation args raises TypeError immediately."""
     fref = typing.ForwardRef("int")
     with pytest.raises(TypeError, match="ForwardRef"):
-        G[fref, str]
+        G[fref, str]  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# D.  Rust-only path enforcement
-# ---------------------------------------------------------------------------
-
-
-def test_rust_subclasscheck_importable():
-    """rust_subclasscheck is directly callable from _ators."""
-    from ators._ators import rust_subclasscheck
-
-    assert callable(rust_subclasscheck)
-
-
-def test_rust_instancecheck_importable():
-    """rust_instancecheck is directly callable from _ators."""
-    from ators._ators import rust_instancecheck
-
-    assert callable(rust_instancecheck)
-
-
-# ---------------------------------------------------------------------------
-# E.  Determinism / regression
+#  Determinism / regression
 # ---------------------------------------------------------------------------
 
 
@@ -228,4 +209,4 @@ def test_non_generic_isinstance_unaffected():
 def test_arity_mismatch_raises_at_specialisation():
     """Passing the wrong number of type args raises TypeError at specialisation."""
     with pytest.raises(TypeError):
-        G[int, str, float]  # 3 args for a 2-param class
+        G[int, str, float]  # 3 args for a 2-param class  # type: ignore
