@@ -13,7 +13,7 @@ use pyo3::{
 };
 use std::cell::UnsafeCell;
 
-use crate::class_info::{ClassMutability, get_class_info};
+use crate::class::info::{ClassMutability, get_class_info};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
 use crate::observers::{AtorsChange, ObserverPool};
@@ -67,7 +67,7 @@ unsafe impl Sync for AtorsBase {}
 #[cold]
 fn init_kwargs_error(
     kwargs: &Bound<'_, PyDict>,
-    class_info: &crate::class_info::AtorsClassInfo,
+    class_info: &crate::class::info::AtorsClassInfo,
 ) -> PyErr {
     let py = kwargs.py();
     let mut missing_required = Vec::new();
@@ -110,7 +110,7 @@ fn init_kwargs_error(
 #[cold]
 fn set_init_value_after_setattr_error<'py>(
     slf: &Bound<'py, AtorsBase>,
-    class_info: &crate::class_info::AtorsClassInfo,
+    class_info: &crate::class::info::AtorsClassInfo,
     key: &Bound<'py, PyString>,
     value: &Bound<'py, PyAny>,
     err: PyErr,

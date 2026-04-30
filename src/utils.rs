@@ -5,16 +5,49 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+use crate::class::base::AtorsBase;
 /// Utility functions and structures used across the codebase, not specific to any
 /// particular aspect of the library.
-use crate::class_info::get_class_info;
-use crate::core::AtorsBase;
+use crate::class::info::get_class_info;
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
+    sync::PyOnceLock,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
+
+// XXX  use module state to store those types
+static TYPING_ANY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static TYPING_TYPEVAR_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+#[inline]
+fn get_typing_any_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType> {
+    TYPING_ANY_TYPE
+        .import(py, "typing", "Any")
+        .expect("typing.Any should always be present in the typing module.")
+        .cast::<PyType>()
+        .expect("typing.Any is a type and should be a PyType.")
+}
+
+#[inline]
+fn get_typing_typevar_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType> {
+    TYPING_TYPEVAR_TYPE
+        .import(py, "typing", "TypeVar")
+        .expect("typing.TypeVar should always be present in the typing module.")
+        .cast::<PyType>()
+        .expect("typing.TypeVar is a type and should be a PyType.")
+}
+
+/// Return `true` when `param` is `typing.Any`.
+pub(crate) fn is_any_type(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(param.is(get_typing_any_type(param.py())))
+}
+
+/// Return `true` when `param` is `typing.TypeVar`.
+pub(crate) fn is_type_var(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    param.is_instance(get_typing_typevar_type(param.py()))
+}
 
 /// Helper function to set the cause of a PyErr and return it in one step.
 #[cold]
@@ -295,7 +328,7 @@ impl TypeMutabilityMap {
         if obj_type.is_subclass(&ators_base_type)? {
             // For Ators objects, check if frozen via the is_frozen pyfunction
             let ators_obj = obj.cast::<AtorsBase>()?;
-            if crate::core::is_frozen(ators_obj) {
+            if crate::class::base::is_frozen(ators_obj) {
                 Ok(Mutability::Immutable)
             } else {
                 Ok(Mutability::Mutable)

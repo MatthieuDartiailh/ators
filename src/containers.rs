@@ -16,7 +16,7 @@ use pyo3::{
 };
 use std::cell::UnsafeCell;
 
-use crate::{core::AtorsBase, utils::error_on_minusone, validators::Validator};
+use crate::{class::AtorsBase, utils::error_on_minusone, validators::Validator};
 
 #[pyclass(module = "ators._ators", extends=PyList, frozen)]
 pub struct AtorsList {

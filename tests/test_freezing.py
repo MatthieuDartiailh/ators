@@ -13,8 +13,6 @@ import pytest
 
 from ators import Ators, freeze, is_frozen, member
 
-# XXX add test for freezing classes containing forward refs
-
 
 @pytest.mark.parametrize(
     "frozen,should_work",

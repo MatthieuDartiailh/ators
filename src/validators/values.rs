@@ -77,7 +77,7 @@ impl ValueValidator {
     pub fn validate_value<'py>(
         &self,
         name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         match self {
