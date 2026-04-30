@@ -127,8 +127,9 @@ fn make_unknown_method_error<'py>(
 /// This handles plain functions/methods and also inspects the wrapped callable
 /// for `classmethod`, `staticmethod`, and `property` objects so that
 /// `@classmethod @abstractmethod`, `@staticmethod @abstractmethod`, and
-/// `@property @abstractmethod` (via `fget`/`fset`/`fdel` accessors) stacks
-/// are detected correctly.
+/// `@property @abstractmethod` stacks are detected correctly.  For `property`,
+/// if *any* of `fget`, `fset`, or `fdel` is marked abstract the property is
+/// considered abstract (matching CPython's `abc` module behaviour).
 fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
     let py = obj.py();
     let is_abstract_key = intern!(py, "__isabstractmethod__");
