@@ -80,6 +80,8 @@ class AtorsMeta(type):
         )
 
     def __call__(self, *args, **kwds):
+        # __abstractmethods__ is a frozenset; an empty frozenset is falsy so
+        # the walrus assignment only enters the branch when methods are unresolved.
         if abstract_methods := getattr(self, "__abstractmethods__", None):
             sorted_names = ", ".join(sorted(abstract_methods))
             raise TypeError(

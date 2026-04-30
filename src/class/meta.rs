@@ -126,7 +126,8 @@ fn make_unknown_method_error<'py>(
 ///
 /// This handles plain functions/methods and also inspects the wrapped callable
 /// for `classmethod`, `staticmethod`, and `property` objects so that
-/// `@classmethod @abstractmethod` and `@staticmethod @abstractmethod` stacks
+/// `@classmethod @abstractmethod`, `@staticmethod @abstractmethod`, and
+/// `@property @abstractmethod` (via `fget`/`fset`/`fdel` accessors) stacks
 /// are detected correctly.
 fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
     let py = obj.py();
@@ -392,15 +393,17 @@ pub fn create_ators_subclass<'py>(
     }
     members.extend(conflict_free_members);
 
-    // Collect member builder without type annotation
+    // Collect member builder without type annotation.
+    // Also classify each namespace entry as abstract or concrete in a single pass.
     let mut unannotated_member_builder_ids = HashMap::new();
-    // Collect abstract methods declared in the current class namespace
     let mut declared_abstract_methods: HashSet<String> = HashSet::new();
+    let mut concrete_names: HashSet<String> = HashSet::new();
     for (k, v) in dct.iter() {
-        // Detect abstract members: any entry with __isabstractmethod__ == True
         let k_str: String = k.extract()?;
         if is_abstract_member(&v) {
             declared_abstract_methods.insert(k_str.clone());
+        } else {
+            concrete_names.insert(k_str.clone());
         }
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(&k)?;
@@ -430,13 +433,8 @@ pub fn create_ators_subclass<'py>(
     // start from inherited set, remove names overridden concretely in this class,
     // then union with newly declared abstracts.
     let mut abstract_methods: HashSet<String> = inherited_abstract_methods;
-    // Any name defined in the current class namespace with a non-abstract value
-    // is considered a concrete implementation that satisfies an inherited requirement.
-    for (k, v) in dct.iter() {
-        let k_str: String = k.extract()?;
-        if !is_abstract_member(&v) {
-            abstract_methods.remove(&k_str);
-        }
+    for k_str in &concrete_names {
+        abstract_methods.remove(k_str);
     }
     abstract_methods.extend(declared_abstract_methods);
 
