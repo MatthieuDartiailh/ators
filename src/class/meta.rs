@@ -12,9 +12,9 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyResult, intern, pyfunction,
     sync::critical_section::with_critical_section,
     types::{
-        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFunction, PyListMethods, PyMapping,
-        PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType,
-        PyTypeMethods,
+        IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFunction, PyListMethods,
+        PyMapping, PyMappingMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods,
+        PyType, PyTypeMethods,
     },
 };
 
@@ -122,6 +122,56 @@ fn make_unknown_method_error<'py>(
     ))
 }
 
+/// Return `true` if `obj` is marked as abstract via `__isabstractmethod__ == True`.
+///
+/// This handles plain functions/methods and also inspects the wrapped callable
+/// for `classmethod`, `staticmethod`, and `property` objects so that
+/// `@classmethod @abstractmethod` and `@staticmethod @abstractmethod` stacks
+/// are detected correctly.
+fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
+    let py = obj.py();
+    let is_abstract_key = intern!(py, "__isabstractmethod__");
+    // Check the object itself first
+    if obj
+        .getattr(is_abstract_key)
+        .ok()
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // For classmethod/staticmethod, check the wrapped __func__
+    if let Ok(func) = obj.getattr(intern!(py, "__func__")) {
+        if func
+            .getattr(is_abstract_key)
+            .ok()
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    // For property, check fget/fset/fdel
+    for accessor in &[
+        intern!(py, "fget"),
+        intern!(py, "fset"),
+        intern!(py, "fdel"),
+    ] {
+        if let Ok(acc) = obj.getattr(accessor) {
+            if !acc.is_none()
+                && acc
+                    .getattr(is_abstract_key)
+                    .ok()
+                    .and_then(|v| v.extract::<bool>().ok())
+                    .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Create an Ators subclass from metaclass inputs.
 ///
 /// This computes member layout and inherited behaviors, enforces Ators class
@@ -216,6 +266,8 @@ pub fn create_ators_subclass<'py>(
     // Gather the name of the methods defined on the base classes.
     let methods = PySet::empty(py)?;
     let mut methods_by_name = HashSet::new();
+    // Collect inherited abstract methods from Ators bases
+    let mut inherited_abstract_methods: HashSet<String> = HashSet::new();
     for base in bases.iter() {
         if base.cast::<PyType>()?.is_subclass(&ators_base_ty)? {
             if !base.is(&ators_base_ty) {
@@ -223,6 +275,9 @@ pub fn create_ators_subclass<'py>(
                 for method_name in base_info.method_names() {
                     methods.add(method_name)?;
                     methods_by_name.insert(method_name.clone());
+                }
+                for abstract_name in base_info.abstract_methods() {
+                    inherited_abstract_methods.insert(abstract_name.clone());
                 }
             }
         } else {
@@ -236,6 +291,14 @@ pub fn create_ators_subclass<'py>(
                 if v.is_exact_instance_of::<PyFunction>() {
                     methods.add(&k)?;
                     methods_by_name.insert(k.extract::<String>()?);
+                }
+            }
+            // Collect abstract methods from non-Ators bases via __abstractmethods__
+            if let Ok(abs_set) = base.getattr(intern!(py, "__abstractmethods__")) {
+                if !abs_set.is_none() {
+                    for name in abs_set.try_iter()? {
+                        inherited_abstract_methods.insert(name?.extract::<String>()?);
+                    }
                 }
             }
         }
@@ -331,10 +394,17 @@ pub fn create_ators_subclass<'py>(
 
     // Collect member builder without type annotation
     let mut unannotated_member_builder_ids = HashMap::new();
+    // Collect abstract methods declared in the current class namespace
+    let mut declared_abstract_methods: HashSet<String> = HashSet::new();
     for (k, v) in dct.iter() {
+        // Detect abstract members: any entry with __isabstractmethod__ == True
+        let k_str: String = k.extract()?;
+        if is_abstract_member(&v) {
+            declared_abstract_methods.insert(k_str.clone());
+        }
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(&k)?;
-            methods_by_name.insert(k.extract::<String>()?);
+            methods_by_name.insert(k_str);
         } else if let Ok(mb) = v.cast_into::<MemberBuilder>() {
             let mb_id: usize = mb.as_ptr().addr();
             if unannotated_member_builder_ids.contains_key(&mb_id) {
@@ -346,16 +416,29 @@ pub fn create_ators_subclass<'py>(
                         .expect("Key is known to be in the map")
                 )));
             }
-            let name: String = k.extract()?;
-            unannotated_member_builder_ids.insert(mb_id, name.clone());
+            unannotated_member_builder_ids.insert(mb_id, k_str.clone());
             {
                 with_critical_section(mb.as_any(), || {
-                    mb.borrow_mut().name = Some(name.clone());
+                    mb.borrow_mut().name = Some(k_str.clone());
                 });
             }
-            member_builders.insert(name, mb.extract()?);
+            member_builders.insert(k_str, mb.extract()?);
         }
     }
+
+    // Compute the final set of unresolved abstract methods:
+    // start from inherited set, remove names overridden concretely in this class,
+    // then union with newly declared abstracts.
+    let mut abstract_methods: HashSet<String> = inherited_abstract_methods;
+    // Any name defined in the current class namespace with a non-abstract value
+    // is considered a concrete implementation that satisfies an inherited requirement.
+    for (k, v) in dct.iter() {
+        let k_str: String = k.extract()?;
+        if !is_abstract_member(&v) {
+            abstract_methods.remove(&k_str);
+        }
+    }
+    abstract_methods.extend(declared_abstract_methods);
 
     let mut specific_members = HashSet::new();
     for (k, mb) in member_builders.iter_mut() {
@@ -547,6 +630,7 @@ pub fn create_ators_subclass<'py>(
         optional_init_member_names,
         required_init_member_names,
         methods_by_name,
+        abstract_methods,
         None,
         Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
     )?;
@@ -670,6 +754,12 @@ pub fn create_ators_subclass<'py>(
         .with_members(py, updated_members_by_name)?
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
+
+    // Set __abstractmethods__ on the class so Python introspection works and
+    // ABCMeta-compatible tooling can detect abstract classes.
+    let abs_frozenset = PyFrozenSet::new(py, final_class_info.abstract_methods())?;
+    cls.setattr(intern!(py, "__abstractmethods__"), abs_frozenset)?;
+
     insert_definitive_class_info(py, &cls, final_class_info);
 
     Ok(cls.into_any())

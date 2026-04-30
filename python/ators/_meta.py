@@ -80,6 +80,12 @@ class AtorsMeta(type):
         )
 
     def __call__(self, *args, **kwds):
+        if abstract_methods := getattr(self, "__abstractmethods__", None):
+            sorted_names = ", ".join(sorted(abstract_methods))
+            raise TypeError(
+                f"Can't instantiate abstract class {self.__name__} "
+                f"with abstract method(s): {sorted_names}"
+            )
         return _maybe_freeze_instance_after_call(super().__call__(*args, **kwds))
 
     @property

@@ -201,6 +201,7 @@ pub(crate) struct AtorsClassInfo {
     optional_init_member_names: Vec<Py<PyString>>,
     required_init_member_names: Vec<Py<PyString>>,
     method_names: HashSet<String>,
+    abstract_methods: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
 }
@@ -218,6 +219,7 @@ impl AtorsClassInfo {
         optional_init_member_names: Vec<Py<PyString>>,
         required_init_member_names: Vec<Py<PyString>>,
         method_names: HashSet<String>,
+        abstract_methods: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
     ) -> PyResult<Self> {
@@ -235,6 +237,7 @@ impl AtorsClassInfo {
             optional_init_member_names,
             required_init_member_names,
             method_names,
+            abstract_methods,
             generic,
             customizer_tool,
         })
@@ -323,6 +326,10 @@ impl AtorsClassInfo {
 
     pub(crate) fn method_names(&self) -> &HashSet<String> {
         &self.method_names
+    }
+
+    pub(crate) fn abstract_methods(&self) -> &HashSet<String> {
+        &self.abstract_methods
     }
 
     pub(crate) fn generic(&self) -> Option<&AtorsGenericInfo> {
