@@ -57,11 +57,11 @@ struct InnerAtors {
 pub struct AtorsBase {
     inner: UnsafeCell<InnerAtors>,
     /// Whether the class this instance belongs to has unresolved abstract methods.
-    /// Set once at construction time and never mutated thereafter.
-    /// Always `false` for any live instance because `py_new` rejects abstract
-    /// classes before allocating; stored here so Rust helpers can query
-    /// abstractness from the instance without an additional class-info lookup.
-    pub(crate) has_abstract_methods: bool,
+    /// Set once at construction time and never mutated thereafter; it may
+    /// therefore be read without holding the critical section.
+    /// Cached from class info so that `maybe_freeze_instance_after_call` can
+    /// perform the abstract-class check without an extra class-info lookup.
+    has_abstract_methods: bool,
 }
 
 // Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
@@ -154,20 +154,10 @@ impl AtorsBase {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
 
-        // Reject instantiation of classes with unresolved abstract methods.
-        // This check is performed in Rust using the cached set in class info,
-        // so no additional Python attribute lookup is required.
-        let abstract_methods = class_info.abstract_methods();
-        if !abstract_methods.is_empty() {
-            let cls_name = cls.name()?.to_string();
-            let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
-            names.sort_unstable();
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Can't instantiate abstract class {} with abstract method(s): {}",
-                cls_name,
-                names.join(", ")
-            )));
-        }
+        // Cache the abstract-methods flag on the instance so that
+        // `maybe_freeze_instance_after_call` can reject abstract-class
+        // instantiation without an additional class-info lookup.
+        let has_abstract_methods = !class_info.abstract_methods().is_empty();
 
         let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
@@ -197,7 +187,7 @@ impl AtorsBase {
                 is_observable,
                 slots,
             }),
-            has_abstract_methods: false,
+            has_abstract_methods,
         })
     }
 
@@ -611,18 +601,36 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     }
 }
 
-/// Return the object after applying class-level post-construction freezing.
+/// Return the object after applying class-level post-construction freezing, and
+/// reject instantiation of abstract classes.
 ///
-/// If `obj` is an `AtorsBase` instance of a frozen class, this calls `freeze`
-/// before returning the original object.
+/// The abstract check uses the boolean cached on the instance at construction
+/// time, avoiding a class-info lookup on the hot (non-abstract) path.
+/// When the class is abstract the class info is consulted only to build the
+/// sorted method-name list for the error message.
 #[pyfunction]
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if let Ok(instance) = obj.cast::<AtorsBase>()
-        && get_class_info(&instance.get_type())?.frozen()
-    {
-        freeze(instance)?;
+    if let Ok(instance) = obj.cast::<AtorsBase>() {
+        // Fast path: read the bool cached on the instance; no class-info
+        // lookup required.
+        if instance.get().has_abstract_methods {
+            let cls = instance.get_type();
+            let cls_name = cls.name()?.to_string();
+            let class_info = get_class_info(&cls)?;
+            let abstract_methods = class_info.abstract_methods();
+            let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Can't instantiate abstract class {} with abstract method(s): {}",
+                cls_name,
+                names.join(", ")
+            )));
+        }
+        if get_class_info(&instance.get_type())?.frozen() {
+            freeze(instance)?;
+        }
     }
     Ok(obj)
 }

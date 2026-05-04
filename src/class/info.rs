@@ -362,9 +362,7 @@ pub fn get_ators_specific_member_names<'py>(
 /// on `AtorsMeta`; the set is computed at class creation time and stored in
 /// class info rather than as a writable class attribute.
 #[pyfunction]
-pub fn get_ators_abstract_methods<'py>(
-    cls: &Bound<'py, PyType>,
-) -> PyResult<Bound<'py, PyAny>> {
+pub fn get_ators_abstract_methods<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
     let py = cls.py();
     let info = get_class_info(cls)?;
     Ok(PyFrozenSet::new(py, info.abstract_methods())?.into_any())

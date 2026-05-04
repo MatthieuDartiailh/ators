@@ -160,11 +160,11 @@ fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
     ] {
         if let Ok(acc) = obj.getattr(accessor)
             && !acc.is_none()
-                && acc
-                    .getattr(is_abstract_key)
-                    .ok()
-                    .and_then(|v| v.extract::<bool>().ok())
-                    .unwrap_or(false)
+            && acc
+                .getattr(is_abstract_key)
+                .ok()
+                .and_then(|v| v.extract::<bool>().ok())
+                .unwrap_or(false)
         {
             return true;
         }
