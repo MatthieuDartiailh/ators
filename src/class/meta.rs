@@ -143,15 +143,14 @@ fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
         return true;
     }
     // For classmethod/staticmethod, check the wrapped __func__
-    if let Ok(func) = obj.getattr(intern!(py, "__func__")) {
-        if func
+    if let Ok(func) = obj.getattr(intern!(py, "__func__"))
+        && func
             .getattr(is_abstract_key)
             .ok()
             .and_then(|v| v.extract::<bool>().ok())
             .unwrap_or(false)
-        {
-            return true;
-        }
+    {
+        return true;
     }
     // For property, check fget/fset/fdel
     for accessor in &[
@@ -159,16 +158,15 @@ fn is_abstract_member(obj: &Bound<'_, PyAny>) -> bool {
         intern!(py, "fset"),
         intern!(py, "fdel"),
     ] {
-        if let Ok(acc) = obj.getattr(accessor) {
-            if !acc.is_none()
+        if let Ok(acc) = obj.getattr(accessor)
+            && !acc.is_none()
                 && acc
                     .getattr(is_abstract_key)
                     .ok()
                     .and_then(|v| v.extract::<bool>().ok())
                     .unwrap_or(false)
-            {
-                return true;
-            }
+        {
+            return true;
         }
     }
     false
@@ -296,11 +294,11 @@ pub fn create_ators_subclass<'py>(
                 }
             }
             // Collect abstract methods from non-Ators bases via __abstractmethods__
-            if let Ok(abs_set) = base.getattr(intern!(py, "__abstractmethods__")) {
-                if !abs_set.is_none() {
-                    for name in abs_set.try_iter()? {
-                        inherited_abstract_methods.insert(name?.extract::<String>()?);
-                    }
+            if let Ok(abs_set) = base.getattr(intern!(py, "__abstractmethods__"))
+                && !abs_set.is_none()
+            {
+                for name in abs_set.try_iter()? {
+                    inherited_abstract_methods.insert(name?.extract::<String>()?);
                 }
             }
         }
