@@ -56,19 +56,6 @@ struct InnerAtors {
 #[pyclass(module = "ators._ators", subclass, frozen)]
 pub struct AtorsBase {
     inner: UnsafeCell<InnerAtors>,
-    /// Whether the class this instance belongs to has unresolved abstract methods.
-    ///
-    /// Set once at construction time and never mutated thereafter; it is not
-    /// placed inside the `UnsafeCell` and so may be read safely without
-    /// acquiring the critical section.  (The `#[pyclass(frozen)]` attribute
-    /// prevents pyo3 from handing out `&mut AtorsBase`, so no external code
-    /// can modify this field after construction.)
-    ///
-    /// For live instances this is always `false` because `py_new` rejects
-    /// abstract classes before constructing the object.  The field is
-    /// nevertheless computed and stored so that `maybe_freeze_instance_after_call`
-    /// can verify the invariant without an extra class-info lookup.
-    has_abstract_methods: bool,
 }
 
 // Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
@@ -161,14 +148,6 @@ impl AtorsBase {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
 
-        // Cache the abstract-methods flag on the instance so that
-        // `maybe_freeze_instance_after_call` can perform the abstract-class
-        // check without an additional class-info lookup on the hot path.
-        // The flag is `false` for any concrete class and `true` for an abstract
-        // one; `maybe_freeze_instance_after_call` turns the `true` case into a
-        // `TypeError` before the instance is returned to caller code.
-        let has_abstract_methods = !class_info.abstract_methods().is_empty();
-
         let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
@@ -197,7 +176,6 @@ impl AtorsBase {
                 is_observable,
                 slots,
             }),
-            has_abstract_methods,
         })
     }
 
@@ -614,31 +592,18 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
 /// Return the object after applying class-level post-construction freezing, and
 /// enforce the abstract-class contract.
 ///
-/// Abstract-class enforcement uses the boolean cached on the `AtorsBase`
-/// instance at construction time (`has_abstract_methods`), so the hot path
-/// (non-abstract class) requires **no class-info lookup** for this check.
-/// `has_abstract_methods` is a plain struct field – not inside the
-/// `UnsafeCell` – and is written exactly once in `py_new` before the
-/// instance is visible to any other code; reading it here without a critical
-/// section is therefore safe.
-///
-/// This function is always called by `AtorsMeta.__call__` (the sole
-/// authoritative entry point for Ators class instantiation) immediately after
-/// `type.__call__` returns.  The abstract check is placed here rather than in
-/// `py_new` so that the check on the common (non-abstract) path is a single
-/// bool read from the instance, with no HashMap / lock overhead.
+/// Both checks use the class info store, consistent with how all other
+/// class-level flags (e.g. `frozen`) are handled in ators.
 #[pyfunction]
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     if let Ok(instance) = obj.cast::<AtorsBase>() {
-        // `has_abstract_methods` is set once in `py_new` and never mutated;
-        // reading it directly is safe – see the doc-comment above.
-        if instance.get().has_abstract_methods {
-            let cls = instance.get_type();
+        let cls = instance.get_type();
+        let class_info = get_class_info(&cls)?;
+        let abstract_methods = class_info.abstract_methods();
+        if !abstract_methods.is_empty() {
             let cls_name = cls.name()?.to_string();
-            let class_info = get_class_info(&cls)?;
-            let abstract_methods = class_info.abstract_methods();
             let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
             names.sort_unstable();
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -647,7 +612,7 @@ pub fn maybe_freeze_instance_after_call<'py>(
                 names.join(", ")
             )));
         }
-        if get_class_info(&instance.get_type())?.frozen() {
+        if class_info.frozen() {
             freeze(instance)?;
         }
     }
