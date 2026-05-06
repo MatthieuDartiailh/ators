@@ -592,8 +592,9 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
 /// Return the object after applying class-level post-construction freezing, and
 /// enforce the abstract-class contract.
 ///
-/// Both checks use the class info store, consistent with how all other
-/// class-level flags (e.g. `frozen`) are handled in ators.
+/// A single `get_class_info` call serves both checks, avoiding duplicate
+/// lookups and keeping the approach consistent with how all other class-level
+/// flags (e.g. `frozen`) are handled in ators.
 #[pyfunction]
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
