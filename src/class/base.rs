@@ -599,36 +599,26 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let instance = obj.cast::<AtorsBase>().map_err(|_| {
-        pyo3::exceptions::PyTypeError::new_err(
-            "AtorsMeta can only be used with subclasses of AtorsBase",
-        )
-    })?;
-    let cls = instance.get_type();
-    let class_info = get_class_info(&cls)?;
-    let abstract_methods = class_info.abstract_methods();
-    if !abstract_methods.is_empty() {
-        let cls_name = cls.name()?.to_string();
-        return Err(abstract_class_error(&cls_name, abstract_methods));
-    }
-    if class_info.frozen() {
-        freeze(instance)?;
+    if let Ok(instance) = obj.cast::<AtorsBase>() {
+        let cls = instance.get_type();
+        let class_info = get_class_info(&cls)?;
+        let abstract_methods = class_info.abstract_methods();
+        if !abstract_methods.is_empty() {
+            std::hint::cold_path();
+            let cls_name = cls.name()?.to_string();
+            let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Can't instantiate abstract class {} with abstract method(s): {}",
+                cls_name,
+                names.join(", ")
+            )));
+        }
+        if class_info.frozen() {
+            freeze(instance)?;
+        }
     }
     Ok(obj)
-}
-
-#[cold]
-fn abstract_class_error(
-    cls_name: &str,
-    abstract_methods: &std::collections::HashSet<String>,
-) -> PyErr {
-    let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
-    names.sort_unstable();
-    pyo3::exceptions::PyTypeError::new_err(format!(
-        "Can't instantiate abstract class {} with abstract method(s): {}",
-        cls_name,
-        names.join(", ")
-    ))
 }
 
 /// Return whether an Ators instance is currently frozen.
