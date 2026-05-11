@@ -288,7 +288,8 @@ pub fn create_ators_subclass<'py>(
     if frozen && has_events {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Class '{name}' is declared as frozen but defines or inherits events. \
-             Frozen objects cannot emit events because events require notifications to be enabled."
+             Frozen objects cannot emit events because events require notifications \
+             to be enabled."
         )));
     }
 

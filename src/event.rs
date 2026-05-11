@@ -7,14 +7,16 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators events and related utilities.
 use crate::{
-    class::base::{AtorsBase, instance_is_observable, is_frozen, notifications_enabled,
-                  notify_member_change},
+    class::base::{
+        AtorsBase, instance_is_observable, is_frozen, notifications_enabled, notify_member_change,
+    },
     validators::{TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, pyclass, pymethods,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyString, PyTuple,
+        PyType,
     },
 };
 use std::{clone::Clone, collections::HashMap};
@@ -164,7 +166,7 @@ impl Event {
     /// Enable `Event[T]` subscription syntax.
     #[classmethod]
     pub fn __class_getitem__<'py>(
-        cls: &Bound<'py, pyo3::types::PyType>,
+        cls: &Bound<'py, PyType>,
         item: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = cls.py();
