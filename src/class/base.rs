@@ -147,6 +147,7 @@ impl AtorsBase {
     ) -> PyResult<Self> {
         let py = cls.py();
         let class_info = get_class_info(cls)?;
+
         let slots_count = class_info.members_by_name_ref(py).len();
         // Determine observability at instantiation time by checking the class attribute.
         // The result is cached on the instance (is_observable field) and never mutated,
@@ -588,18 +589,34 @@ pub fn freeze<'py>(obj: &Bound<'py, AtorsBase>) -> PyResult<()> {
     }
 }
 
-/// Return the object after applying class-level post-construction freezing.
+/// Return the object after applying class-level post-construction freezing, and
+/// enforce the abstract-class contract.
 ///
-/// If `obj` is an `AtorsBase` instance of a frozen class, this calls `freeze`
-/// before returning the original object.
+/// A single `get_class_info` call serves both checks, avoiding duplicate
+/// lookups and keeping the approach consistent with how all other class-level
+/// flags (e.g. `frozen`) are handled in ators.
 #[pyfunction]
 pub fn maybe_freeze_instance_after_call<'py>(
     obj: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if let Ok(instance) = obj.cast::<AtorsBase>()
-        && get_class_info(&instance.get_type())?.frozen()
-    {
-        freeze(instance)?;
+    if let Ok(instance) = obj.cast::<AtorsBase>() {
+        let cls = instance.get_type();
+        let class_info = get_class_info(&cls)?;
+        let abstract_methods = class_info.abstract_methods();
+        if !abstract_methods.is_empty() {
+            std::hint::cold_path();
+            let cls_name = cls.name()?.to_string();
+            let mut names: Vec<&str> = abstract_methods.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Can't instantiate abstract class {} with abstract method(s): {}",
+                cls_name,
+                names.join(", ")
+            )));
+        }
+        if class_info.frozen() {
+            freeze(instance)?;
+        }
     }
     Ok(obj)
 }
