@@ -15,7 +15,7 @@ use pyo3::{
 };
 
 use crate::class::generic::wrap_ators_specialized_class;
-use crate::event::Event;
+use crate::event::{Event, EventCustomizationTool};
 use crate::member::{Member, MemberCustomizationTool};
 
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
@@ -204,6 +204,7 @@ pub(crate) struct AtorsClassInfo {
     method_names: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
+    event_customizer_tool: Option<Py<EventCustomizationTool>>,
     events_by_name: HashMap<String, Py<Event>>,
     specific_event_names: HashSet<String>,
 }
@@ -223,6 +224,7 @@ impl AtorsClassInfo {
         method_names: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
+        event_customizer_tool: Option<Py<EventCustomizationTool>>,
         events_by_name: HashMap<String, Py<Event>>,
         specific_event_names: HashSet<String>,
     ) -> PyResult<Self> {
@@ -242,6 +244,7 @@ impl AtorsClassInfo {
             method_names,
             generic,
             customizer_tool,
+            event_customizer_tool,
             events_by_name,
             specific_event_names,
         })
@@ -278,6 +281,16 @@ impl AtorsClassInfo {
         self.customizer_tool
             .take()
             .expect("Member customizer should be set at this point")
+    }
+
+    pub(crate) fn event_customizer(&self) -> Option<&Py<EventCustomizationTool>> {
+        self.event_customizer_tool.as_ref()
+    }
+
+    pub(crate) fn take_event_customizer(&mut self) -> Py<EventCustomizationTool> {
+        self.event_customizer_tool
+            .take()
+            .expect("Event customizer should be set at this point")
     }
 
     pub(crate) fn frozen(&self) -> bool {

@@ -12,7 +12,8 @@ pub mod info;
 pub mod meta;
 
 pub use self::base::{
-    AtorsBase, disable_notifications, enable_notifications, freeze, get_event, get_events,
+    AtorsBase, disable_notifications, enable_notifications, freeze, get_event,
+    get_event_customization_tool, get_events, get_events_by_tag, get_events_by_tag_and_value,
     get_member, get_member_customization_tool, get_members, get_members_by_tag,
     get_members_by_tag_and_value, is_frozen, is_notifications_enabled,
     maybe_freeze_instance_after_call, observe, unobserve,

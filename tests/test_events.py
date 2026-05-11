@@ -13,9 +13,15 @@ from ators import (
     Ators,
     AtorsChange,
     Event,
+    EventCustomizationTool,
+    disable_notifications,
+    enable_notifications,
     event,
     get_event,
+    get_event_customization_tool,
     get_events,
+    get_events_by_tag,
+    get_events_by_tag_and_value,
     observe,
     unobserve,
 )
@@ -107,6 +113,27 @@ def test_event_builder_with_inherit_no_annotation_allowed():
         clicked = event().inherit()
 
     assert isinstance(Child.clicked, Event)
+
+
+def test_event_forces_observable():
+    """Declaring an event on a non-observable class makes it observable automatically."""
+
+    class A(Ators):  # no observable=True
+        clicked: Event[int]
+
+    a = A()
+    hits = []
+    observe(a, "clicked", lambda c: hits.append(c.newvalue))
+    a.clicked = 42
+    assert hits == [42]
+
+
+def test_event_frozen_class_raises_at_creation():
+    """frozen=True with events is rejected at class creation time."""
+    with pytest.raises(TypeError, match="frozen"):
+
+        class A(Ators, observable=True, frozen=True):
+            clicked: Event[int]
 
 
 # ---------------------------------------------------------------------------
@@ -203,23 +230,21 @@ def test_event_oldvalue_is_none():
     assert changes[0].newvalue == 7
 
 
-def test_event_notification_disabled_skips():
-    """When notifications are disabled, events do not call observers."""
-    from ators import disable_notifications, enable_notifications
-
-    hits = []
+def test_event_notification_disabled_raises():
+    """When notifications are disabled, setting an event raises TypeError."""
 
     class A(Ators, observable=True):
         clicked: Event[int]
 
     a = A()
-    observe(a, "clicked", lambda c: hits.append(c.newvalue))
-
     disable_notifications(a)
-    a.clicked = 5
-    assert hits == []
+    with pytest.raises(TypeError, match="notifications are not enabled"):
+        a.clicked = 5
 
+    # Re-enabling allows events again.
     enable_notifications(a)
+    hits = []
+    observe(a, "clicked", lambda c: hits.append(c.newvalue))
     a.clicked = 5
     assert hits == [5]
 
@@ -345,6 +370,30 @@ def test_get_events_includes_inherited():
     assert "child_event" in events
 
 
+def test_get_events_by_tag():
+    """get_events_by_tag returns events with the specified metadata tag."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(ui="button")
+        e2: Event[str] = event().tag(ui="label")
+        e3: Event[float]  # no metadata
+
+    result = get_events_by_tag(A, "ui")
+    assert set(result.keys()) == {"e1", "e2"}
+    assert "e3" not in result
+
+
+def test_get_events_by_tag_and_value():
+    """get_events_by_tag_and_value filters by exact metadata value."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(ui="button")
+        e2: Event[str] = event().tag(ui="label")
+
+    result = get_events_by_tag_and_value(A, "ui", "button")
+    assert set(result.keys()) == {"e1"}
+
+
 # ---------------------------------------------------------------------------
 # 5. Observe / unobserve with events
 # ---------------------------------------------------------------------------
@@ -382,36 +431,82 @@ def test_unobserve_event_stops_notifications():
 
 
 # ---------------------------------------------------------------------------
-# 6. Frozen class behavior
+# 6. Freeze with events is rejected
 # ---------------------------------------------------------------------------
 
 
-def test_event_set_on_frozen_raises():
-    """Assigning to an event on a frozen class raises TypeError."""
+def test_event_frozen_class_creation_raises():
+    """frozen=True + events raises at class creation time."""
+    with pytest.raises(TypeError, match="frozen"):
+
+        class A(Ators, observable=True, frozen=True):
+            clicked: Event[int]
+
+
+def test_freeze_instance_with_events_raises():
+    """Explicitly calling freeze() on an instance of a class with events raises."""
     from ators import freeze
 
-    class A(Ators, observable=True, frozen=True):
+    class A(Ators, observable=True):
         clicked: Event[int]
 
     a = A()
-    with pytest.raises(TypeError, match="frozen"):
-        a.clicked = 1
+    with pytest.raises(TypeError, match="events"):
+        freeze(a)
 
 
 # ---------------------------------------------------------------------------
-# 7. Non-observable class still allows event declaration
+# 7. EventCustomizationTool
 # ---------------------------------------------------------------------------
 
 
-def test_event_declaration_non_observable():
-    """Events can be declared on non-observable classes; set succeeds silently."""
+def test_event_customization_tool_available_in_init_subclass():
+    """get_event_customization_tool returns an EventCustomizationTool inside __init_subclass__."""
+    tool_ref = []
 
-    class A(Ators):
+    class Base(Ators, observable=True):
         clicked: Event[int]
 
-    a = A()
-    # No notification, but should not raise on set.
-    a.clicked = 42
-    # Read is still write-only.
-    with pytest.raises(AttributeError, match="write-only"):
-        _ = a.clicked
+        @classmethod
+        def __init_subclass__(cls, **kwargs):
+            super().__init_subclass__(**kwargs)
+            tool = get_event_customization_tool(cls)
+            tool_ref.append(isinstance(tool, EventCustomizationTool))
+
+    class Child(Base):
+        pass
+
+    assert tool_ref and tool_ref[-1] is True
+
+
+def test_event_customization_tool_customize_event():
+    """EventCustomizationTool can customize an event's metadata via __getitem__."""
+    customized = []
+
+    class Base(Ators, observable=True):
+        clicked: Event[int]
+
+        @classmethod
+        def __init_subclass__(cls, **kwargs):
+            super().__init_subclass__(**kwargs)
+            tool = get_event_customization_tool(cls)
+            builder = tool["clicked"]
+            builder.tag(source="customized")
+            customized.append(cls)
+
+    class Child(Base):
+        pass
+
+    ev = get_event(Child, "clicked")
+    assert ev.metadata is not None and ev.metadata.get("source") == "customized"
+
+
+def test_get_event_customization_tool_outside_init_subclass_raises():
+    """get_event_customization_tool raises RuntimeError outside __init_subclass__."""
+
+    class A(Ators, observable=True):
+        clicked: Event[int]
+
+    with pytest.raises(RuntimeError, match="__init_subclass__"):
+        get_event_customization_tool(A)
+

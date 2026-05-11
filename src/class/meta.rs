@@ -19,9 +19,7 @@ use pyo3::{
 };
 
 use crate::{
-    annotations::{
-        generate_event_builders_from_cls_namespace, generate_member_builders_from_cls_namespace,
-    },
+    annotations::generate_member_builders_from_cls_namespace,
     class::base::AtorsBase,
     class::generic::get_generic_params_obj,
     class::info::{
@@ -29,7 +27,7 @@ use crate::{
         insert_definitive_class_info, insert_temp_class_info, pop_temp_class_info,
         take_pending_specialization_bindings_for_inputs,
     },
-    event::{Event, EventBuilder},
+    event::{Event, EventBuilder, EventCustomizationTool},
     member::PreGetattrBehavior,
     member::{
         DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
@@ -196,16 +194,8 @@ pub fn create_ators_subclass<'py>(
     let typevar_bindings = take_pending_specialization_bindings_for_inputs(py, &name, &dct)?;
     let typevar_bindings_ref = typevar_bindings.as_ref().map(|tb| tb.bind(py));
 
-    let mut member_builders = generate_member_builders_from_cls_namespace(
-        &name,
-        &dct,
-        type_containers,
-        typevar_bindings_ref,
-        validate_attr,
-    )?;
-
-    // Process Event[T] annotations to build event builders.
-    let mut event_builders = generate_event_builders_from_cls_namespace(
+    // Single annotation pass: returns both member builders and event builders.
+    let (mut member_builders, mut event_builders) = generate_member_builders_from_cls_namespace(
         &name,
         &dct,
         type_containers,
@@ -288,6 +278,18 @@ pub fn create_ators_subclass<'py>(
                     .map(|(k, v)| (k.clone(), v.bind(py).clone())),
             );
         }
+    }
+
+    // Events require observable infrastructure.
+    // If this class declares any events (new or inherited), force is_observable.
+    // Frozen classes with events are rejected since events can never fire on frozen instances.
+    let has_events = !event_builders.is_empty() || !base_events.is_empty();
+    let is_observable = is_observable || has_events;
+    if frozen && has_events {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Class '{name}' is declared as frozen but defines or inherits events. \
+             Frozen objects cannot emit events because events require notifications to be enabled."
+        )));
     }
 
     // If this class explicitly overrides `pickle_policy`, re-evaluate inherited
@@ -637,6 +639,10 @@ pub fn create_ators_subclass<'py>(
         methods_by_name,
         None,
         Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
+        Some(Py::new(
+            py,
+            EventCustomizationTool::new(all_events.keys().cloned()),
+        )?),
         all_events,
         specific_events,
     )?;
@@ -675,6 +681,19 @@ pub fn create_ators_subclass<'py>(
         cls.setattr(&mname, Bound::clone(&new_member))?;
         all_members.set_item(&mname, Bound::clone(&new_member))?;
         updated_members_by_name.insert(mname.clone(), new_member.clone().unbind());
+    }
+    drop(tool); // release borrow before mutable access to class_info
+
+    // Retrieve and clear the event customization tool and rebuild any customized events.
+    let mut event_tool = class_info.take_event_customizer().bind(py).borrow_mut();
+    for (ename, mut eb) in event_tool.get_builders(py) {
+        // Inherit from the existing event descriptor.
+        let existing_event = cls.getattr(&ename)?.cast_into::<Event>()?;
+        let ee = existing_event.get();
+        eb.name = Some(ee.name.clone());
+        eb.get_inherited_behavior_from_event(ee);
+        let new_event = Bound::new(py, eb.build(&name)?)?;
+        cls.setattr(&ename, Bound::clone(&new_event))?;
     }
 
     // Determine class mutability based on member type validators

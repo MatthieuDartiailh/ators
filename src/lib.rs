@@ -58,14 +58,15 @@ mod _ators {
         create_ators_specialized_subclass, create_ators_subclass, disable_notifications,
         drop_class_info, enable_notifications, freeze, get_ators_args, get_ators_frozen_flag,
         get_ators_init_member_names, get_ators_members_by_name, get_ators_origin,
-        get_ators_specific_member_names, get_ators_type_params, get_event, get_events, get_member,
-        get_member_customization_tool, get_members, get_members_by_tag,
+        get_ators_specific_member_names, get_ators_type_params, get_event,
+        get_event_customization_tool, get_events, get_events_by_tag, get_events_by_tag_and_value,
+        get_member, get_member_customization_tool, get_members, get_members_by_tag,
         get_members_by_tag_and_value, get_tracked_class_info_size, is_frozen,
         is_notifications_enabled, maybe_freeze_instance_after_call, observe, unobserve,
     };
 
     #[pymodule_export]
-    use self::event::{Event, EventBuilder};
+    use self::event::{Event, EventBuilder, EventCustomizationTool};
 
     #[pymodule_export]
     use self::member::{
