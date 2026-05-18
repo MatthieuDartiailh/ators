@@ -5,7 +5,7 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-use pyo3::{Bound, Py, Python};
+use pyo3::{Bound, Py};
 use std::cell::UnsafeCell;
 
 use crate::class::AtorsBase;

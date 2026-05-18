@@ -6,25 +6,25 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 use pyo3::{
-	Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pymethods,
-	sync::critical_section::with_critical_section,
-	types::{PyAnyMethods, PyDict, PyDictMethods},
+    Bound, IntoPyObjectExt, Py, PyAny, PyResult, Python, intern, pyclass, pymethods,
+    sync::critical_section::with_critical_section,
+    types::{PyAnyMethods, PyDict, PyDictMethods},
 };
 use std::cell::UnsafeCell;
 
 use crate::{
-	class::AtorsBase,
-	containers::{common::matches_assignment_context, AtorsList, AtorsSet},
-	validators::Validator,
+    class::AtorsBase,
+    containers::{AtorsList, AtorsSet, common::matches_assignment_context},
+    validators::Validator,
 };
 
 #[pyclass(module = "ators._ators", extends=PyDict, frozen)]
 pub struct AtorsDict {
-	key_validator: UnsafeCell<Validator>,
-	value_validator: UnsafeCell<Validator>,
-	member_name: UnsafeCell<Option<String>>,
-	// Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
-	object: UnsafeCell<Option<Py<AtorsBase>>>,
+    key_validator: UnsafeCell<Validator>,
+    value_validator: UnsafeCell<Validator>,
+    member_name: UnsafeCell<Option<String>>,
+    // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
+    object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
 
 // Safety: key_validator, value_validator, and member_name are written only once (at construction
@@ -35,389 +35,389 @@ pub struct AtorsDict {
 unsafe impl Sync for AtorsDict {}
 
 impl AtorsDict {
-	pub(crate) fn new_empty<'py>(
-		py: Python<'py>,
-		key_validator: Validator,
-		value_validator: Validator,
-		member_name: Option<&str>,
-		object: Option<Py<AtorsBase>>,
-	) -> PyResult<Bound<'py, AtorsDict>> {
-		Bound::new(
-			py,
-			AtorsDict {
-				key_validator: UnsafeCell::new(key_validator),
-				value_validator: UnsafeCell::new(value_validator),
-				member_name: UnsafeCell::new(member_name.map(|m| m.to_string())),
-				object: UnsafeCell::new(object),
-			},
-		)
-	}
+    pub(crate) fn new_empty<'py>(
+        py: Python<'py>,
+        key_validator: Validator,
+        value_validator: Validator,
+        member_name: Option<&str>,
+        object: Option<Py<AtorsBase>>,
+    ) -> PyResult<Bound<'py, AtorsDict>> {
+        Bound::new(
+            py,
+            AtorsDict {
+                key_validator: UnsafeCell::new(key_validator),
+                value_validator: UnsafeCell::new(value_validator),
+                member_name: UnsafeCell::new(member_name.map(|m| m.to_string())),
+                object: UnsafeCell::new(object),
+            },
+        )
+    }
 
-	/// Validate a key using the key_validator
-	fn validate_key<'py>(
-		&self,
-		py: Python<'py>,
-		key: &Bound<'py, PyAny>,
-	) -> PyResult<Bound<'py, PyAny>> {
-		// Safety: same as AtorsList::validate_item.
-		let key_validator = unsafe { &*self.key_validator.get() };
-		let m = unsafe { &*self.member_name.get() }.as_deref();
-		let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-		key_validator.validate(m, o, key)
-	}
+    /// Validate a key using the key_validator
+    fn validate_key<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Safety: same as AtorsList::validate_item.
+        let key_validator = unsafe { &*self.key_validator.get() };
+        let m = unsafe { &*self.member_name.get() }.as_deref();
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        key_validator.validate(m, o, key)
+    }
 
-	/// Validate a value for insertion into the dict
-	fn validate_value<'py>(
-		&self,
-		py: Python<'py>,
-		value: &Bound<'py, PyAny>,
-	) -> PyResult<Bound<'py, PyAny>> {
-		// Safety: same as AtorsList::validate_item.
-		let value_validator = unsafe { &*self.value_validator.get() };
-		let m = unsafe { &*self.member_name.get() }.as_deref();
-		let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-		value_validator.validate(m, o, value)
-	}
+    /// Validate a value for insertion into the dict
+    fn validate_value<'py>(
+        &self,
+        py: Python<'py>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Safety: same as AtorsList::validate_item.
+        let value_validator = unsafe { &*self.value_validator.get() };
+        let m = unsafe { &*self.member_name.get() }.as_deref();
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        value_validator.validate(m, o, value)
+    }
 
-	/// Validate both key and value for insertion into the dict
-	fn validate_item<'py>(
-		&self,
-		py: Python<'py>,
-		key: &Bound<'py, PyAny>,
-		value: &Bound<'py, PyAny>,
-	) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
-		// Safety: same as AtorsList::validate_item.
-		let key_validator = unsafe { &*self.key_validator.get() };
-		let value_validator = unsafe { &*self.value_validator.get() };
-		let m = unsafe { &*self.member_name.get() }.as_deref();
-		let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
-		let valid_key = key_validator.validate(m, o, key)?;
-		let valid_value = value_validator.validate(m, o, value)?;
-		Ok((valid_key, valid_value))
-	}
+    /// Validate both key and value for insertion into the dict
+    fn validate_item<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+        // Safety: same as AtorsList::validate_item.
+        let key_validator = unsafe { &*self.key_validator.get() };
+        let value_validator = unsafe { &*self.value_validator.get() };
+        let m = unsafe { &*self.member_name.get() }.as_deref();
+        let o = unsafe { &*self.object.get() }.as_ref().map(|o| o.bind(py));
+        let valid_key = key_validator.validate(m, o, key)?;
+        let valid_value = value_validator.validate(m, o, value)?;
+        Ok((valid_key, valid_value))
+    }
 
-	pub(crate) fn matches_assignment_context<'py>(
-		&self,
-		member_name: Option<&str>,
-		object: Option<&Bound<'py, AtorsBase>>,
-	) -> bool {
-		matches_assignment_context(&self.member_name, &self.object, member_name, object)
-	}
+    pub(crate) fn matches_assignment_context<'py>(
+        &self,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) -> bool {
+        matches_assignment_context(&self.member_name, &self.object, member_name, object)
+    }
 
-	pub(crate) fn clone_for_assignment<'py>(
-		source: &Bound<'py, AtorsDict>,
-	) -> PyResult<Bound<'py, AtorsDict>> {
-		let dict = source.get();
-		// Safety: same as AtorsList::clone_for_assignment.
-		let key_validator = unsafe { &*dict.key_validator.get() }.clone();
-		let value_validator = unsafe { &*dict.value_validator.get() }.clone();
-		let member_name = unsafe { &*dict.member_name.get() }
-			.as_deref()
-			.map(|s| s.to_string());
-		let object = unsafe { &*dict.object.get() }
-			.as_ref()
-			.map(|object| object.clone_ref(source.py()));
-		let adict = AtorsDict::new_empty(
-			source.py(),
-			key_validator,
-			value_validator,
-			member_name.as_deref(),
-			object,
-		)?;
-		// Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
-		let py_dict = unsafe { source.cast_unchecked::<PyDict>() };
-		let adict_as_dict = adict.cast::<PyDict>()?;
-		for (k, v) in py_dict.iter() {
-			adict_as_dict.set_item(&k, &v)?;
-		}
-		Ok(adict)
-	}
+    pub(crate) fn clone_for_assignment<'py>(
+        source: &Bound<'py, AtorsDict>,
+    ) -> PyResult<Bound<'py, AtorsDict>> {
+        let dict = source.get();
+        // Safety: same as AtorsList::clone_for_assignment.
+        let key_validator = unsafe { &*dict.key_validator.get() }.clone();
+        let value_validator = unsafe { &*dict.value_validator.get() }.clone();
+        let member_name = unsafe { &*dict.member_name.get() }
+            .as_deref()
+            .map(|s| s.to_string());
+        let object = unsafe { &*dict.object.get() }
+            .as_ref()
+            .map(|object| object.clone_ref(source.py()));
+        let adict = AtorsDict::new_empty(
+            source.py(),
+            key_validator,
+            value_validator,
+            member_name.as_deref(),
+            object,
+        )?;
+        // Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+        let py_dict = unsafe { source.cast_unchecked::<PyDict>() };
+        let adict_as_dict = adict.cast::<PyDict>()?;
+        for (k, v) in py_dict.iter() {
+            adict_as_dict.set_item(&k, &v)?;
+        }
+        Ok(adict)
+    }
 
-	/// Restore Ators-specific metadata after unpickling.
-	/// Called by `AtorsBase.__setstate__` before writing the container to a slot.
-	pub(crate) fn restore<'py>(
-		adict: &Bound<'py, AtorsDict>,
-		key_validator: Validator,
-		value_validator: Validator,
-		member_name: Option<&str>,
-		object: Option<&Bound<'py, AtorsBase>>,
-	) {
-		use crate::validators::types::TypeValidator;
+    /// Restore Ators-specific metadata after unpickling.
+    /// Called by `AtorsBase.__setstate__` before writing the container to a slot.
+    pub(crate) fn restore<'py>(
+        adict: &Bound<'py, AtorsDict>,
+        key_validator: Validator,
+        value_validator: Validator,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) {
+        use crate::validators::types::TypeValidator;
 
-		// Capture the value validator type before the critical section for nested restore.
-		let value_v = value_validator.clone();
+        // Capture the value validator type before the critical section for nested restore.
+        let value_v = value_validator.clone();
 
-		with_critical_section(adict.as_any(), || {
-			// SAFETY: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
-			let pydict = unsafe { adict.cast_unchecked::<PyDict>() };
-			match &value_validator.type_validator {
-				TypeValidator::List { item: Some(item_v) } => {
-					for (_, v) in pydict.iter() {
-						AtorsList::restore(
-							unsafe { v.cast_unchecked::<AtorsList>() },
-							(*item_v.0).clone(),
-							member_name,
-							object,
-						)
-					}
-				}
-				TypeValidator::Set { item: Some(item_v) } => {
-					for (_, v) in pydict.iter() {
-						AtorsSet::restore(
-							unsafe { v.cast_unchecked::<AtorsSet>() },
-							(*item_v.0).clone(),
-							member_name,
-							object,
-						)
-					}
-				}
-				TypeValidator::Dict {
-					items: Some((key_v, val_v)),
-				} => {
-					for (_, v) in pydict.iter() {
-						AtorsDict::restore(
-							unsafe { v.cast_unchecked::<AtorsDict>() },
-							(*key_v.0).clone(),
-							(*val_v.0).clone(),
-							member_name,
-							object,
-						)
-					}
-				}
-				_ => {}
-			}
-			let inner = adict.get();
-			// Safety: we hold the critical section lock. These fields are only written
-			// here (during restore) and during construction; after restore they are
-			// effectively immutable, matching the normal post-construction invariant.
-			unsafe {
-				(*inner.key_validator.get()) = key_validator;
-				(*inner.value_validator.get()) = value_validator;
-				(*inner.member_name.get()) = member_name.map(|s| s.to_string());
-				(*inner.object.get()) = object.map(|o| o.clone().unbind());
-			}
-		});
+        with_critical_section(adict.as_any(), || {
+            // SAFETY: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+            let pydict = unsafe { adict.cast_unchecked::<PyDict>() };
+            match &value_validator.type_validator {
+                TypeValidator::List { item: Some(item_v) } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsList::restore(
+                            unsafe { v.cast_unchecked::<AtorsList>() },
+                            (*item_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                TypeValidator::Set { item: Some(item_v) } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsSet::restore(
+                            unsafe { v.cast_unchecked::<AtorsSet>() },
+                            (*item_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                TypeValidator::Dict {
+                    items: Some((key_v, val_v)),
+                } => {
+                    for (_, v) in pydict.iter() {
+                        AtorsDict::restore(
+                            unsafe { v.cast_unchecked::<AtorsDict>() },
+                            (*key_v.0).clone(),
+                            (*val_v.0).clone(),
+                            member_name,
+                            object,
+                        )
+                    }
+                }
+                _ => {}
+            }
+            let inner = adict.get();
+            // Safety: we hold the critical section lock. These fields are only written
+            // here (during restore) and during construction; after restore they are
+            // effectively immutable, matching the normal post-construction invariant.
+            unsafe {
+                (*inner.key_validator.get()) = key_validator;
+                (*inner.value_validator.get()) = value_validator;
+                (*inner.member_name.get()) = member_name.map(|s| s.to_string());
+                (*inner.object.get()) = object.map(|o| o.clone().unbind());
+            }
+        });
 
-		// Restore any nested containers in the dict values.
-		// Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
-		let py_dict = unsafe { adict.cast_unchecked::<PyDict>() };
-		match &value_v.type_validator {
-			TypeValidator::List {
-				item: Some(item_bv),
-			} => {
-				for (_, v) in py_dict.iter() {
-					if let Ok(nested) = v.cast::<AtorsList>() {
-						AtorsList::restore(nested, (*item_bv.0).clone(), member_name, object);
-					}
-				}
-			}
-			TypeValidator::Set {
-				item: Some(item_bv),
-			} => {
-				for (_, v) in py_dict.iter() {
-					if let Ok(nested) = v.cast::<AtorsSet>() {
-						AtorsSet::restore(nested, (*item_bv.0).clone(), member_name, object);
-					}
-				}
-			}
-			TypeValidator::Dict {
-				items: Some((key_bv, val_bv)),
-			} => {
-				for (_, v) in py_dict.iter() {
-					if let Ok(nested) = v.cast::<AtorsDict>() {
-						AtorsDict::restore(
-							nested,
-							(*key_bv.0).clone(),
-							(*val_bv.0).clone(),
-							member_name,
-							object,
-						);
-					}
-				}
-			}
-			_ => {}
-		}
-	}
+        // Restore any nested containers in the dict values.
+        // Safety: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
+        let py_dict = unsafe { adict.cast_unchecked::<PyDict>() };
+        match &value_v.type_validator {
+            TypeValidator::List {
+                item: Some(item_bv),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsList>() {
+                        AtorsList::restore(nested, (*item_bv.0).clone(), member_name, object);
+                    }
+                }
+            }
+            TypeValidator::Set {
+                item: Some(item_bv),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsSet>() {
+                        AtorsSet::restore(nested, (*item_bv.0).clone(), member_name, object);
+                    }
+                }
+            }
+            TypeValidator::Dict {
+                items: Some((key_bv, val_bv)),
+            } => {
+                for (_, v) in py_dict.iter() {
+                    if let Ok(nested) = v.cast::<AtorsDict>() {
+                        AtorsDict::restore(
+                            nested,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            member_name,
+                            object,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[pymethods]
 impl AtorsDict {
-	pub fn __setitem__<'py>(
-		self_: &Bound<'py, AtorsDict>,
-		key: &Bound<'py, PyAny>,
-		value: &Bound<'py, PyAny>,
-	) -> PyResult<()> {
-		let py = key.py();
-		let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
-		let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
-		ndict.set_item(valid_key, valid_value)
-	}
+    pub fn __setitem__<'py>(
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let py = key.py();
+        let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+        ndict.set_item(valid_key, valid_value)
+    }
 
-	// Required because the Python C API defines a single slot used for both
-	// __delitem__ and __setitem__
-	pub fn __delitem__<'py>(
-		self_: &Bound<'py, AtorsDict>,
-		key: &Bound<'py, PyAny>,
-	) -> PyResult<()> {
-		let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
-		ndict.del_item(key)
-	}
+    // Required because the Python C API defines a single slot used for both
+    // __delitem__ and __setitem__
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+        ndict.del_item(key)
+    }
 
-	#[pyo3(signature = (other=None, **kwargs))]
-	/// Update the dict from mappings/iterables/kwargs after validating all entries.
-	///
-	/// Validation is performed eagerly into a temporary dict to avoid partial
-	/// updates when one item fails validation.
-	pub fn update<'py>(
-		self_: &Bound<'py, AtorsDict>,
-		other: Option<&Bound<'py, PyAny>>,
-		kwargs: Option<&Bound<'_, PyDict>>,
-	) -> PyResult<()> {
-		let py = self_.py();
-		let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+    #[pyo3(signature = (other=None, **kwargs))]
+    /// Update the dict from mappings/iterables/kwargs after validating all entries.
+    ///
+    /// Validation is performed eagerly into a temporary dict to avoid partial
+    /// updates when one item fails validation.
+    pub fn update<'py>(
+        self_: &Bound<'py, AtorsDict>,
+        other: Option<&Bound<'py, PyAny>>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let py = self_.py();
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
 
-		// Ensure we do not do a partial update if invalid values are met
-		// halfway through the update, by first validating all items and only
-		// then applying the update to the dict.
-		let valid = PyDict::new(py);
-		if let Some(o) = other {
-			// Shortcut for dicts for which we can safely iterate over
-			if let Ok(od) = o.cast::<PyDict>() {
-				for (k, v) in od.iter() {
-					let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
-					valid.set_item(valid_key, valid_value)?;
-				}
-			}
-			// Handle object providing keys() method
-			else if o.hasattr(intern!(self_.py(), "keys"))? {
-				let keys = o.call_method0(intern!(self_.py(), "keys"))?;
-				for key in keys.try_iter()? {
-					let k = key?;
-					let v = o
-						.getattr(intern!(self_.py(), "__getitem__"))?
-						.call1((&k,))?;
-					let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
-					valid.set_item(valid_key, valid_value)?;
-				}
-			}
-			// Handle iterable of key-value pairs
-			else {
-				for t in o.try_iter()? {
-					let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-					let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
-					valid.set_item(valid_key, valid_value)?;
-				}
-			}
-		}
+        // Ensure we do not do a partial update if invalid values are met
+        // halfway through the update, by first validating all items and only
+        // then applying the update to the dict.
+        let valid = PyDict::new(py);
+        if let Some(o) = other {
+            // Shortcut for dicts for which we can safely iterate over
+            if let Ok(od) = o.cast::<PyDict>() {
+                for (k, v) in od.iter() {
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
+                    valid.set_item(valid_key, valid_value)?;
+                }
+            }
+            // Handle object providing keys() method
+            else if o.hasattr(intern!(self_.py(), "keys"))? {
+                let keys = o.call_method0(intern!(self_.py(), "keys"))?;
+                for key in keys.try_iter()? {
+                    let k = key?;
+                    let v = o
+                        .getattr(intern!(self_.py(), "__getitem__"))?
+                        .call1((&k,))?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
+                    valid.set_item(valid_key, valid_value)?;
+                }
+            }
+            // Handle iterable of key-value pairs
+            else {
+                for t in o.try_iter()? {
+                    let (k, v) = t?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+                    let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
+                    valid.set_item(valid_key, valid_value)?;
+                }
+            }
+        }
 
-		// Handle keyword arguments
-		if let Some(kw) = kwargs {
-			for (k, v) in kw.iter() {
-				let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
-				valid.set_item(valid_key, valid_value)?;
-			}
-		}
+        // Handle keyword arguments
+        if let Some(kw) = kwargs {
+            for (k, v) in kw.iter() {
+                let (valid_key, valid_value) = self_.get().validate_item(self_.py(), &k, &v)?;
+                valid.set_item(valid_key, valid_value)?;
+            }
+        }
 
-		ndict.update(valid.as_mapping())
-	}
+        ndict.update(valid.as_mapping())
+    }
 
-	/// Return the value for `key`, inserting a validated default if absent.
-	pub fn setdefault<'py>(
-		self_: &Bound<'py, AtorsDict>,
-		key: &Bound<'py, PyAny>,
-		default: Option<&Bound<'py, PyAny>>,
-	) -> PyResult<Bound<'py, PyAny>> {
-		let py = key.py();
-		let valid_key = self_.get().validate_key(py, key)?;
-		let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
-		// Use direct PyDict C API to avoid converting into bound to cast to PyDict
-		// Such a casting would consume the ref and we cannot clone it.
-		if let Some(existing) = ndict.get_item(&valid_key)? {
-			return Ok(existing);
-		}
+    /// Return the value for `key`, inserting a validated default if absent.
+    pub fn setdefault<'py>(
+        self_: &Bound<'py, AtorsDict>,
+        key: &Bound<'py, PyAny>,
+        default: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = key.py();
+        let valid_key = self_.get().validate_key(py, key)?;
+        let ndict = unsafe { self_.cast_unchecked::<PyDict>() };
+        // Use direct PyDict C API to avoid converting into bound to cast to PyDict
+        // Such a casting would consume the ref and we cannot clone it.
+        if let Some(existing) = ndict.get_item(&valid_key)? {
+            return Ok(existing);
+        }
 
-		// The key does not exist, insert the default value
-		let value = if let Some(def) = default {
-			def
-		} else {
-			&py.None().into_bound(py)
-		};
-		let valid_value = self_.get().validate_value(py, value)?;
-		ndict.set_item(&valid_key, &valid_value)?;
+        // The key does not exist, insert the default value
+        let value = if let Some(def) = default {
+            def
+        } else {
+            &py.None().into_bound(py)
+        };
+        let valid_value = self_.get().validate_value(py, value)?;
+        ndict.set_item(&valid_key, &valid_value)?;
 
-		Ok(valid_value)
-	}
+        Ok(valid_value)
+    }
 
-	pub fn __ior__<'py>(self_: &Bound<'py, AtorsDict>, other: &Bound<'py, PyAny>) -> PyResult<()> {
-		AtorsDict::update(self_, Some(other), None)
-	}
+    pub fn __ior__<'py>(self_: &Bound<'py, AtorsDict>, other: &Bound<'py, PyAny>) -> PyResult<()> {
+        AtorsDict::update(self_, Some(other), None)
+    }
 
-	// The traverse method of the parent class (PyDict) is called automatically and
-	// the type is also traversed so we only need to visit our own references.
-	pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
-		// Safety: Python guarantees exclusive access when calling GC methods, ensuring
-		// no concurrent mutation (holds for both GIL and free-threaded builds).
-		if let Some(o) = unsafe { &*self.object.get() } {
-			visit.call(o)?;
-		}
-		Ok(())
-	}
+    // The traverse method of the parent class (PyDict) is called automatically and
+    // the type is also traversed so we only need to visit our own references.
+    pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        if let Some(o) = unsafe { &*self.object.get() } {
+            visit.call(o)?;
+        }
+        Ok(())
+    }
 
-	// The clear method of the parent class (PyDict) is called automatically and
-	// so we only need to clear our own references.
-	pub fn __clear__(&self) {
-		// Safety: Python guarantees exclusive access when calling GC methods, ensuring
-		// no concurrent mutation (holds for both GIL and free-threaded builds).
-		unsafe { *self.object.get() = None };
-	}
+    // The clear method of the parent class (PyDict) is called automatically and
+    // so we only need to clear our own references.
+    pub fn __clear__(&self) {
+        // Safety: Python guarantees exclusive access when calling GC methods, ensuring
+        // no concurrent mutation (holds for both GIL and free-threaded builds).
+        unsafe { *self.object.get() = None };
+    }
 
-	/// Dummy constructor used solely for unpickling.
-	///
-	/// Creates an empty `AtorsDict` without any Ators metadata. The validators and
-	/// related metadata will be populated by the `restore` method called from
-	/// `AtorsBase.__setstate__` after construction. Dict items are restored via the
-	/// 5th slot of the pickle reduce tuple (dict items iterator).
-	#[staticmethod]
-	pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsDict>> {
-		use crate::validators::types::TypeValidator;
-		Bound::new(
-			py,
-			AtorsDict {
-				key_validator: UnsafeCell::new(Validator {
-					type_validator: TypeValidator::Any {},
-					value_validators: Box::new([]),
-					coercer: None,
-					init_coercer: None,
-				}),
-				value_validator: UnsafeCell::new(Validator {
-					type_validator: TypeValidator::Any {},
-					value_validators: Box::new([]),
-					coercer: None,
-					init_coercer: None,
-				}),
-				member_name: UnsafeCell::new(None),
-				object: UnsafeCell::new(None),
-			},
-		)
-	}
+    /// Dummy constructor used solely for unpickling.
+    ///
+    /// Creates an empty `AtorsDict` without any Ators metadata. The validators and
+    /// related metadata will be populated by the `restore` method called from
+    /// `AtorsBase.__setstate__` after construction. Dict items are restored via the
+    /// 5th slot of the pickle reduce tuple (dict items iterator).
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsDict>> {
+        use crate::validators::types::TypeValidator;
+        Bound::new(
+            py,
+            AtorsDict {
+                key_validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                value_validator: UnsafeCell::new(Validator {
+                    type_validator: TypeValidator::Any {},
+                    value_validators: Box::new([]),
+                    coercer: None,
+                    init_coercer: None,
+                }),
+                member_name: UnsafeCell::new(None),
+                object: UnsafeCell::new(None),
+            },
+        )
+    }
 
-	pub fn __reduce_ex__<'py>(
-		self_: &Bound<'py, Self>,
-		py: Python<'py>,
-		_protocol: usize,
-	) -> PyResult<Bound<'py, PyAny>> {
-		// Returns a 5-tuple (callable, args, state, list_items, dict_items).
-		// The 5th element must be an iterator yielding (key, value) 2-tuples.
-		let py_dict = unsafe { self_.cast_unchecked::<PyDict>() };
-		let items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> = py_dict.iter().collect();
-		let items_iter = items.into_bound_py_any(py)?.try_iter()?;
-		(
-			self_.getattr(intern!(py, "_construct"))?,
-			(),
-			py.None(),
-			py.None(),
-			items_iter,
-		)
-			.into_bound_py_any(py)
-	}
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        _protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Returns a 5-tuple (callable, args, state, list_items, dict_items).
+        // The 5th element must be an iterator yielding (key, value) 2-tuples.
+        let py_dict = unsafe { self_.cast_unchecked::<PyDict>() };
+        let items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> = py_dict.iter().collect();
+        let items_iter = items.into_bound_py_any(py)?.try_iter()?;
+        (
+            self_.getattr(intern!(py, "_construct"))?,
+            (),
+            py.None(),
+            py.None(),
+            items_iter,
+        )
+            .into_bound_py_any(py)
+    }
 }

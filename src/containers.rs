@@ -7,10 +7,10 @@
 |----------------------------------------------------------------------------*/
 /// Container types with validation and related utilities.
 mod common;
+pub mod dict;
 pub mod list;
 pub mod set;
-pub mod dict;
 
+pub use dict::*;
 pub use list::*;
 pub use set::*;
-pub use dict::*;
