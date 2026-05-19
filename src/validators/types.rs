@@ -1120,6 +1120,12 @@ impl TypeValidator {
         }
     }
 
+    /// Create a default value inferred from the validator shape.
+    ///
+    /// Unlike [`TypeValidator::create_default`], this method does not consume explicit
+    /// constructor arguments. It derives a default constructor strategy from the type
+    /// validator itself (for example: `Typed` uses nullary construction, containers create
+    /// empty typed containers with preserved metadata/validators).
     pub fn create_inferred_default<'py>(
         &self,
         name: Option<&str>,

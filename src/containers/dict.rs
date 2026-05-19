@@ -282,11 +282,12 @@ pub struct AtorsDefaultDict {
     object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
 
-// Safety: key_validator, value_validator, default_builder and member_name are written only once
-// (at construction or during restore before any other references exist), and after that are
-// effectively immutable; object is only modified during __clear__, which Python's GC calls only
-// once all references to this object have been dropped - ensuring no concurrent access (holds for
-// both GIL and free-threaded builds).
+// Safety: key_validator, value_validator, default_builder and member_name are written at
+// construction and may be updated during restore while holding a critical section on the same
+// object, guaranteeing exclusive access during those writes; outside restore they are effectively
+// immutable. object is only modified during __clear__, which Python's GC calls only once all
+// references to this object have been dropped - ensuring no concurrent access (holds for both GIL
+// and free-threaded builds).
 unsafe impl Sync for AtorsDefaultDict {}
 
 impl AtorsDefaultDict {
@@ -347,6 +348,9 @@ impl AtorsDefaultDict {
         Ok((valid_key, valid_value))
     }
 
+    /// Build a value for a missing key from the stored inferred default builder.
+    ///
+    /// The returned value is validated by callers before insertion into the dict.
     fn build_missing_value<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let default_builder = unsafe { &*self.default_builder.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
