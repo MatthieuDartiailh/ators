@@ -1199,7 +1199,8 @@ impl TypeValidator {
                 err_with_cause(
                     py,
                     pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Cannot infer a default value for validator {self:?}"
+                        "Cannot infer a default value for this annotation. \
+                         Provide an explicit default or use a type with a nullary default constructor."
                     )),
                     cause,
                 )

@@ -504,9 +504,10 @@ impl AtorsDefaultDict {
         Ok((valid_key, valid_value))
     }
 
-    /// Build a value for a missing key from the stored inferred default builder.
+    /// Build a value for a missing key from the inferred value annotation.
     ///
-    /// The returned value is validated by callers before insertion into the dict.
+    /// The returned value is validated by `__missing__`; insertion is handled by callers
+    /// such as `__getitem__`.
     fn build_missing_value<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let value_validator = unsafe { &*self.value_validator.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
