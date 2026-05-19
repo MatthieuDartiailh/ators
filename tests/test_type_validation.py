@@ -8,8 +8,9 @@
 """Test type validation for ators object"""
 
 from abc import ABC
+from collections import defaultdict
 from annotationlib import ForwardRef
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, DefaultDict, Literal, TypeVar
 
 import pytest
 
@@ -87,6 +88,18 @@ type MyInt = int
         (set[int], [set(), {1}], [1, (), {1, "a"}], False),
         (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
+        (
+            defaultdict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
+        (
+            DefaultDict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
         # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
         (CustomBase, [CustomObj()], ["", 1, object()], False),
@@ -230,6 +243,14 @@ def test_inherited_type_validator():
     assert b.a == 5
     with pytest.raises(TypeError):
         b.a = ""
+
+
+@pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
+def test_bare_defaultdict_annotation_is_rejected(annotation):
+    with pytest.raises(TypeError, match="bare defaultdict"):
+
+        class A(Ators):
+            a: annotation = member()
 
 
 class GenericBox[T](Ators):

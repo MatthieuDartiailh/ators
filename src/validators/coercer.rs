@@ -203,6 +203,68 @@ impl Coercer {
                     // a fast validation path
                     Ok(coerced.as_any().clone())
                 },
+                TypeValidator::DefaultDict { items, .. } => {
+                    let (key_validator, val_validator) = items;
+                    let coerced = PyDict::new(py);
+                    if let Ok(t) = value.cast::<PyDict>() {
+                        for (k, v) in t.iter() {
+                            let ck = self.coerce_value(
+                                is_init_coercion,
+                                &key_validator.type_validator,
+                                name,
+                                object,
+                                &k,
+                            );
+                            let cv = self.coerce_value(
+                                is_init_coercion,
+                                &val_validator.type_validator,
+                                name,
+                                object,
+                                &v,
+                            );
+                            coerced.set_item(ck?, cv?)?;
+                        }
+                    } else if let Ok(tm) = value.cast::<PyMapping>() {
+                        for i in tm.items()?.iter() {
+                            let (k, v) = i.extract()?;
+                            let ck = self.coerce_value(
+                                is_init_coercion,
+                                &key_validator.type_validator,
+                                name,
+                                object,
+                                &k,
+                            );
+                            let cv = self.coerce_value(
+                                is_init_coercion,
+                                &val_validator.type_validator,
+                                name,
+                                object,
+                                &v,
+                            );
+                            coerced.set_item(ck?, cv?)?;
+                        }
+                    } else {
+                        for p in value.try_iter()? {
+                            let (k, v) = p?.extract()?;
+                            let ck = self.coerce_value(
+                                is_init_coercion,
+                                &key_validator.type_validator,
+                                name,
+                                object,
+                                &k,
+                            );
+                            let cv = self.coerce_value(
+                                is_init_coercion,
+                                &val_validator.type_validator,
+                                name,
+                                object,
+                                &v,
+                            );
+                            coerced.set_item(ck?, cv?)?;
+                        }
+                    };
+                    Ok(coerced.as_any().clone())
+                }
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
                 TypeValidator::Instance { types } => types.coerce(value),
                 TypeValidator::ForwardValidator { late_validator } => self.coerce_value(

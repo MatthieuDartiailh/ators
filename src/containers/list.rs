@@ -15,7 +15,7 @@ use std::cell::UnsafeCell;
 
 use crate::{
     class::AtorsBase,
-    containers::{AtorsDict, AtorsSet, common::matches_assignment_context},
+    containers::{AtorsDefaultDict, AtorsDict, AtorsSet, common::matches_assignment_context},
     utils::error_on_minusone,
     validators::Validator,
 };
@@ -169,6 +169,21 @@ impl AtorsList {
                             nested,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
+                            member_name,
+                            object,
+                        );
+                    }
+                }
+                TypeValidator::DefaultDict {
+                    items: (key_bv, val_bv),
+                    default_builder,
+                } => {
+                    if let Ok(nested) = list_item.cast::<AtorsDefaultDict>() {
+                        AtorsDefaultDict::restore(
+                            nested,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            (*default_builder.0).clone(),
                             member_name,
                             object,
                         );

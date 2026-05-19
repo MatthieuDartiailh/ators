@@ -337,6 +337,11 @@ pub enum TypeValidator {
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
     },
+    #[pyo3(constructor = (items, default_builder))]
+    DefaultDict {
+        items: (BoxedValidator, BoxedValidator),
+        default_builder: BoxedValidator,
+    },
     // Sequence,
     // List,
     // Mapping,
@@ -415,6 +420,16 @@ impl TypeValidator {
                         BoxedValidator::from(v.with_owner(py, owner)),
                     )
                 }),
+            },
+            Self::DefaultDict {
+                items: (key_v, val_v),
+                default_builder,
+            } => Self::DefaultDict {
+                items: (
+                    BoxedValidator::from(key_v.with_owner(py, owner)),
+                    BoxedValidator::from(val_v.with_owner(py, owner)),
+                ),
+                default_builder: BoxedValidator::from(default_builder.with_owner(py, owner)),
             },
             _ => self.clone(),
         }
@@ -904,6 +919,94 @@ impl TypeValidator {
                     validation_error!("dict", name, object, value)
                 }
             }
+            Self::DefaultDict {
+                items: (key_v, val_v),
+                default_builder,
+            } => {
+                if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDefaultDict>()
+                    && ators_dict.get().matches_assignment_context(name, object)
+                {
+                    return Ok(crate::containers::AtorsDefaultDict::clone_for_assignment(
+                        ators_dict,
+                    )?
+                    .into_any());
+                }
+                if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
+                    let py = value.py();
+                    let adict = crate::containers::AtorsDefaultDict::new_empty(
+                        py,
+                        (*key_v.0).clone(),
+                        (*val_v.0).clone(),
+                        (*default_builder.0).clone(),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = adict.cast::<PyDict>()?;
+                    for (tk, tv) in dict.iter() {
+                        match (
+                            key_v.validate(name, object, &tk),
+                            val_v.validate(name, object, &tv),
+                        ) {
+                            (Ok(k), Ok(v)) => dict_bound.set_item(&k, &v)?,
+                            (Err(err), _) => {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}' for the member {} of {}.",
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                } else {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}'.",
+                                            tk.repr()?,
+                                        )),
+                                        err,
+                                    ));
+                                }
+                            }
+                            (Ok(_), Err(err)) => {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                } else {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}'.",
+                                            tk.repr()?,
+                                            tv.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Ok(adict.into_any())
+                } else {
+                    validation_error!("dict", name, object, value)
+                }
+            }
             Self::Dict { items: None } => {
                 if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
                     // Preserve the copy on assignment semantic
@@ -1017,6 +1120,79 @@ impl TypeValidator {
         }
     }
 
+    pub fn create_inferred_default<'py>(
+        &self,
+        name: Option<&str>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Typed { .. } => {
+                let args = PyTuple::empty(py);
+                let kwargs = Some(PyDict::new(py).unbind());
+                self.create_default(&args, &kwargs)
+            }
+            Self::List { item } => {
+                if let Some(item_v) = item {
+                    crate::containers::AtorsList::new_empty(
+                        py,
+                        (*item_v.0).clone(),
+                        name,
+                        object.map(|o| o.clone().unbind()),
+                    )
+                    .map(|v| v.into_any())
+                } else {
+                    Ok(PyList::empty(py).into_any())
+                }
+            }
+            Self::Set { item } => {
+                if let Some(item_v) = item {
+                    crate::containers::AtorsSet::new_empty(
+                        py,
+                        (*item_v.0).clone(),
+                        name,
+                        object.map(|o| o.clone().unbind()),
+                    )
+                    .map(|v| v.into_any())
+                } else {
+                    PySet::empty(py).map(|v| v.into_any())
+                }
+            }
+            Self::Dict {
+                items: Some((key_v, val_v)),
+            } => crate::containers::AtorsDict::new_empty(
+                py,
+                (*key_v.0).clone(),
+                (*val_v.0).clone(),
+                name,
+                object.map(|o| o.clone().unbind()),
+            )
+            .map(|v| v.into_any()),
+            Self::Dict { items: None } => Ok(PyDict::new(py).into_any()),
+            Self::DefaultDict {
+                items: (key_v, val_v),
+                default_builder,
+            } => crate::containers::AtorsDefaultDict::new_empty(
+                py,
+                (*key_v.0).clone(),
+                (*val_v.0).clone(),
+                (*default_builder.0).clone(),
+                name,
+                object.map(|o| o.clone().unbind()),
+            )
+            .map(|v| v.into_any()),
+            Self::ForwardValidator { late_validator } => {
+                let resolved_validator = late_validator.get_validator(py)?;
+                resolved_validator
+                    .get()
+                    .create_inferred_default(name, object, py)
+            }
+            _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot infer a default value for validator {self:?}"
+            ))),
+        }
+    }
+
     pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
         match self {
             Self::None {}
@@ -1057,6 +1233,10 @@ impl TypeValidator {
             Self::Set { item: _ } => Mutability::Mutable,
             Self::List { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
+            Self::DefaultDict {
+                items: _,
+                default_builder: _,
+            } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1147,6 +1327,13 @@ impl Clone for TypeValidator {
             Self::List { item } => Self::List { item: item.clone() },
             Self::Dict { items } => Self::Dict {
                 items: items.clone(),
+            },
+            Self::DefaultDict {
+                items,
+                default_builder,
+            } => Self::DefaultDict {
+                items: items.clone(),
+                default_builder: default_builder.clone(),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

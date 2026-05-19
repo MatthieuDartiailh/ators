@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test ators object containers validation behavior."""
 
+from collections import defaultdict
 from contextlib import nullcontext
 from types import MappingProxyType
 
@@ -235,3 +236,80 @@ def test_list_reassignment_to_other_member_still_validates():
 
     with pytest.raises(TypeError):
         obj.strs = obj.ints  # type: ignore
+
+
+def test_defaultdict_assignment_from_dict_and_copy_on_reassignment():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={"a": 1, "b": 2})
+    source = {"x": 10}
+    obj.a = source
+    source["y"] = 20
+    assert dict(obj.a) == {"x": 10}
+
+    original = obj.a
+    obj.a = original
+    assert obj.a == {"x": 10}
+    assert obj.a is not original
+    obj.a["z"] = 30
+    assert "z" not in original
+
+
+def test_defaultdict_missing_scalar_default():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={})
+    assert obj.a["missing"] == 0
+    assert obj.a["missing"] == 0
+    assert dict(obj.a) == {"missing": 0}
+    with pytest.raises(TypeError):
+        _ = obj.a[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_nested_defaults_and_validation():
+    from ators import Ators
+
+    class A(Ators):
+        l: defaultdict[str, list[int]]
+        s: defaultdict[str, set[int]]
+        d: defaultdict[str, dict[str, int]]
+        dd: defaultdict[str, defaultdict[str, int]]
+
+    obj = A(l={}, s={}, d={}, dd={})
+
+    obj.l["k"].append(1)
+    with pytest.raises(TypeError):
+        obj.l["k"].append("bad")
+
+    obj.s["k"].add(1)
+    with pytest.raises(TypeError):
+        obj.s["k"].add("bad")
+
+    obj.d["k"]["x"] = 1
+    with pytest.raises(TypeError):
+        obj.d["k"]["x"] = "bad"
+
+    assert obj.dd["outer"]["inner"] == 0
+    with pytest.raises(TypeError):
+        _ = obj.dd[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_typed_default_requires_nullary_ctor():
+    from ators import Ators
+
+    class RequiresArg:
+        def __init__(self, value):
+            self.value = value
+
+    class A(Ators):
+        a: defaultdict[str, RequiresArg]
+
+    obj = A(a={})
+    with pytest.raises(TypeError):
+        _ = obj.a["missing"]
