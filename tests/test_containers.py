@@ -126,6 +126,7 @@ def dict_annotation(request):
     return request.param
 
 
+@pytest.fixture()
 def ators_dict_object(dict_annotation):
     from ators import Ators
 
