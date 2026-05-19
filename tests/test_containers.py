@@ -121,12 +121,16 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
-@pytest.fixture()
-def ators_dict_object():
+@pytest.fixture(params=[dict[str, int], defaultdict[str, int]], ids=["dict", "defaultdict"])
+def dict_annotation(request):
+    return request.param
+
+
+def ators_dict_object(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     return A(a={"a": 2})
 
@@ -209,11 +213,11 @@ def test_set_same_owner_member_reassignment_copies_container():
     assert type(obj.a) is type(original)
 
 
-def test_dict_same_owner_member_reassignment_copies_container():
+def test_dict_same_owner_member_reassignment_copies_container(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     obj = A(a={"a": 1, "b": 2})
     original = obj.a
@@ -238,11 +242,11 @@ def test_list_reassignment_to_other_member_still_validates():
         obj.strs = obj.ints  # type: ignore
 
 
-def test_defaultdict_assignment_from_dict_and_copy_on_reassignment():
+def test_dict_assignment_from_dict_and_copy_on_reassignment(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: defaultdict[str, int]
+        a: dict_annotation
 
     obj = A(a={"a": 1, "b": 2})
     source = {"x": 10}

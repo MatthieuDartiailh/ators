@@ -337,10 +337,9 @@ pub enum TypeValidator {
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
     },
-    #[pyo3(constructor = (items, default_builder))]
+    #[pyo3(constructor = (items))]
     DefaultDict {
         items: (BoxedValidator, BoxedValidator),
-        default_builder: BoxedValidator,
     },
     // Sequence,
     // List,
@@ -423,13 +422,11 @@ impl TypeValidator {
             },
             Self::DefaultDict {
                 items: (key_v, val_v),
-                default_builder,
             } => Self::DefaultDict {
                 items: (
                     BoxedValidator::from(key_v.with_owner(py, owner)),
                     BoxedValidator::from(val_v.with_owner(py, owner)),
                 ),
-                default_builder: BoxedValidator::from(default_builder.with_owner(py, owner)),
             },
             _ => self.clone(),
         }
@@ -921,7 +918,6 @@ impl TypeValidator {
             }
             Self::DefaultDict {
                 items: (key_v, val_v),
-                default_builder,
             } => {
                 if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDefaultDict>()
                     && ators_dict.get().matches_assignment_context(name, object)
@@ -937,7 +933,6 @@ impl TypeValidator {
                         py,
                         (*key_v.0).clone(),
                         (*val_v.0).clone(),
-                        (*default_builder.0).clone(),
                         name,
                         object.map(|m| m.clone().unbind()),
                     )?;
@@ -1102,6 +1097,8 @@ impl TypeValidator {
 
     pub fn create_default<'py>(
         &self,
+        name: Option<&str>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         args: &Bound<'py, PyTuple>,
         kwargs: &Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1114,6 +1111,69 @@ impl TypeValidator {
                     Some(kw) => Some(kw.bind(py)),
                 },
             ),
+            Self::List { item }
+                if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
+            {
+                if let Some(item_v) = item {
+                    crate::containers::AtorsList::new_empty(
+                        py,
+                        (*item_v.0).clone(),
+                        name,
+                        object.map(|o| o.clone().unbind()),
+                    )
+                    .map(|v| v.into_any())
+                } else {
+                    Ok(PyList::empty(py).into_any())
+                }
+            }
+            Self::Set { item }
+                if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
+            {
+                if let Some(item_v) = item {
+                    crate::containers::AtorsSet::new_empty(
+                        py,
+                        (*item_v.0).clone(),
+                        name,
+                        object.map(|o| o.clone().unbind()),
+                    )
+                    .map(|v| v.into_any())
+                } else {
+                    PySet::empty(py).map(|v| v.into_any())
+                }
+            }
+            Self::Dict {
+                items: Some((key_v, val_v)),
+            } if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) => {
+                crate::containers::AtorsDict::new_empty(
+                    py,
+                    (*key_v.0).clone(),
+                    (*val_v.0).clone(),
+                    name,
+                    object.map(|o| o.clone().unbind()),
+                )
+                .map(|v| v.into_any())
+            }
+            Self::Dict { items: None }
+                if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
+            {
+                Ok(PyDict::new(py).into_any())
+            }
+            Self::DefaultDict {
+                items: (key_v, val_v),
+            } if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) => {
+                crate::containers::AtorsDefaultDict::new_empty(
+                    py,
+                    (*key_v.0).clone(),
+                    (*val_v.0).clone(),
+                    name,
+                    object.map(|o| o.clone().unbind()),
+                )
+                .map(|v| v.into_any())
+            }
+            Self::ForwardValidator { late_validator } => late_validator
+                .get_validator(py)?
+                .get()
+                .create_default(name, object, args, kwargs),
             _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot create a default value using args and kwargs for {self:?}"
             ))),
@@ -1132,71 +1192,18 @@ impl TypeValidator {
         object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        match self {
-            Self::Typed { .. } => {
-                let args = PyTuple::empty(py);
-                let kwargs = Some(PyDict::new(py).unbind());
-                self.create_default(&args, &kwargs)
-            }
-            Self::List { item } => {
-                if let Some(item_v) = item {
-                    crate::containers::AtorsList::new_empty(
-                        py,
-                        (*item_v.0).clone(),
-                        name,
-                        object.map(|o| o.clone().unbind()),
-                    )
-                    .map(|v| v.into_any())
-                } else {
-                    Ok(PyList::empty(py).into_any())
-                }
-            }
-            Self::Set { item } => {
-                if let Some(item_v) = item {
-                    crate::containers::AtorsSet::new_empty(
-                        py,
-                        (*item_v.0).clone(),
-                        name,
-                        object.map(|o| o.clone().unbind()),
-                    )
-                    .map(|v| v.into_any())
-                } else {
-                    PySet::empty(py).map(|v| v.into_any())
-                }
-            }
-            Self::Dict {
-                items: Some((key_v, val_v)),
-            } => crate::containers::AtorsDict::new_empty(
-                py,
-                (*key_v.0).clone(),
-                (*val_v.0).clone(),
-                name,
-                object.map(|o| o.clone().unbind()),
-            )
-            .map(|v| v.into_any()),
-            Self::Dict { items: None } => Ok(PyDict::new(py).into_any()),
-            Self::DefaultDict {
-                items: (key_v, val_v),
-                default_builder,
-            } => crate::containers::AtorsDefaultDict::new_empty(
-                py,
-                (*key_v.0).clone(),
-                (*val_v.0).clone(),
-                (*default_builder.0).clone(),
-                name,
-                object.map(|o| o.clone().unbind()),
-            )
-            .map(|v| v.into_any()),
-            Self::ForwardValidator { late_validator } => {
-                let resolved_validator = late_validator.get_validator(py)?;
-                resolved_validator
-                    .get()
-                    .create_inferred_default(name, object, py)
-            }
-            _ => Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot infer a default value for validator {self:?}"
-            ))),
-        }
+        let args = PyTuple::empty(py);
+        let kwargs = Some(PyDict::new(py).unbind());
+        self.create_default(name, object, &args, &kwargs)
+            .map_err(|cause| {
+                err_with_cause(
+                    py,
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Cannot infer a default value for validator {self:?}"
+                    )),
+                    cause,
+                )
+            })
     }
 
     pub fn is_type_mutable<'py>(&self, py: Python<'py>) -> Mutability {
@@ -1239,10 +1246,7 @@ impl TypeValidator {
             Self::Set { item: _ } => Mutability::Mutable,
             Self::List { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
-            Self::DefaultDict {
-                items: _,
-                default_builder: _,
-            } => Mutability::Mutable,
+            Self::DefaultDict { items: _ } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1334,12 +1338,8 @@ impl Clone for TypeValidator {
             Self::Dict { items } => Self::Dict {
                 items: items.clone(),
             },
-            Self::DefaultDict {
-                items,
-                default_builder,
-            } => Self::DefaultDict {
+            Self::DefaultDict { items } => Self::DefaultDict {
                 items: items.clone(),
-                default_builder: default_builder.clone(),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

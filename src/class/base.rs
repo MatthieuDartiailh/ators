@@ -329,14 +329,12 @@ impl AtorsBase {
                 }
                 TypeValidator::DefaultDict {
                     items: (key_bv, val_bv),
-                    default_builder,
                 } => {
                     if let Ok(adict) = value.cast::<AtorsDefaultDict>() {
                         AtorsDefaultDict::restore(
                             adict,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
-                            (*default_builder.0).clone(),
                             Some(mb.name()),
                             Some(slf),
                         );

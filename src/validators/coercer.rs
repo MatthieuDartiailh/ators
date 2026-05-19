@@ -203,7 +203,7 @@ impl Coercer {
                     // a fast validation path
                     Ok(coerced.as_any().clone())
                 },
-                TypeValidator::DefaultDict { items, .. } => {
+                TypeValidator::DefaultDict { items } => {
                     let (key_validator, val_validator) = items;
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {

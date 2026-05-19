@@ -110,10 +110,13 @@ impl Validator {
     /// Create a default value using the type validator
     pub fn create_default<'py>(
         &self,
+        name: Option<&str>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         args: &Bound<'py, PyTuple>,
         kwargs: &Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        self.type_validator.create_default(args, kwargs)
+        self.type_validator
+            .create_default(name, object, args, kwargs)
     }
 
     /// Create a default value inferred from this validator shape.

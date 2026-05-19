@@ -15,7 +15,7 @@ use std::cell::UnsafeCell;
 
 use crate::{
     class::AtorsBase,
-    containers::{AtorsDefaultDict, AtorsDict, AtorsSet, common::matches_assignment_context},
+    containers::{common::matches_assignment_context, dict::restore_nested_container_value},
     utils::error_on_minusone,
     validators::Validator,
 };
@@ -124,10 +124,7 @@ impl AtorsList {
         member_name: Option<&str>,
         object: Option<&Bound<'py, AtorsBase>>,
     ) {
-        use crate::validators::types::TypeValidator;
-
-        // Capture the validator so we can restore nested containers after
-        // rebinding this list metadata.
+        // Capture the validator so we can restore nested containers after rebinding this list metadata.
         let item_v = validator.clone();
 
         with_critical_section(alist.as_any(), || {
@@ -146,51 +143,7 @@ impl AtorsList {
         // Safety: AtorsList is declared as `extends=PyList`, so this cast is always valid.
         let py_list = unsafe { alist.cast_unchecked::<PyList>() };
         for list_item in py_list.iter() {
-            match &item_v.type_validator {
-                TypeValidator::List {
-                    item: Some(nested_bv),
-                } => {
-                    if let Ok(nested) = list_item.cast::<AtorsList>() {
-                        AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
-                    }
-                }
-                TypeValidator::Set {
-                    item: Some(nested_bv),
-                } => {
-                    if let Ok(nested) = list_item.cast::<AtorsSet>() {
-                        AtorsSet::restore(nested, (*nested_bv.0).clone(), member_name, object);
-                    }
-                }
-                TypeValidator::Dict {
-                    items: Some((key_bv, val_bv)),
-                } => {
-                    if let Ok(nested) = list_item.cast::<AtorsDict>() {
-                        AtorsDict::restore(
-                            nested,
-                            (*key_bv.0).clone(),
-                            (*val_bv.0).clone(),
-                            member_name,
-                            object,
-                        );
-                    }
-                }
-                TypeValidator::DefaultDict {
-                    items: (key_bv, val_bv),
-                    default_builder,
-                } => {
-                    if let Ok(nested) = list_item.cast::<AtorsDefaultDict>() {
-                        AtorsDefaultDict::restore(
-                            nested,
-                            (*key_bv.0).clone(),
-                            (*val_bv.0).clone(),
-                            (*default_builder.0).clone(),
-                            member_name,
-                            object,
-                        );
-                    }
-                }
-                _ => {}
-            }
+            restore_nested_container_value(&list_item, &item_v, member_name, object);
         }
     }
 }
