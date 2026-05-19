@@ -603,9 +603,10 @@ impl AtorsDefaultDict {
 
     pub fn __missing__<'py>(
         self_: &Bound<'py, AtorsDefaultDict>,
-        key: &Bound<'py, PyAny>,
+        validated_key: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let py = key.py();
+        // `validated_key` is the key as returned by `validate_key` in `__getitem__`.
+        let py = validated_key.py();
         let default = self_.get().build_missing_value(py)?;
         self_.get().validate_value(py, &default)
     }
