@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Shared container benchmark case registry."""
 
+from collections import defaultdict
 from typing import Any, Callable, cast
 
 from ators import Ators, member
@@ -187,6 +188,29 @@ class AtorsDictContainer(Ators):
     dict_field: dict[str, int] = member()
 
 
+class PyDefaultDictContainer:
+    def __init__(self):
+        self.assign_field = defaultdict(int, INITIAL_DICT.copy())
+        self.scalar_field = defaultdict(int, INITIAL_DICT.copy())
+        self.list_field = defaultdict(list)
+        self.dict_field = defaultdict(dict)
+
+
+class PyTypedDefaultDictContainer:
+    def __init__(self):
+        self.assign_field = defaultdict(int, INITIAL_DICT.copy())
+        self.scalar_field = defaultdict(int, INITIAL_DICT.copy())
+        self.list_field = defaultdict(ValidatedIntList)
+        self.dict_field = defaultdict(ValidatedStrIntDict)
+
+
+class AtorsDefaultDictContainer(Ators):
+    assign_field: defaultdict[str, int] = member()
+    scalar_field: defaultdict[str, int] = member()
+    list_field: defaultdict[str, list[int]] = member()
+    dict_field: defaultdict[str, dict[str, int]] = member()
+
+
 if ATOM_AVAILABLE:
 
     class AtomListContainer(atom_api.Atom):
@@ -236,6 +260,20 @@ def _dict_implementations() -> dict[str, Callable[[], Any]]:
         implementations["atom"] = lambda: AtomDictContainer(
             dict_field=INITIAL_DICT.copy()
         )
+    return implementations
+
+
+def _defaultdict_implementations() -> dict[str, Callable[[], Any]]:
+    implementations: dict[str, Callable[[], Any]] = {
+        "py": PyDefaultDictContainer,
+        "py_typed": PyTypedDefaultDictContainer,
+        "ators": lambda: AtorsDefaultDictContainer(
+            assign_field=INITIAL_DICT.copy(),
+            scalar_field=INITIAL_DICT.copy(),
+            list_field={},
+            dict_field={},
+        ),
+    }
     return implementations
 
 
@@ -554,8 +592,103 @@ def _build_dict_ior_op(obj: Any) -> Callable[[], None]:
     return op
 
 
+def _defaultdict_cases() -> list[BenchmarkCase]:
+    cases = []
+    for implementation, factory in _defaultdict_implementations().items():
+        cases.extend(
+            [
+                _make_case(
+                    "defaultdict",
+                    "assign_from_dict",
+                    implementation,
+                    factory,
+                    lambda obj: (
+                        lambda: setattr(obj, "assign_field", {"x": 11, "y": 12})
+                    ),
+                ),
+                _make_case(
+                    "defaultdict",
+                    "missing_scalar_int",
+                    implementation,
+                    factory,
+                    _build_defaultdict_missing_scalar_op,
+                ),
+                _make_case(
+                    "defaultdict",
+                    "missing_nested_list",
+                    implementation,
+                    factory,
+                    _build_defaultdict_missing_list_op,
+                ),
+                _make_case(
+                    "defaultdict",
+                    "missing_nested_dict",
+                    implementation,
+                    factory,
+                    _build_defaultdict_missing_dict_op,
+                ),
+                _make_case(
+                    "defaultdict",
+                    "mutate_after_missing_nested_list",
+                    implementation,
+                    factory,
+                    _build_defaultdict_mutate_list_after_missing_op,
+                ),
+            ]
+        )
+    return cases
+
+
+def _build_defaultdict_missing_scalar_op(obj: Any) -> Callable[[], None]:
+    index = [0]
+
+    def op() -> None:
+        key = f"k{index[0]}"
+        _ = obj.scalar_field[key]
+        obj.scalar_field.pop(key)
+        index[0] += 1
+
+    return op
+
+
+def _build_defaultdict_missing_list_op(obj: Any) -> Callable[[], None]:
+    index = [0]
+
+    def op() -> None:
+        key = f"k{index[0]}"
+        _ = obj.list_field[key]
+        obj.list_field.pop(key)
+        index[0] += 1
+
+    return op
+
+
+def _build_defaultdict_missing_dict_op(obj: Any) -> Callable[[], None]:
+    index = [0]
+
+    def op() -> None:
+        key = f"k{index[0]}"
+        _ = obj.dict_field[key]
+        obj.dict_field.pop(key)
+        index[0] += 1
+
+    return op
+
+
+def _build_defaultdict_mutate_list_after_missing_op(obj: Any) -> Callable[[], None]:
+    index = [0]
+
+    def op() -> None:
+        key = f"k{index[0]}"
+        obj.list_field[key].append(9)
+        obj.list_field.pop(key)
+        index[0] += 1
+
+    return op
+
+
 def iter_container_cases() -> list[BenchmarkCase]:
-    return [*_list_cases(), *_set_cases(), *_dict_cases()]
+    return [*_list_cases(), *_set_cases(), *_dict_cases(), *_defaultdict_cases()]
 
 
 def select_container_cases(

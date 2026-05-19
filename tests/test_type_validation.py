@@ -9,6 +9,9 @@
 
 from abc import ABC
 from typing import TYPE_CHECKING, Any, Literal
+from collections import defaultdict
+from annotationlib import ForwardRef
+from typing import TYPE_CHECKING, Any, DefaultDict, Literal, TypeVar
 
 import pytest
 
@@ -111,6 +114,18 @@ type MyInt = int
             dict[str, list[int]],
             [{}, {"a": []}, {"a": [1]}],
             [{"a": ["b"]}, {1: [1]}],
+            False,
+        ),
+        (
+            defaultdict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
+        (
+            DefaultDict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
             False,
         ),
         # NOTE Not a type validation
@@ -604,6 +619,18 @@ def test_inherited_type_validator():
     assert b.a == 5
     with pytest.raises(TypeError):
         b.a = ""
+
+
+@pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
+def test_bare_defaultdict_annotation_is_rejected(annotation):
+    with pytest.raises(TypeError, match="bare defaultdict"):
+
+        class A(Ators):
+            a: annotation = member()
+
+
+class GenericBox[T](Ators):
+    item: T = member()
 
 
 def test_type_alias_annotations_are_evaluated_before_validation():
