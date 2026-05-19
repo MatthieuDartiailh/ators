@@ -710,7 +710,6 @@ pub fn build_validator_from_annotation<'py>(
                 typevar_bindings,
                 validation_mode,
             )?;
-            let default_builder = BoxedValidator::from(val_validator.clone());
             Ok((
                 Validator::new(
                     TypeValidator::DefaultDict {
@@ -718,7 +717,6 @@ pub fn build_validator_from_annotation<'py>(
                             BoxedValidator::from(key_validator),
                             BoxedValidator::from(val_validator),
                         ),
-                        default_builder,
                     },
                     None,
                     None,

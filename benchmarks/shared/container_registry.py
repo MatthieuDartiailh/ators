@@ -225,6 +225,29 @@ if ATOM_AVAILABLE:
             cast(Any, atom_api.Int)(),
         )
 
+    if hasattr(atom_api, "DefaultDict"):
+
+        class AtomDefaultDictContainer(atom_api.Atom):
+            assign_field = cast(Any, atom_api.DefaultDict)(
+                cast(Any, atom_api.Str)(),
+                cast(Any, atom_api.Int)(),
+            )
+            scalar_field = cast(Any, atom_api.DefaultDict)(
+                cast(Any, atom_api.Str)(),
+                cast(Any, atom_api.Int)(),
+            )
+            list_field = cast(Any, atom_api.DefaultDict)(
+                cast(Any, atom_api.Str)(),
+                cast(Any, atom_api.List)(cast(Any, atom_api.Int)()),
+            )
+            dict_field = cast(Any, atom_api.DefaultDict)(
+                cast(Any, atom_api.Str)(),
+                cast(Any, atom_api.Dict)(
+                    cast(Any, atom_api.Str)(),
+                    cast(Any, atom_api.Int)(),
+                ),
+            )
+
 
 def _list_implementations() -> dict[str, Callable[[], Any]]:
     implementations: dict[str, Callable[[], Any]] = {
@@ -274,6 +297,13 @@ def _defaultdict_implementations() -> dict[str, Callable[[], Any]]:
             dict_field={},
         ),
     }
+    if ATOM_AVAILABLE and "AtomDefaultDictContainer" in globals():
+        implementations["atom"] = lambda: AtomDefaultDictContainer(
+            assign_field=INITIAL_DICT.copy(),
+            scalar_field=INITIAL_DICT.copy(),
+            list_field={},
+            dict_field={},
+        )
     return implementations
 
 
