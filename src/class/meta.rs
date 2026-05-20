@@ -280,11 +280,16 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
-    // Events require observable infrastructure.
-    // If this class declares any events (new or inherited), force is_observable.
+    // Events require observable infrastructure and cannot be declared on non-observable classes.
+    // If this class declares any new or inherits any events, it must be observable.
     // Frozen classes with events are rejected since events can never fire on frozen instances.
     let has_events = !event_builders.is_empty() || !base_events.is_empty();
-    let is_observable = is_observable || has_events;
+    if has_events && !is_observable {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Class '{name}' declares or inherits events but is not declared observable. \
+             Add `observable=True` to the class definition."
+        )));
+    }
     if frozen && has_events {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Class '{name}' is declared as frozen but defines or inherits events. \

@@ -115,17 +115,12 @@ def test_event_builder_with_inherit_no_annotation_allowed():
     assert isinstance(Child.clicked, Event)
 
 
-def test_event_forces_observable():
-    """Declaring an event on a non-observable class makes it observable automatically."""
+def test_event_non_observable_class_raises_at_creation():
+    """Events on a non-observable class raise TypeError at class creation time."""
+    with pytest.raises(TypeError, match="observable"):
 
-    class A(Ators):  # no observable=True
-        clicked: Event[int]
-
-    a = A()
-    hits = []
-    observe(a, "clicked", lambda c: hits.append(c.newvalue))
-    a.clicked = 42
-    assert hits == [42]
+        class A(Ators):  # no observable=True
+            clicked: Event[int]
 
 
 def test_event_frozen_class_raises_at_creation():
@@ -230,23 +225,24 @@ def test_event_oldvalue_is_none():
     assert changes[0].newvalue == 7
 
 
-def test_event_notification_disabled_raises():
-    """When notifications are disabled, setting an event raises TypeError."""
+def test_event_notification_disabled_silently_skips():
+    """When notifications are disabled, setting an event is permitted but silent."""
 
     class A(Ators, observable=True):
         clicked: Event[int]
 
     a = A()
-    disable_notifications(a)
-    with pytest.raises(TypeError, match="notifications are not enabled"):
-        a.clicked = 5
-
-    # Re-enabling allows events again.
-    enable_notifications(a)
     hits = []
     observe(a, "clicked", lambda c: hits.append(c.newvalue))
+
+    disable_notifications(a)
+    # Setting an event while notifications are disabled must NOT raise.
     a.clicked = 5
-    assert hits == [5]
+    assert hits == []  # no notification fired
+
+    enable_notifications(a)
+    a.clicked = 5
+    assert hits == [5]  # back to normal
 
 
 def test_event_deletion_raises():

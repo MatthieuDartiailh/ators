@@ -7,9 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators events and related utilities.
 use crate::{
-    class::base::{
-        AtorsBase, instance_is_observable, is_frozen, notifications_enabled, notify_member_change,
-    },
+    class::base::{AtorsBase, is_frozen, notify_member_change},
     validators::{TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
@@ -114,18 +112,16 @@ impl Event {
         let object = object.cast::<AtorsBase>()?;
 
         // Reject writes to frozen objects before any validation.
+        //
+        // Note: we do NOT raise when `notification_enabled` is false.  That flag is a
+        // temporary opt-out (e.g. bulk initialisation, undo machinery) that is expected to
+        // suppress notifications without raising.  The guard against non-observable classes
+        // is enforced at class-creation time (see `meta.rs`), so any `Event` that reaches
+        // this point is guaranteed to live on an observable class; the `notify_member_change`
+        // call below already returns `Ok(())` silently when notifications are disabled.
         if is_frozen(object) {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot set event '{}' on frozen object {}.",
-                self_.name,
-                object.repr()?
-            )));
-        }
-
-        // Events are only meaningful when notifications can fire.
-        if !instance_is_observable(object) || !notifications_enabled(object) {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Cannot set event '{}': notifications are not enabled on {}.",
                 self_.name,
                 object.repr()?
             )));
