@@ -21,8 +21,9 @@ use pyo3::{
     pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
-        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat,
+        PyFrozenSetMethods, PyInt, PyList, PyListMethods, PySet, PySetMethods, PyString, PyTuple,
+        PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{
@@ -1103,14 +1104,20 @@ impl TypeValidator {
         kwargs: &Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = args.py();
+        let call_kwargs = kwargs.as_ref().map(|kw| kw.bind(py));
         match self {
-            Self::Typed { type_ } => type_.bind(py).call(
-                args,
-                match kwargs {
-                    None => None,
-                    Some(kw) => Some(kw.bind(py)),
-                },
-            ),
+            Self::None {}
+                if args.is_empty() && kwargs.as_ref().is_none_or(|kw| kw.bind(py).is_empty()) =>
+            {
+                Ok(py.None().into_bound(py))
+            }
+            Self::Bool {} => py.get_type::<PyBool>().call(args, call_kwargs),
+            Self::Int {} => py.get_type::<PyInt>().call(args, call_kwargs),
+            Self::Float {} => py.get_type::<PyFloat>().call(args, call_kwargs),
+            Self::Complex {} => py.get_type::<PyComplex>().call(args, call_kwargs),
+            Self::Str {} => py.get_type::<PyString>().call(args, call_kwargs),
+            Self::Bytes {} => py.get_type::<PyBytes>().call(args, call_kwargs),
+            Self::Typed { type_ } => type_.bind(py).call(args, call_kwargs),
             Self::List { item }
                 if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
             {
@@ -1198,11 +1205,11 @@ impl TypeValidator {
             .map_err(|cause| {
                 err_with_cause(
                     py,
-                    pyo3::exceptions::PyTypeError::new_err(format!(
+                    pyo3::exceptions::PyTypeError::new_err(
                         "Cannot infer a default value for this annotation. \
                          Provide an explicit default or use a type with a default constructor \
-                         that takes no arguments."
-                    )),
+                         that takes no arguments.",
+                    ),
                     cause,
                 )
             })

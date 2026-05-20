@@ -281,28 +281,28 @@ def test_defaultdict_missing_nested_defaults_and_validation():
     from ators import Ators
 
     class A(Ators):
-        l: defaultdict[str, list[int]]
-        s: defaultdict[str, set[int]]
-        d: defaultdict[str, dict[str, int]]
-        dd: defaultdict[str, defaultdict[str, int]]
+        lists: defaultdict[str, list[int]]
+        sets: defaultdict[str, set[int]]
+        dicts: defaultdict[str, dict[str, int]]
+        nested: defaultdict[str, defaultdict[str, int]]
 
-    obj = A(l={}, s={}, d={}, dd={})
+    obj = A(lists={}, sets={}, dicts={}, nested={})
 
-    obj.l["k"].append(1)
+    obj.lists["k"].append(1)
     with pytest.raises(TypeError):
-        obj.l["k"].append("bad")
+        obj.lists["k"].append("bad")
 
-    obj.s["k"].add(1)
+    obj.sets["k"].add(1)
     with pytest.raises(TypeError):
-        obj.s["k"].add("bad")
+        obj.sets["k"].add("bad")
 
-    obj.d["k"]["x"] = 1
+    obj.dicts["k"]["x"] = 1
     with pytest.raises(TypeError):
-        obj.d["k"]["x"] = "bad"
+        obj.dicts["k"]["x"] = "bad"
 
-    assert obj.dd["outer"]["inner"] == 0
+    assert obj.nested["outer"]["inner"] == 0
     with pytest.raises(TypeError):
-        _ = obj.dd[1]  # type: ignore[index]
+        _ = obj.nested[1]  # type: ignore[index]
 
 
 def test_defaultdict_missing_typed_default_requires_nullary_ctor():
