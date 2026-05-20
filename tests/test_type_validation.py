@@ -247,7 +247,7 @@ def test_inherited_type_validator():
 
 @pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
 def test_bare_defaultdict_annotation_is_rejected(annotation):
-    with pytest.raises(TypeError, match="bare defaultdict"):
+    with pytest.raises(TypeError, match="Failed to configure Member a from annotation"):
 
         class A(Ators):
             a: annotation = member()
