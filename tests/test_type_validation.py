@@ -247,10 +247,13 @@ def test_inherited_type_validator():
 
 @pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
 def test_bare_defaultdict_annotation_is_rejected(annotation):
-    with pytest.raises(TypeError, match="Failed to configure Member a from annotation"):
+    with pytest.raises(TypeError, match="Failed to configure Member a from annotation") as exc_info:
 
         class A(Ators):
             a: annotation = member()
+
+    assert exc_info.value.__cause__ is not None
+    assert "bare defaultdict" in str(exc_info.value.__cause__)
 
 
 class GenericBox[T](Ators):
