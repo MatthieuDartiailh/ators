@@ -40,6 +40,8 @@ jobs:
     # free-threaded Python (3.14t) where the GIL is disabled. Codspeed doesnot
     # support matrix builds, so we run it in a separate job.
     benchmarks:
+        permissions:
+            contents: read # required for actions/checkout
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:
