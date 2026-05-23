@@ -202,6 +202,7 @@ pub(crate) struct AtorsClassInfo {
     optional_init_member_names: Vec<Py<PyString>>,
     required_init_member_names: Vec<Py<PyString>>,
     method_names: HashSet<String>,
+    abstract_methods: HashSet<String>,
     generic: Option<AtorsGenericInfo>,
     customizer_tool: Option<Py<MemberCustomizationTool>>,
     event_customizer_tool: Option<Py<EventCustomizationTool>>,
@@ -222,6 +223,7 @@ impl AtorsClassInfo {
         optional_init_member_names: Vec<Py<PyString>>,
         required_init_member_names: Vec<Py<PyString>>,
         method_names: HashSet<String>,
+        abstract_methods: HashSet<String>,
         generic: Option<AtorsGenericInfo>,
         customizer_tool: Option<Py<MemberCustomizationTool>>,
         event_customizer_tool: Option<Py<EventCustomizationTool>>,
@@ -242,6 +244,7 @@ impl AtorsClassInfo {
             optional_init_member_names,
             required_init_member_names,
             method_names,
+            abstract_methods,
             generic,
             customizer_tool,
             event_customizer_tool,
@@ -345,6 +348,10 @@ impl AtorsClassInfo {
         &self.method_names
     }
 
+    pub(crate) fn abstract_methods(&self) -> &HashSet<String> {
+        &self.abstract_methods
+    }
+
     pub(crate) fn generic(&self) -> Option<&AtorsGenericInfo> {
         self.generic.as_ref()
     }
@@ -375,6 +382,18 @@ pub fn get_ators_specific_member_names<'py>(
     let py = cls.py();
     let info = get_class_info(cls)?;
     Ok(PyFrozenSet::new(py, info.specific_member_names())?.into_any())
+}
+
+/// Return the frozenset of unresolved abstract method names for `cls`.
+///
+/// This is the Rust-backed data source for the `__abstractmethods__` property
+/// on `AtorsMeta`; the set is computed at class creation time and stored in
+/// class info rather than as a writable class attribute.
+#[pyfunction]
+pub fn get_ators_abstract_methods<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, PyAny>> {
+    let py = cls.py();
+    let info = get_class_info(cls)?;
+    Ok(PyFrozenSet::new(py, info.abstract_methods())?.into_any())
 }
 
 /// Return the tuple of init-participating member names for `cls`.

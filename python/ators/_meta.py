@@ -18,6 +18,7 @@ from ._ators import (
     create_ators_specialized_alias as _create_ators_specialized_alias,
     create_ators_subclass as _create_ators_subclass,
     drop_class_info as _drop_class_info,
+    get_ators_abstract_methods as _get_ators_abstract_methods,
     get_ators_args as _get_ators_args,
     get_ators_frozen_flag as _get_ators_frozen_flag,
     get_ators_origin as _get_origin,
@@ -81,6 +82,10 @@ class AtorsMeta(type):
 
     def __call__(self, *args, **kwds):
         return _maybe_freeze_instance_after_call(super().__call__(*args, **kwds))
+
+    @property
+    def __abstractmethods__(cls) -> frozenset:
+        return _get_ators_abstract_methods(cls)
 
     @property
     def __ators_frozen__(cls) -> bool:

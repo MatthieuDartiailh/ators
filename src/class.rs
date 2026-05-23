@@ -21,8 +21,8 @@ pub use self::base::{
 pub use self::generic::create_ators_specialized_subclass;
 pub use self::info::{
     MembersByNameMapping, PicklePolicy, create_ators_specialized_alias, drop_class_info,
-    get_ators_args, get_ators_frozen_flag, get_ators_init_member_names, get_ators_members_by_name,
-    get_ators_origin, get_ators_specific_member_names, get_ators_type_params,
-    get_tracked_class_info_size,
+    get_ators_abstract_methods, get_ators_args, get_ators_frozen_flag, get_ators_init_member_names,
+    get_ators_members_by_name, get_ators_origin, get_ators_specific_member_names,
+    get_ators_type_params, get_tracked_class_info_size,
 };
 pub use self::meta::create_ators_subclass;
