@@ -7,16 +7,19 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{
+    class::base::{
         AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, notify_member_change,
         replace_slot, set_slot,
     },
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern, pyclass,
-    pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
+    Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
+    intern, pyclass, pymethods,
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
+        PyString, PyTuple, PyTupleMethods,
+    },
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -153,6 +156,10 @@ impl Member {
 
     pub fn validator(&self) -> &Validator {
         &self.validator
+    }
+
+    pub fn has_default(&self) -> bool {
+        !matches!(self.default, DefaultBehavior::NoDefault {})
     }
 
     pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
@@ -444,7 +451,7 @@ impl Member {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
 
         // Only read the current slot value when pre_setattr actually uses it.
         // The frozen check is deferred to replace_slot to avoid an extra
@@ -495,7 +502,7 @@ impl Member {
         self_: PyRef<'py, Member>,
         object: Bound<'py, PyAny>,
     ) -> pyo3::PyResult<()> {
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
         self_.delattr.del(&self_, object)
     }
 
@@ -506,6 +513,23 @@ impl Member {
             }
         }
         Ok(())
+    }
+
+    pub fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyAny>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = cls.py();
+        // Wrap the subscription item in a tuple for GenericAlias.  Arity
+        // validation (exactly 2 args) is deferred to the metaclass so that
+        // wrong-arity annotations inside a class body produce a clear error
+        // from the annotation-coerce pairing check rather than being silently
+        // absorbed by Python 3.14's lazy annotation evaluator.
+        let alias_args = match item.cast::<PyTuple>() {
+            Ok(t) => t.to_owned(),
+            Err(_) => PyTuple::new(py, [item])?,
+        };
+        Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
     }
 
     // The class is frozen so another mutable object must be involved to
@@ -591,13 +615,56 @@ impl Member {
     }
 }
 
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___class_getitem__(
+        py: ::pyo3::Python<'_>,
+        cls: *mut ::pyo3::ffi::PyObject,
+        args: *mut ::pyo3::ffi::PyObject,
+        _kwargs: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+        // With METH_VARARGS | METH_CLASS, `args` is a 1-tuple containing the
+        // subscription item passed to __class_getitem__.  For Member[T1, T2],
+        // that item is the tuple (T1, T2); for Member[T1] it is just T1.
+        let args_any = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, args) };
+        let args_tuple = args_any
+            .cast_into::<PyTuple>()
+            .expect("CPython always provides a PyTuple for METH_VARARGS");
+        let item = args_tuple.get_item(0).map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "Member.__class_getitem__() takes exactly 1 argument",
+            )
+        })?;
+        let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
+        Member::__class_getitem__(&cls_bound, &item).map(|alias| alias.into_ptr())
+    }
+}
+
 #[allow(unknown_lints, non_local_definitions)]
 impl ::pyo3::impl_::pyclass::PyMethods<Member>
     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
 {
     fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
         static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
-            methods: &[],
+            methods: &[::pyo3::impl_::pymethods::PyMethodDefType::Method(
+                ::pyo3::impl_::pymethods::PyMethodDef::cfunction_with_keywords(
+                    c"__class_getitem__",
+                    {
+                        struct ClassGetItemDef;
+                        impl
+                            ::pyo3::impl_::trampoline::MethodDef<
+                                ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
+                            > for ClassGetItemDef
+                        {
+                            const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
+                                Member::__pymethod___class_getitem__;
+                        }
+                        ::pyo3::impl_::trampoline::cfunction_with_keywords::<ClassGetItemDef>
+                    },
+                    c"",
+                )
+                .flags(::pyo3::ffi::METH_CLASS),
+            )],
             slots: &[
                 ::pyo3::ffi::PyType_Slot {
                     slot: ::pyo3::ffi::Py_tp_descr_get,
@@ -707,6 +774,20 @@ impl Member {
     }
 }
 
+/// Parameter type for `member(default=...)`, distinguishing "not provided"
+/// (Missing) from "explicitly provided as any value including `None`" (Value).
+pub(crate) enum MemberDefaultArg<'py> {
+    Missing,
+    Value(Bound<'py, PyAny>),
+}
+
+impl<'py> FromPyObject<'_, 'py> for MemberDefaultArg<'py> {
+    type Error = pyo3::PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        Ok(MemberDefaultArg::Value(ob.to_owned()))
+    }
+}
+
 #[pyclass(module = "ators._ators", name = "member", from_py_object)]
 #[derive(Debug, Default)]
 /// Builder class for Member that allows for ergonomic specification of member
@@ -742,12 +823,36 @@ pub struct MemberBuilder {
 #[pymethods]
 impl MemberBuilder {
     #[new]
-    #[pyo3(signature = (*, init = None))]
-    pub fn py_new(init: Option<bool>) -> Self {
-        MemberBuilder {
+    #[allow(private_interfaces)] // MemberDefaultArg is an internal pyo3 extraction type, not a public Rust API
+    #[pyo3(signature = (*, init = None, default = MemberDefaultArg::Missing, default_factory = None))]
+    pub fn py_new<'py>(
+        _py: Python<'py>,
+        init: Option<bool>,
+        default: MemberDefaultArg<'py>,
+        default_factory: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if !matches!(default, MemberDefaultArg::Missing) && default_factory.is_some() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot specify both 'default' and 'default_factory' in member()",
+            ));
+        }
+        let mut builder = MemberBuilder {
             init,
             ..Default::default()
+        };
+        if let MemberDefaultArg::Value(v) = default {
+            if v.cast::<DefaultBehavior>().is_ok() {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "'default' only accepts plain values; \
+                     use .default(DefaultBehavior.*) for advanced behaviors",
+                ));
+            }
+            builder.default = Some(DefaultBehavior::Static { value: v.unbind() });
         }
+        if let Some(factory) = default_factory {
+            builder.default = Some(default::call_default_from_factory(factory)?);
+        }
+        Ok(builder)
     }
 
     pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {

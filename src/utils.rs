@@ -5,14 +5,49 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+use crate::class::base::AtorsBase;
 /// Utility functions and structures used across the codebase, not specific to any
 /// particular aspect of the library.
+use crate::class::info::get_class_info;
 use pyo3::{
     Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
     pymethods,
+    sync::PyOnceLock,
     types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
 };
 use std::collections::HashMap;
+
+// XXX  use module state to store those types
+static TYPING_ANY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static TYPING_TYPEVAR_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+#[inline]
+fn get_typing_any_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType> {
+    TYPING_ANY_TYPE
+        .import(py, "typing", "Any")
+        .expect("typing.Any should always be present in the typing module.")
+        .cast::<PyType>()
+        .expect("typing.Any is a type and should be a PyType.")
+}
+
+#[inline]
+fn get_typing_typevar_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType> {
+    TYPING_TYPEVAR_TYPE
+        .import(py, "typing", "TypeVar")
+        .expect("typing.TypeVar should always be present in the typing module.")
+        .cast::<PyType>()
+        .expect("typing.TypeVar is a type and should be a PyType.")
+}
+
+/// Return `true` when `param` is `typing.Any`.
+pub(crate) fn is_any_type(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(param.is(get_typing_any_type(param.py())))
+}
+
+/// Return `true` when `param` is `typing.TypeVar`.
+pub(crate) fn is_type_var(param: &Bound<'_, PyAny>) -> PyResult<bool> {
+    param.is_instance(get_typing_typevar_type(param.py()))
+}
 
 /// Helper function to set the cause of a PyErr and return it in one step.
 #[cold]
@@ -108,9 +143,9 @@ pub(crate) use create_behavior_callable_checker;
 // This approach allows to implement an equivalent of custom constructor
 // for enums
 
-#[allow(dead_code)]
 /// Wrapper allowing to hash and compare for eq Py<PyType> for use in HashMap
 /// while guaranteeing that the underlying Python type remain valid.
+#[allow(dead_code)]
 struct PyTypeWrap {
     type_: Py<PyType>,
     id: isize,
@@ -149,6 +184,7 @@ pub struct GenericAttributesMap {
 }
 
 impl GenericAttributesMap {
+    /// Create an empty generic-attributes registry.
     pub fn new(py: Python<'_>) -> Py<GenericAttributesMap> {
         Py::new(
             py,
@@ -159,6 +195,7 @@ impl GenericAttributesMap {
         .expect("GenericAttributesMap creation cannot fail.")
     }
 
+    /// Return registered attribute names for `type_`, if any.
     pub fn get_attributes(&self, type_: &Bound<'_, PyType>) -> Option<&Vec<String>> {
         self.map.get(&type_.into())
     }
@@ -175,10 +212,6 @@ impl GenericAttributesMap {
         Ok(())
     }
 }
-
-use crate::core::AtorsBase;
-
-use crate::meta::ATORS_FROZEN;
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
 #[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]
@@ -209,6 +242,7 @@ pub struct TypeMutabilityMap {
 }
 
 impl TypeMutabilityMap {
+    /// Create a mutability registry pre-populated with common immutable builtins.
     pub fn new(py: Python<'_>) -> Py<TypeMutabilityMap> {
         let mut map = HashMap::default();
 
@@ -254,13 +288,13 @@ impl TypeMutabilityMap {
         Ok(())
     }
 
+    /// Return mutability of a Python type based on Ators/dataclass rules and registry data.
     pub fn get_type_mutability<'py>(&self, type_: &Bound<'py, PyType>) -> Mutability {
         let py = type_.py();
         if let Ok(t) = type_.cast::<AtorsBase>() {
-            if t.getattr(ATORS_FROZEN)
-                .expect("Subclass of AtorsBase must have __ators_frozen__ set")
-                .extract::<bool>()
-                .expect("__ators_frozen__ should always be a bool")
+            if get_class_info(&t.get_type())
+                .expect("Subclass of AtorsBase must have class info")
+                .frozen()
             {
                 Mutability::Immutable
             } else {
@@ -285,6 +319,7 @@ impl TypeMutabilityMap {
         }
     }
 
+    /// Return mutability of a concrete object, including instance-level inspection hooks.
     pub fn get_object_mutability<'py>(&self, obj: &Bound<'py, PyAny>) -> PyResult<Mutability> {
         let obj_type = obj.get_type();
         let py = obj.py();
@@ -293,7 +328,7 @@ impl TypeMutabilityMap {
         if obj_type.is_subclass(&ators_base_type)? {
             // For Ators objects, check if frozen via the is_frozen pyfunction
             let ators_obj = obj.cast::<AtorsBase>()?;
-            if crate::core::is_frozen(ators_obj) {
+            if crate::class::base::is_frozen(ators_obj) {
                 Ok(Mutability::Immutable)
             } else {
                 Ok(Mutability::Mutable)

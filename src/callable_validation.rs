@@ -192,13 +192,9 @@ fn compile_plan<'py>(
 
 fn aggregate_error(issues: &[(String, pyo3::PyErr)]) -> pyo3::PyErr {
     let mut details = String::new();
-    for (idx, (location, err)) in issues.iter().enumerate() {
+    for (location, err) in issues {
         let line = format!("- {location}: {err}\n");
-        if idx == 0 {
-            details.push_str(&line);
-        } else {
-            details.push_str(&line);
-        }
+        details.push_str(&line);
     }
     pyo3::exceptions::PyTypeError::new_err(format!(
         "Callable validation failed with {} issue(s):\n{}",

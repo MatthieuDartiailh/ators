@@ -9,7 +9,7 @@
 
 import pytest
 
-from ators import Ators, member
+from ators import Ators, get_members, member
 
 
 def test_public_member_init_default_true():
@@ -28,7 +28,7 @@ def test_private_member_init_default_false():
     class A(Ators):
         _x: int
 
-    with pytest.raises(TypeError, match="not marked as init"):
+    with pytest.raises(TypeError, match="non-init member"):
         A(_x=1)
 
 
@@ -38,7 +38,7 @@ def test_explicit_init_false():
     class A(Ators):
         x: int = member(init=False)
 
-    with pytest.raises(TypeError, match="not marked as init"):
+    with pytest.raises(TypeError, match="non-init member"):
         A(x=1)
 
 
@@ -62,17 +62,18 @@ def test_init_true_accepted_in_init():
     assert a.x == 42
 
 
-def test_ators_members_exposes_init_flag():
-    """__ators_members__ exposes the init flag on every member."""
+def test_get_members_exposes_init_flag():
+    """get_members exposes the init flag on every member."""
 
     class A(Ators):
         x: int
         y: int = member(init=False)
         _z: int
 
-    assert A.__ators_members__["x"].init is True
-    assert A.__ators_members__["y"].init is False
-    assert A.__ators_members__["_z"].init is False
+    members = get_members(A)
+    assert members["x"].init is True
+    assert members["y"].init is False
+    assert members["_z"].init is False
 
 
 def test_inherited_member_init_preserved():
@@ -87,8 +88,8 @@ def test_inherited_member_init_preserved():
 
     a = Child(x=10)
     assert a.x == 10
-    with pytest.raises(TypeError, match="not marked as init"):
-        Child(y=5)
+    with pytest.raises(TypeError, match="non-init member"):
+        Child(x=10, y=5)
 
 
 def test_subclass_can_override_init_flag():
@@ -102,5 +103,5 @@ def test_subclass_can_override_init_flag():
 
     b = Base(x=1)
     assert b.x == 1
-    with pytest.raises(TypeError, match="not marked as init"):
+    with pytest.raises(TypeError, match="non-init member"):
         Child(x=1)

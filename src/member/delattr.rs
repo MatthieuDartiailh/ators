@@ -23,11 +23,11 @@ impl DelattrBehavior {
     pub(crate) fn del<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
-        object: &Bound<'py, crate::core::AtorsBase>,
+        object: &Bound<'py, crate::class::base::AtorsBase>,
     ) -> PyResult<()> {
         match self {
             Self::Slot {} => {
-                crate::core::del_slot(object, member.index());
+                crate::class::base::del_slot(object, member.index());
                 Ok(())
             }
             Self::Undeletable {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(

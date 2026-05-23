@@ -273,6 +273,16 @@ def test_generic_specialization_is_cached_class():
     assert int_box is not GenericBox[str]
 
 
+def test_specialized_class_exposes_generic_metadata():
+    import typing
+
+    int_box = GenericBox[int]
+    assert int_box.__origin__ is GenericBox
+    assert int_box.__args__ == (int,)
+    assert typing.get_origin(int_box) is GenericBox
+    assert typing.get_args(int_box) == (int,)
+
+
 def test_full_and_stepwise_specialization_are_identical():
     U = TypeVar("U")
     direct = GenericPair[int, str]

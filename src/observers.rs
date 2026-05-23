@@ -12,7 +12,7 @@ use pyo3::{
 };
 use std::{cell::UnsafeCell, collections::HashMap};
 
-use crate::core::AtorsBase;
+use crate::class::base::AtorsBase;
 
 #[pyclass(module = "ators._ators", frozen, get_all)]
 #[derive(Debug)]

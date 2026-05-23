@@ -15,20 +15,16 @@ on:
     workflow_dispatch:
 
 jobs:
-    benchmarks:
+    codspeed-benchmarks:
         permissions:
             contents: read # required for actions/checkout
             id-token: write # required for OIDC authentication with CodSpeed
-        runs-on: ${{ matrix.os }}
-        strategy:
-            matrix:
-                os: [ubuntu-latest]
-                python-version: ["3.14"]
+        runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v6
             - uses: actions/setup-python@v6
               with:
-                  python-version: ${{ matrix.python-version }}
+                  python-version: "3.14"
             - name: Set up Rust toolchain
               uses: actions-rust-lang/setup-rust-toolchain@v1
             - name: Install dependencies
@@ -39,4 +35,27 @@ jobs:
               uses: CodSpeedHQ/action@v4
               with:
                   mode: simulation
-                  run: pytest benchmarks/ -v --codspeed
+                  run: pytest benchmarks/ -v --codspeed -W error
+    # This job runs benchmarks without Codspeed to ensure they run correctly in
+    # free-threaded Python (3.14t) where the GIL is disabled. Codspeed doesnot
+    # support matrix builds, so we run it in a separate job.
+    benchmarks:
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                os: [ubuntu-latest]
+                python-version: ["3.14t"]
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: ${{ matrix.python-version }}
+            - name: Set up Rust toolchain
+              uses: actions-rust-lang/setup-rust-toolchain@v1
+            - name: Install dependencies
+              run: |
+                  pip install -U pip
+                  pip install . --group bench
+            - name: Run benchmarks without Codspeed
+              run: |
+                pytest benchmarks/ -v -W error
