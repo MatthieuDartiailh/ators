@@ -114,15 +114,15 @@ class _DictDictValueClass(Ators):
     mapping: dict[str, dict[str, int]]
 
 
-class _NotifyingListClass(Ators):
+class _NotifyingListClass(Ators, observable=True):
     items: NotifyingList[int]
 
 
-class _ListNotifyingListClass(Ators):
+class _ListNotifyingListClass(Ators, observable=True):
     items: list[NotifyingList[int]]
 
 
-class _DictNotifyingListClass(Ators):
+class _DictNotifyingListClass(Ators, observable=True):
     mapping: dict[str, NotifyingList[int]]
 
 
