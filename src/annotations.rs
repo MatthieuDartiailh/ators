@@ -385,7 +385,12 @@ pub fn build_validator_from_annotation<'py>(
                 (None, false)
             };
             Ok((
-                Validator::new(TypeValidator::NotifyingList { item: item_val }, None, None, None),
+                Validator::new(
+                    TypeValidator::NotifyingList { item: item_val },
+                    None,
+                    None,
+                    None,
+                ),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.union_) {

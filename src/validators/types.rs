@@ -833,15 +833,14 @@ impl TypeValidator {
                     validation_error!("list", name, object, value)
                 }
             }
-            Self::NotifyingList {
-                item: Some(item),
-            } => {
+            Self::NotifyingList { item: Some(item) } => {
                 if let Ok(ators_nlist) = value.cast::<crate::containers::NotifyingList>()
                     && ators_nlist.get().matches_assignment_context(name, object)
                 {
-                    return Ok(
-                        crate::containers::NotifyingList::clone_for_assignment(ators_nlist)?.into_any(),
-                    );
+                    return Ok(crate::containers::NotifyingList::clone_for_assignment(
+                        ators_nlist,
+                    )?
+                    .into_any());
                 }
                 if let Ok(list) = value.cast::<pyo3::types::PyList>() {
                     let py = value.py();
