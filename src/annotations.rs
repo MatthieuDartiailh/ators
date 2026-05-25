@@ -113,6 +113,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
 /// possible to optimize validation and behavior definition. The returned
 /// ValidatorBuildInfo contains information about the built validator that may
 /// be useful to configure the member builder or the behaviors.
+#[allow(clippy::too_many_arguments)]
 pub fn build_validator_from_annotation<'py>(
     name: &Bound<'py, PyString>,
     ann: &Bound<'py, PyAny>,
@@ -121,6 +122,7 @@ pub fn build_validator_from_annotation<'py>(
     ctx_provider: Option<&Bound<'py, PyAny>>,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
     is_observable: bool,
+    is_nested: bool,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
     // Ators generic specializations can be represented as GenericAlias wrappers
     // on the Python side; unwrap them to the canonical specialized class for
@@ -146,6 +148,7 @@ pub fn build_validator_from_annotation<'py>(
                         type_containers,
                         name,
                         typevar_bindings,
+                        is_nested,
                     ),
                 },
                 None,
@@ -168,6 +171,7 @@ pub fn build_validator_from_annotation<'py>(
             ctx_provider,
             typevar_bindings,
             is_observable,
+            is_nested,
         );
     }
 
@@ -213,6 +217,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 Ok((
                     Validator::new(
@@ -240,6 +245,7 @@ pub fn build_validator_from_annotation<'py>(
                         ctx_provider,
                         typevar_bindings,
                         is_observable,
+                        true,
                     )?;
                     requires_owner = requires_owner || item_info.requires_owner;
                     items.push(item_validator);
@@ -259,6 +265,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -286,6 +293,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -308,6 +316,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -330,6 +339,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 let (val_validator, val_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-value")).cast()?,
@@ -339,6 +349,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 (
                     Some((
@@ -367,6 +378,11 @@ pub fn build_validator_from_annotation<'py>(
                     "NotifyingList can only be used in observable classes",
                 ));
             }
+            if is_nested {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "NotifyingList can only be used as a top-level annotation, not inside a container",
+                ));
+            }
             let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
                 let (item_validator, item_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-item")).cast()?,
@@ -376,6 +392,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -407,6 +424,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    true,
                 )?;
                 requires_owner = requires_owner || info.requires_owner;
                 members.push(validator);
@@ -442,6 +460,7 @@ pub fn build_validator_from_annotation<'py>(
                         ctx_provider,
                         typevar_bindings,
                         is_observable,
+                        true,
                     )?;
                     requires_owner = requires_owner || attr_info.requires_owner;
                     attributes.push((attr_name_str, attr_validator));
@@ -497,6 +516,7 @@ pub fn build_validator_from_annotation<'py>(
                 ctx_provider,
                 typevar_bindings,
                 is_observable,
+                is_nested,
             );
         }
 
@@ -517,6 +537,7 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                     is_observable,
+                    is_nested,
                 )?;
                 requires_owner = requires_owner || info.requires_owner;
                 members.push(validator);
@@ -537,6 +558,7 @@ pub fn build_validator_from_annotation<'py>(
                 ctx_provider,
                 typevar_bindings,
                 is_observable,
+                is_nested,
             );
         }
 
@@ -555,6 +577,7 @@ pub fn build_validator_from_annotation<'py>(
             ctx_provider,
             typevar_bindings,
             is_observable,
+            is_nested,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok((
@@ -699,6 +722,7 @@ fn configure_member_builder_from_annotation<'py>(
             .map(|f| f.bind(name.py())),
         typevar_bindings,
         is_observable,
+        false,
     ) {
         Ok(v) => Ok(v),
         Err(err) => Err(err_with_cause(
