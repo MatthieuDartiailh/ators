@@ -132,3 +132,33 @@ def test_notifying_list_forbidden_in_non_observable_class():
 
         class _NonObservable(Ators, observable=False):
             items: NotifyingList[int] = member()
+
+
+def test_notifying_list_forbidden_inside_list():
+    """NotifyingList cannot be nested inside a list annotation."""
+    with pytest.raises(
+        TypeError, match="NotifyingList can only be used as a top-level annotation"
+    ):
+
+        class _Nested(Ators, observable=True):
+            items: list[NotifyingList[int]] = member()
+
+
+def test_notifying_list_forbidden_inside_dict_value():
+    """NotifyingList cannot be nested as a dict value annotation."""
+    with pytest.raises(
+        TypeError, match="NotifyingList can only be used as a top-level annotation"
+    ):
+
+        class _Nested(Ators, observable=True):
+            mapping: dict[str, NotifyingList[int]] = member()
+
+
+def test_notifying_list_forbidden_inside_tuple():
+    """NotifyingList cannot be nested inside a tuple annotation."""
+    with pytest.raises(
+        TypeError, match="NotifyingList can only be used as a top-level annotation"
+    ):
+
+        class _Nested(Ators, observable=True):
+            items: tuple[NotifyingList[int], ...] = member()
