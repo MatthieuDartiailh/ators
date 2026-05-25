@@ -133,10 +133,10 @@ pub struct NotifyingListBatchNotificationsContext {
 impl NotifyingListBatchNotificationsContext {
     pub fn __enter__<'py>(
         self_: &Bound<'py, NotifyingListBatchNotificationsContext>,
-    ) -> Bound<'py, NotifyingListBatchNotificationsContext> {
+    ) -> Bound<'py, NotifyingList> {
         let notifying_list = self_.get().notifying_list.bind(self_.py());
         notifying_list.get().begin_batch_inner(notifying_list);
-        Bound::clone(self_)
+        Bound::clone(notifying_list)
     }
 
     pub fn __exit__(
