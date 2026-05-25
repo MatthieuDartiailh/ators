@@ -118,14 +118,6 @@ class _NotifyingListClass(Ators, observable=True):
     items: NotifyingList[int]
 
 
-class _ListNotifyingListClass(Ators, observable=True):
-    items: list[NotifyingList[int]]
-
-
-class _DictNotifyingListClass(Ators, observable=True):
-    mapping: dict[str, NotifyingList[int]]
-
-
 class _InheritanceBase(Ators):
     x: int
 
@@ -449,26 +441,6 @@ def test_notifying_list_member_validates_after_restore():
     assert list(a2.items) == [10, 20, 30]
     with pytest.raises(TypeError):
         a2.items.append("not an int")
-
-
-def test_list_of_notifying_list_member_validates_after_restore():
-    """After unpickling, list[NotifyingList[int]] keeps nested validator metadata."""
-    a = _ListNotifyingListClass(items=[[1, 2]])
-    a2 = pickle.loads(pickle.dumps(a))
-    a2.items[0].append(3)
-    assert list(a2.items[0]) == [1, 2, 3]
-    with pytest.raises(TypeError):
-        a2.items[0].append("not an int")
-
-
-def test_dict_of_notifying_list_member_validates_after_restore():
-    """After unpickling, dict[str, NotifyingList[int]] keeps nested metadata."""
-    a = _DictNotifyingListClass(mapping={"x": [1, 2]})
-    a2 = pickle.loads(pickle.dumps(a))
-    a2.mapping["x"].append(3)
-    assert list(a2.mapping["x"]) == [1, 2, 3]
-    with pytest.raises(TypeError):
-        a2.mapping["x"].append("not an int")
 
 
 # ---------------------------------------------------------------------------

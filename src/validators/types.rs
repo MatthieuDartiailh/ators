@@ -151,6 +151,7 @@ pub struct LateResolvedValidator {
     type_containers: i64,
     name: Py<PyString>,
     owner: Option<Py<PyAny>>,
+    is_nested: bool,
 }
 
 #[pymethods]
@@ -162,6 +163,7 @@ impl LateResolvedValidator {
         type_containers: i64,
         name: &Bound<'py, PyString>,
         typevar_bindings: Option<&Bound<'py, PyDict>>,
+        is_nested: bool,
     ) -> Self {
         Self {
             validator_cell: OnceLock::new(),
@@ -171,6 +173,7 @@ impl LateResolvedValidator {
             type_containers,
             name: name.clone().unbind(),
             owner: None,
+            is_nested,
         }
     }
 
@@ -246,6 +249,7 @@ impl LateResolvedValidator {
                     None,
                     self.typevar_bindings.as_ref().map(|tb| tb.bind(py)),
                     is_observable,
+                    self.is_nested,
                 )?
                 .0
                 .type_validator,
@@ -280,6 +284,7 @@ impl LateResolvedValidator {
             type_containers: self.type_containers,
             name: self.name.clone_ref(py),
             owner: Some(owner.clone().unbind()),
+            is_nested: self.is_nested,
         }
     }
 }
@@ -294,6 +299,7 @@ impl Clone for LateResolvedValidator {
             type_containers: self.type_containers,
             name: self.name.clone_ref(py),
             owner: self.owner.as_ref().map(|o| o.clone_ref(py)),
+            is_nested: self.is_nested,
         })
     }
 }
