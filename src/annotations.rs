@@ -688,7 +688,10 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     type_containers: i64,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
     validate_attr: bool,
-) -> PyResult<(HashMap<String, MemberBuilder>, HashMap<String, EventBuilder>)> {
+) -> PyResult<(
+    HashMap<String, MemberBuilder>,
+    HashMap<String, EventBuilder>,
+)> {
     let py = name.py();
 
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
@@ -956,5 +959,3 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
 
     Ok((member_builders, event_builders))
 }
-
-

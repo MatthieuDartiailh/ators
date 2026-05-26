@@ -11,7 +11,6 @@ import pytest
 
 from ators import (
     Ators,
-    AtorsChange,
     Event,
     EventCustomizationTool,
     disable_notifications,
@@ -25,7 +24,6 @@ from ators import (
     observe,
     unobserve,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. Class declaration tests
@@ -505,4 +503,3 @@ def test_get_event_customization_tool_outside_init_subclass_raises():
 
     with pytest.raises(RuntimeError, match="__init_subclass__"):
         get_event_customization_tool(A)
-

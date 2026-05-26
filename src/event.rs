@@ -12,10 +12,7 @@ use crate::{
 };
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, pyclass, pymethods,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyString, PyTuple,
-        PyType,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyString, PyTuple, PyType},
 };
 use std::{clone::Clone, collections::HashMap};
 
