@@ -133,7 +133,9 @@ def test_notifying_list_forbidden_in_non_observable_class():
         class _NonObservable(Ators, observable=False):
             items: NotifyingList[int] = member()
 
-    assert "NotifyingList can only be used in observable classes" in str(exc_info.value.__cause__)
+    assert "NotifyingList can only be used in observable classes" in str(
+        exc_info.value.__cause__.__cause__
+    )
 
 
 def test_notifying_list_forbidden_inside_list():
@@ -143,7 +145,9 @@ def test_notifying_list_forbidden_inside_list():
         class _Nested(Ators, observable=True):
             items: list[NotifyingList[int]] = member()
 
-    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
+    assert "NotifyingList can only be used as a top-level annotation" in str(
+        exc_info.value.__cause__.__cause__
+    )
 
 
 def test_notifying_list_forbidden_inside_dict_value():
@@ -153,7 +157,9 @@ def test_notifying_list_forbidden_inside_dict_value():
         class _Nested(Ators, observable=True):
             mapping: dict[str, NotifyingList[int]] = member()
 
-    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
+    assert "NotifyingList can only be used as a top-level annotation" in str(
+        exc_info.value.__cause__.__cause__
+    )
 
 
 def test_notifying_list_forbidden_inside_tuple():
@@ -163,4 +169,6 @@ def test_notifying_list_forbidden_inside_tuple():
         class _Nested(Ators, observable=True):
             items: tuple[NotifyingList[int], ...] = member()
 
-    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
+    assert "NotifyingList can only be used as a top-level annotation" in str(
+        exc_info.value.__cause__.__cause__
+    )
