@@ -902,17 +902,13 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                 is_observable,
             )
             .map_err(|err| {
-                if err.is_instance_of::<pyo3::exceptions::PyTypeError>(py) {
-                    err
-                } else {
-                    err_with_cause(
-                        py,
-                        pyo3::exceptions::PyTypeError::new_err(format!(
-                            "Failed to configure Member {name} from annotation {ann:?}"
-                        )),
-                        err,
-                    )
-                }
+                err_with_cause(
+                    py,
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Failed to configure Member {name} from annotation {ann:?}"
+                    )),
+                    err,
+                )
             })?;
         } else {
             // When validate_attr=False, skip building type/value validators and

@@ -61,9 +61,9 @@ def test_notifying_list_context_manager_batches_operations():
 
     observe(obj, "items", changes.append)
 
-    with obj.items.batched_notifications() as items:
-        items.append(4)
-        items.append(5)
+    with obj.items.batched_notifications():
+        obj.items.append(4)
+        obj.items.append(5)
 
     assert len(changes) == 1
     assert isinstance(changes[0], ListChange)
@@ -128,37 +128,39 @@ def test_notifying_list_member_validates_after_pickle_restore():
 
 def test_notifying_list_forbidden_in_non_observable_class():
     """NotifyingList cannot be used in a non-observable class."""
-    with pytest.raises(TypeError, match="NotifyingList can only be used in observable classes"):
+    with pytest.raises(TypeError) as exc_info:
 
         class _NonObservable(Ators, observable=False):
             items: NotifyingList[int] = member()
 
+    assert "NotifyingList can only be used in observable classes" in str(exc_info.value.__cause__)
+
 
 def test_notifying_list_forbidden_inside_list():
     """NotifyingList cannot be nested inside a list annotation."""
-    with pytest.raises(
-        TypeError, match="NotifyingList can only be used as a top-level annotation"
-    ):
+    with pytest.raises(TypeError) as exc_info:
 
         class _Nested(Ators, observable=True):
             items: list[NotifyingList[int]] = member()
 
+    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
+
 
 def test_notifying_list_forbidden_inside_dict_value():
     """NotifyingList cannot be nested as a dict value annotation."""
-    with pytest.raises(
-        TypeError, match="NotifyingList can only be used as a top-level annotation"
-    ):
+    with pytest.raises(TypeError) as exc_info:
 
         class _Nested(Ators, observable=True):
             mapping: dict[str, NotifyingList[int]] = member()
 
+    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
+
 
 def test_notifying_list_forbidden_inside_tuple():
     """NotifyingList cannot be nested inside a tuple annotation."""
-    with pytest.raises(
-        TypeError, match="NotifyingList can only be used as a top-level annotation"
-    ):
+    with pytest.raises(TypeError) as exc_info:
 
         class _Nested(Ators, observable=True):
             items: tuple[NotifyingList[int], ...] = member()
+
+    assert "NotifyingList can only be used as a top-level annotation" in str(exc_info.value.__cause__)
