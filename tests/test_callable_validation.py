@@ -83,3 +83,29 @@ def test_strict_mode_fails_fast() -> None:
 
     with pytest.raises(TypeError):
         f("a", "b")  # type: ignore[arg-type]
+
+
+def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
+    @validated(aggregate_errors=True)
+    def f(*values: int, **mapping: int) -> int:
+        return sum(values) + sum(mapping.values())
+
+    with pytest.raises(TypeError) as exc:
+        f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
+
+    msg = str(exc.value)
+    assert "values[1]" in msg
+    assert "mapping.ko" in msg
+
+
+def test_validated_validate_return_false() -> None:
+    @validated(validate_return=False)
+    def f(x: int) -> int:
+        return str(x)  # type: ignore[return-value]
+
+    assert f(1) == "1"
+
+
+def test_validated_rejects_non_callable() -> None:
+    with pytest.raises(TypeError, match="validated can only be applied to callables"):
+        validated(1)  # type: ignore[arg-type]
