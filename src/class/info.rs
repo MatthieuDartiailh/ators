@@ -272,6 +272,13 @@ impl AtorsClassInfo {
         })
     }
 
+    pub(crate) fn with_events(self, events_by_name: HashMap<String, Py<Event>>) -> Self {
+        Self {
+            events_by_name,
+            ..self
+        }
+    }
+
     pub(crate) fn with_mutability(self, mutability: Option<ClassMutability>) -> Self {
         Self { mutability, ..self }
     }

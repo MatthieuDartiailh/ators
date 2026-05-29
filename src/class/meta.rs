@@ -768,6 +768,13 @@ pub fn create_ators_subclass<'py>(
     drop(tool); // release borrow before mutable access to class_info
 
     // Retrieve and clear the event customization tool and rebuild any customized events.
+    // We also track replacements in updated_events_by_name so that class_info reflects the
+    // customized descriptors (get_event / get_events read from class_info, not cls.__dict__).
+    let mut updated_events_by_name: HashMap<String, Py<Event>> = class_info
+        .events_by_name()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+        .collect();
     let mut event_tool = class_info.take_event_customizer().bind(py).borrow_mut();
     for (ename, mut eb) in event_tool.get_builders(py) {
         // Inherit from the existing event descriptor.
@@ -777,7 +784,9 @@ pub fn create_ators_subclass<'py>(
         eb.get_inherited_behavior_from_event(ee);
         let new_event = Bound::new(py, eb.build(&name)?)?;
         cls.setattr(&ename, Bound::clone(&new_event))?;
+        updated_events_by_name.insert(ename, new_event.unbind());
     }
+    drop(event_tool); // release borrow before proceeding
 
     // Determine class mutability based on member type validators
     let members_dict = &all_members;
@@ -860,6 +869,7 @@ pub fn create_ators_subclass<'py>(
 
     let final_class_info = class_info
         .with_members(py, updated_members_by_name)?
+        .with_events(updated_events_by_name)
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
 
