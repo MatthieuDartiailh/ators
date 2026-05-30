@@ -454,3 +454,21 @@ def test_ordered_dict_member_assignment_invalid_value_raises_with_context():
     obj = A(a=StdOrderedDict({"x": 1}))
     with pytest.raises(TypeError, match="member 'a'"):
         obj.a = StdOrderedDict({"x": "bad"})
+
+
+def test_ordered_dict_reassignment_to_other_member_still_validates():
+    """Assigning an AtorsOrderedDict to a different member re-validates (no fast-path bypass)."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        ints: OrderedDict[str, int]
+        strs: OrderedDict[str, str]
+
+    obj = A(ints=StdOrderedDict({"x": 1}), strs=StdOrderedDict({"y": "a"}))
+
+    # Assigning obj.ints (values are int) to the strs member (expects str values) must fail.
+    with pytest.raises(TypeError):
+        obj.strs = obj.ints  # type: ignore

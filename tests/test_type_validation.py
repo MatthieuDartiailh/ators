@@ -91,7 +91,15 @@ type MyInt = int
         (
             OrderedDict[str, int],
             [StdOrderedDict(), StdOrderedDict({"a": 1}), StdOrderedDict({"a": 1, "b": 2})],
-            [1, (), {"a": "1"}, {1: 1}, {"a": 1}],
+            [
+                1,
+                (),
+                {"a": "1"},
+                {1: 1},
+                {"a": 1},
+                StdOrderedDict({"a": "1"}),
+                StdOrderedDict({1: 1}),
+            ],
             False,
         ),
         # NOTE Not a type validation
