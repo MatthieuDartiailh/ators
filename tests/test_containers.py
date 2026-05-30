@@ -385,3 +385,72 @@ def test_ordered_dict_container_type():
     assert isinstance(obj.a, dict)
     assert isinstance(obj.a, StdOrderedDict)
     assert isinstance(obj.a, AtorsOrderedDict)
+
+
+def test_ordered_dict_direct_instantiation_raises():
+    """AtorsOrderedDict() cannot be instantiated directly."""
+    from ators import AtorsOrderedDict
+
+    with pytest.raises(TypeError, match="cannot be instantiated directly"):
+        AtorsOrderedDict()
+
+
+def test_unparameterized_ordered_dict_accepts_std_ordered_dict():
+    """Bare OrderedDict annotation accepts any StdOrderedDict (no type validation)."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators, AtorsOrderedDict
+
+    class A(Ators):
+        a: OrderedDict
+
+    obj = A(a=StdOrderedDict({"x": 1, 2: "y"}))
+    assert isinstance(obj.a, AtorsOrderedDict)
+    assert isinstance(obj.a, StdOrderedDict)
+    assert obj.a == {"x": 1, 2: "y"}
+
+
+def test_unparameterized_ordered_dict_rejects_plain_dict():
+    """Bare OrderedDict annotation rejects plain dict."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict
+
+    obj = A(a=StdOrderedDict())
+    with pytest.raises(TypeError):
+        obj.a = {"x": 1}
+
+
+def test_ordered_dict_member_assignment_invalid_key_raises_with_context():
+    """Assigning an OrderedDict with a bad key raises TypeError naming the member."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1}))
+    with pytest.raises(TypeError, match="member a"):
+        obj.a = StdOrderedDict({1: 2})
+
+
+def test_ordered_dict_member_assignment_invalid_value_raises_with_context():
+    """Assigning an OrderedDict with a bad value raises TypeError naming the member."""
+    from collections import OrderedDict as StdOrderedDict
+    from typing import OrderedDict
+
+    from ators import Ators
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1}))
+    with pytest.raises(TypeError, match="member a"):
+        obj.a = StdOrderedDict({"x": "bad"})
