@@ -20,6 +20,8 @@ use std::collections::HashMap;
 // XXX  use module state to store those types
 static TYPING_ANY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 static TYPING_TYPEVAR_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+#[cfg(Py_3_15)]
+static BUILTIN_FROZENDICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 #[inline]
 fn get_typing_any_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType> {
@@ -37,6 +39,17 @@ fn get_typing_typevar_type<'py>(py: pyo3::Python<'py>) -> &'py Bound<'py, PyType
         .expect("typing.TypeVar should always be present in the typing module.")
         .cast::<PyType>()
         .expect("typing.TypeVar is a type and should be a PyType.")
+}
+
+#[cfg(Py_3_15)]
+#[inline]
+pub(crate) fn get_builtin_frozendict_type<'py>(
+    py: pyo3::Python<'py>,
+) -> PyResult<&'py Bound<'py, PyType>> {
+    BUILTIN_FROZENDICT_TYPE
+        .import(py, "builtins", "frozendict")?
+        .cast::<PyType>()
+        .map_err(Into::into)
 }
 
 /// Return `true` when `param` is `typing.Any`.
@@ -257,6 +270,12 @@ impl TypeMutabilityMap {
         map.insert((&str_type).into(), MutabilitySpec::Immutable);
         let bytes_type = PyBytes::type_object(py);
         map.insert((&bytes_type).into(), MutabilitySpec::Immutable);
+        #[cfg(Py_3_15)]
+        {
+            let frozendict_type = get_builtin_frozendict_type(py)
+                .expect("builtins.frozendict should exist on Python 3.15+");
+            map.insert(frozendict_type.into(), MutabilitySpec::Immutable);
+        }
 
         Py::new(py, TypeMutabilityMap { map }).expect("TypeMutabilityMap creation cannot fail.")
     }

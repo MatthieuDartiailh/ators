@@ -12,6 +12,9 @@
 [dependencies]
   pyo3 = "0.28.3"
 
+[build-dependencies]
+  pyo3-build-config = { version = "0.28.3", features = ["resolve-config"] }
+
 [profile.release]
   opt-level        = 3
   strip            = "none"
