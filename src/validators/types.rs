@@ -14,11 +14,11 @@ use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::PyStringMethods;
 use pyo3::{
-    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python, intern,
+    Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    pyclass, pymethods,
+    intern, pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
@@ -936,7 +936,10 @@ impl TypeValidator {
                     && value
                         .getattr(intern!(py, "_core"))
                         .ok()
-                        .and_then(|c| c.cast_into::<crate::containers::AtorsOrderedDictCore>().ok())
+                        .and_then(|c| {
+                            c.cast_into::<crate::containers::AtorsOrderedDictCore>()
+                                .ok()
+                        })
                         .map(|c| c.get().matches_assignment_context(name, object))
                         .unwrap_or(false)
                 {
@@ -958,10 +961,8 @@ impl TypeValidator {
                     for (k, v) in value.cast::<PyDict>()?.iter() {
                         py_items.append(PyTuple::new(py, [&k, &v])?)?;
                     }
-                    return aod_type.call_method1(
-                        intern!(py, "_from_core_and_items"),
-                        (new_core, py_items),
-                    );
+                    return aod_type
+                        .call_method1(intern!(py, "_from_core_and_items"), (new_core, py_items));
                 }
 
                 // Only accept OrderedDict (and subclasses); plain dict is rejected.

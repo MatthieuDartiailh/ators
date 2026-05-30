@@ -73,10 +73,7 @@ impl AtorsOrderedDictCore {
 #[pymethods]
 impl AtorsOrderedDictCore {
     /// Validate and return a key.
-    pub fn validate_key<'py>(
-        &self,
-        key: Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    pub fn validate_key<'py>(&self, key: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = key.py();
         let m = self.member_name.as_deref();
         // Safety: object is only written during __clear__, which can only run after all
@@ -88,10 +85,7 @@ impl AtorsOrderedDictCore {
     }
 
     /// Validate and return a value.
-    pub fn validate_value<'py>(
-        &self,
-        value: Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    pub fn validate_value<'py>(&self, value: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();
         let m = self.member_name.as_deref();
         // Safety: same as validate_key.

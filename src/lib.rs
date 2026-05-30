@@ -62,12 +62,13 @@ pub(crate) fn get_ordered_dict_type<'py>(py: Python<'py>) -> Bound<'py, PyType> 
 }
 
 /// Cached Python `AtorsOrderedDict` class (set by `_register_ators_ordered_dict_type`).
-static ATORS_ORDERED_DICT_TYPE: std::sync::OnceLock<Py<pyo3::PyAny>> =
-    std::sync::OnceLock::new();
+static ATORS_ORDERED_DICT_TYPE: std::sync::OnceLock<Py<pyo3::PyAny>> = std::sync::OnceLock::new();
 
 /// Return the Python `AtorsOrderedDict` class, or an error if it has not been
 /// registered yet via `_register_ators_ordered_dict_type`.
-pub(crate) fn get_ators_ordered_dict_type(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+pub(crate) fn get_ators_ordered_dict_type(
+    py: Python<'_>,
+) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
     ATORS_ORDERED_DICT_TYPE
         .get()
         .map(|cls| cls.clone_ref(py).into_bound(py))
