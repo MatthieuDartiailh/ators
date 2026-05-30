@@ -377,6 +377,10 @@ macro_rules! validation_error {
     };
 }
 
+/// Combine mutability states for immutable container members.
+///
+/// Mutable wins over every other state, undecidable wins over immutable, and a
+/// container is immutable only when all nested parts are immutable.
 fn combine_mutability(lhs: Mutability, rhs: Mutability) -> Mutability {
     match (lhs, rhs) {
         (Mutability::Mutable, _) | (_, Mutability::Mutable) => Mutability::Mutable,
@@ -761,7 +765,9 @@ impl TypeValidator {
                                         }
                                         validated_items
                                             .as_ref()
-                                            .expect("validated_items was just initialized")
+                                            .expect(
+                                                "validated_items should have been initialized above",
+                                            )
                                             .set_item(k, v)?;
                                     }
                                 }

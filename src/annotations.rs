@@ -113,6 +113,10 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     })
 }
 
+/// Return `true` when the generic origin is the Python 3.15 builtin `frozendict`.
+///
+/// On Python versions older than 3.15 this always returns `false`, which keeps
+/// the `frozendict`-specific annotation path compiled out entirely.
 fn is_frozendict_origin(origin: &Bound<'_, PyAny>, tools: &TypeTools<'_>) -> bool {
     #[cfg(Py_3_15)]
     {
