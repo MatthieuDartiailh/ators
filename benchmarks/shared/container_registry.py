@@ -26,6 +26,7 @@ INITIAL_DICT = {"a": 1, "b": 2, "c": 3, "d": 4}
 INITIAL_ORDERED_DICT = OrderedDict([("a", 1), ("b", 2), ("c", 3), ("d", 4)])
 
 
+
 def _ensure_int(value: Any) -> None:
     if not isinstance(value, int):
         raise TypeError(f"Expected int, got {type(value).__name__}")
