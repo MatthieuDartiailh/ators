@@ -437,7 +437,7 @@ def test_ordered_dict_member_assignment_invalid_key_raises_with_context():
         a: OrderedDict[str, int]
 
     obj = A(a=StdOrderedDict({"x": 1}))
-    with pytest.raises(TypeError, match="member a"):
+    with pytest.raises(TypeError, match="member 'a'"):
         obj.a = StdOrderedDict({1: 2})
 
 
@@ -452,5 +452,5 @@ def test_ordered_dict_member_assignment_invalid_value_raises_with_context():
         a: OrderedDict[str, int]
 
     obj = A(a=StdOrderedDict({"x": 1}))
-    with pytest.raises(TypeError, match="member a"):
+    with pytest.raises(TypeError, match="member 'a'"):
         obj.a = StdOrderedDict({"x": "bad"})
