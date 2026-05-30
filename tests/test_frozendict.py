@@ -74,6 +74,17 @@ def test_frozendict_rejects_plain_dict_without_coercion():
         a.mapping = {"a": 1}
 
 
+def test_frozendict_empty_generic_alias_is_treated_as_untyped():
+    class A(Ators):
+        mapping: FROZENDICT[()] = member()
+
+    value = FROZENDICT({"a": 1})
+    a = A(mapping=value)
+
+    assert type(a.mapping) is FROZENDICT
+    assert a.mapping == value
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -90,6 +101,21 @@ def test_frozendict_coercion_accepts_mapping_like_inputs(value):
 
     assert type(a.mapping) is FROZENDICT
     assert a.mapping == FROZENDICT({"1": 2, "3": 4})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{1: "2"}, MappingLike({1: "2"}), [(1, "2")]],
+    ids=["dict", "mapping", "pairs"],
+)
+def test_frozendict_untyped_coercion_accepts_common_inputs(value):
+    class A(Ators):
+        mapping: Member[FROZENDICT[()], Any] = member().coerce()
+
+    a = A(mapping=value)
+
+    assert type(a.mapping) is FROZENDICT
+    assert a.mapping == FROZENDICT(value)
 
 
 def test_frozendict_nested_coercion_recursively_applies_validators():
@@ -117,12 +143,28 @@ def test_frozendict_validation_rebuilds_when_nested_values_are_copied():
     assert a.mapping["items"] is not items
 
 
+def test_frozendict_validation_rebuilds_after_unchanged_prefix():
+    class A(Ators):
+        mapping: FROZENDICT[str, int | list[int]] = member()
+
+    items = [1, 2]
+    value = FROZENDICT({"stable": 1, "items": items})
+    a = A(mapping=value)
+
+    assert type(a.mapping) is FROZENDICT
+    assert a.mapping == value
+    assert a.mapping is not value
+    assert a.mapping["stable"] == 1
+    assert a.mapping["items"] == items
+    assert a.mapping["items"] is not items
+
+
 def test_frozendict_is_compatible_with_frozen_classes():
     class TypedFrozen(Ators, frozen=True):
         mapping: FROZENDICT[str, int]
 
     class RawFrozen(Ators, frozen=True):
-        mapping: FROZENDICT
+        mapping: FROZENDICT[()]
 
     typed = TypedFrozen(mapping=FROZENDICT({"a": 1}))
     raw = RawFrozen(mapping=FROZENDICT({"a": 1}))
