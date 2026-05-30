@@ -26,7 +26,6 @@
     { include-group = "docs" },
     { include-group = "lint" },
     { include-group = "test" },
-    { include-group = "bench" },
   ]
 
 [build-system]
