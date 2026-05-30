@@ -7,16 +7,19 @@
 |----------------------------------------------------------------------------*/
 /// Core descriptor class defining Ators members and related utilities.
 use crate::{
-    core::{
+    class::base::{
         AtorsBase, ReplaceSlotOutcome, get_slot, get_slot_owned, is_frozen, notify_member_change,
         replace_slot, set_slot,
     },
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python, intern, pyclass,
-    pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyListMethods, PyModuleMethods, PyString},
+    Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
+    intern, pyclass, pymethods,
+    types::{
+        PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
+        PyString, PyTuple, PyTupleMethods,
+    },
 };
 use std::{clone::Clone, collections::HashMap};
 
@@ -89,6 +92,17 @@ pub struct Member {
     // Optional metadata dictionary that can be used to store arbitrary information
     // about the member.
     metadata: Option<HashMap<String, Py<PyAny>>>,
+    /// Whether this member participates in `__init__`.
+    /// Defaults to `True` for public names (not starting with `_`) and
+    /// `False` for private names, unless explicitly overridden via `member(init=...)`.
+    pub init: bool,
+    /// Whether this member's value is included in the pickle state.
+    /// Resolved at class creation time from the class-level `PicklePolicy` or from an
+    /// explicit `member().pickle(...)` call.
+    pub pickle: bool,
+    /// Whether the pickle behavior was explicitly configured by the user
+    /// through `member().pickle(...)`.
+    pub pickle_explicit: bool,
 }
 
 impl Member {
@@ -104,6 +118,27 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.clone(),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
+            pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
+        }
+    }
+
+    pub fn clone_with_pickle(&self, new_pickle: bool) -> Self {
+        Member {
+            name: self.name.clone(),
+            slot_index: self.slot_index,
+            pre_getattr: self.pre_getattr.clone(),
+            post_getattr: self.post_getattr.clone(),
+            pre_setattr: self.pre_setattr.clone(),
+            post_setattr: self.post_setattr.clone(),
+            delattr: self.delattr.clone(),
+            default: self.default.clone(),
+            validator: self.validator.clone(),
+            metadata: clone_metadata(&self.metadata),
+            init: self.init,
+            pickle: new_pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 
@@ -123,6 +158,10 @@ impl Member {
         &self.validator
     }
 
+    pub fn has_default(&self) -> bool {
+        !matches!(self.default, DefaultBehavior::NoDefault {})
+    }
+
     pub fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         Member {
             name: self.name.clone(),
@@ -135,21 +174,12 @@ impl Member {
             default: self.default.clone(),
             validator: self.validator.with_owner(py, owner),
             metadata: clone_metadata(&self.metadata),
+            init: self.init,
+            pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 }
-
-// FIXME determine pertinence when implementing pickling support
-// pub fn member_set_unpickled_value<'py>(
-//     member: &Bound<'py, Member>,
-//     object: &Bound<'py, AtorsBase>,
-//     value: &Bound<'py, PyAny>,
-// ) -> PyResult<()> {
-//     // XXX special case our own containers only
-//     // to restore valid member and object references
-//     set_slot(object, member.get().slot_index, value);
-//     Ok(())
-// }
 
 /// Helper function to apply the initial value coercer for a member if it exists.
 pub fn member_coerce_init<'py>(
@@ -421,7 +451,7 @@ impl Member {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
 
         // Only read the current slot value when pre_setattr actually uses it.
         // The frozen check is deferred to replace_slot to avoid an extra
@@ -472,7 +502,7 @@ impl Member {
         self_: PyRef<'py, Member>,
         object: Bound<'py, PyAny>,
     ) -> pyo3::PyResult<()> {
-        let object = object.cast::<crate::core::AtorsBase>()?;
+        let object = object.cast::<AtorsBase>()?;
         self_.delattr.del(&self_, object)
     }
 
@@ -483,6 +513,23 @@ impl Member {
             }
         }
         Ok(())
+    }
+
+    pub fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyAny>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = cls.py();
+        // Wrap the subscription item in a tuple for GenericAlias.  Arity
+        // validation (exactly 2 args) is deferred to the metaclass so that
+        // wrong-arity annotations inside a class body produce a clear error
+        // from the annotation-coerce pairing check rather than being silently
+        // absorbed by Python 3.14's lazy annotation evaluator.
+        let alias_args = match item.cast::<PyTuple>() {
+            Ok(t) => t.to_owned(),
+            Err(_) => PyTuple::new(py, [item])?,
+        };
+        Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
     }
 
     // The class is frozen so another mutable object must be involved to
@@ -568,13 +615,56 @@ impl Member {
     }
 }
 
+impl Member {
+    #[allow(non_snake_case)]
+    unsafe fn __pymethod___class_getitem__(
+        py: ::pyo3::Python<'_>,
+        cls: *mut ::pyo3::ffi::PyObject,
+        args: *mut ::pyo3::ffi::PyObject,
+        _kwargs: *mut ::pyo3::ffi::PyObject,
+    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
+        // With METH_VARARGS | METH_CLASS, `args` is a 1-tuple containing the
+        // subscription item passed to __class_getitem__.  For Member[T1, T2],
+        // that item is the tuple (T1, T2); for Member[T1] it is just T1.
+        let args_any = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, args) };
+        let args_tuple = args_any
+            .cast_into::<PyTuple>()
+            .expect("CPython always provides a PyTuple for METH_VARARGS");
+        let item = args_tuple.get_item(0).map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "Member.__class_getitem__() takes exactly 1 argument",
+            )
+        })?;
+        let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
+        Member::__class_getitem__(&cls_bound, &item).map(|alias| alias.into_ptr())
+    }
+}
+
 #[allow(unknown_lints, non_local_definitions)]
 impl ::pyo3::impl_::pyclass::PyMethods<Member>
     for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
 {
     fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
         static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
-            methods: &[],
+            methods: &[::pyo3::impl_::pymethods::PyMethodDefType::Method(
+                ::pyo3::impl_::pymethods::PyMethodDef::cfunction_with_keywords(
+                    c"__class_getitem__",
+                    {
+                        struct ClassGetItemDef;
+                        impl
+                            ::pyo3::impl_::trampoline::MethodDef<
+                                ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
+                            > for ClassGetItemDef
+                        {
+                            const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
+                                Member::__pymethod___class_getitem__;
+                        }
+                        ::pyo3::impl_::trampoline::cfunction_with_keywords::<ClassGetItemDef>
+                    },
+                    c"",
+                )
+                .flags(::pyo3::ffi::METH_CLASS),
+            )],
             slots: &[
                 ::pyo3::ffi::PyType_Slot {
                     slot: ::pyo3::ffi::Py_tp_descr_get,
@@ -684,6 +774,20 @@ impl Member {
     }
 }
 
+/// Parameter type for `member(default=...)`, distinguishing "not provided"
+/// (Missing) from "explicitly provided as any value including `None`" (Value).
+pub(crate) enum MemberDefaultArg<'py> {
+    Missing,
+    Value(Bound<'py, PyAny>),
+}
+
+impl<'py> FromPyObject<'_, 'py> for MemberDefaultArg<'py> {
+    type Error = pyo3::PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        Ok(MemberDefaultArg::Value(ob.to_owned()))
+    }
+}
+
 #[pyclass(module = "ators._ators", name = "member", from_py_object)]
 #[derive(Debug, Default)]
 /// Builder class for Member that allows for ergonomic specification of member
@@ -692,6 +796,8 @@ pub struct MemberBuilder {
     // `name` and `slot_index` are public for direct Rust-level access
     pub name: Option<String>,
     pub slot_index: Option<u8>,
+    /// User-specified init flag. None means "use the default" (resolved in the metaclass).
+    pub init: Option<bool>,
     pre_getattr: Option<PreGetattrBehavior>,
     post_getattr: Option<PostGetattrBehavior>,
     pre_setattr: Option<PreSetattrBehavior>,
@@ -704,7 +810,8 @@ pub struct MemberBuilder {
     coerce_init: Option<Coercer>,
     metadata: Option<HashMap<String, Py<PyAny>>>,
     forward_ref_environment_factory: Option<Py<PyAny>>,
-    pickle: bool,
+    pub pickle: Option<bool>,
+    pub pickle_explicit: bool,
     inherit: bool,
     // Only required when building a new member in the metaclass since the owner
     // should be scoped to the original class definition itself and not altered
@@ -715,10 +822,37 @@ pub struct MemberBuilder {
 
 #[pymethods]
 impl MemberBuilder {
-    // FIXME need to pass in args for customization (init)
     #[new]
-    pub fn py_new() -> Self {
-        MemberBuilder::default()
+    #[allow(private_interfaces)] // MemberDefaultArg is an internal pyo3 extraction type, not a public Rust API
+    #[pyo3(signature = (*, init = None, default = MemberDefaultArg::Missing, default_factory = None))]
+    pub fn py_new<'py>(
+        _py: Python<'py>,
+        init: Option<bool>,
+        default: MemberDefaultArg<'py>,
+        default_factory: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if !matches!(default, MemberDefaultArg::Missing) && default_factory.is_some() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Cannot specify both 'default' and 'default_factory' in member()",
+            ));
+        }
+        let mut builder = MemberBuilder {
+            init,
+            ..Default::default()
+        };
+        if let MemberDefaultArg::Value(v) = default {
+            if v.cast::<DefaultBehavior>().is_ok() {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "'default' only accepts plain values; \
+                     use .default(DefaultBehavior.*) for advanced behaviors",
+                ));
+            }
+            builder.default = Some(DefaultBehavior::Static { value: v.unbind() });
+        }
+        if let Some(factory) = default_factory {
+            builder.default = Some(default::call_default_from_factory(factory)?);
+        }
+        Ok(builder)
     }
 
     pub fn inherit<'py>(mut self_: PyRefMut<'py, Self>) -> PyResult<PyRefMut<'py, Self>> {
@@ -997,17 +1131,8 @@ impl MemberBuilder {
         mut self_: PyRefMut<'py, Self>,
         pickle: bool,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        {
-            let mself = &mut *self_;
-            if mself.pickle != pickle {
-                mself
-                    .multiple_settings
-                    .entry("pickle".into())
-                    .and_modify(|e| *e += 1)
-                    .or_insert(2);
-            }
-            mself.pickle = pickle;
-        }
+        self_.pickle = Some(pickle);
+        self_.pickle_explicit = true;
         Ok(self_)
     }
 
@@ -1128,11 +1253,6 @@ impl MemberBuilder {
     }
 
     #[inline]
-    pub fn pickle(&self) -> bool {
-        self.pickle
-    }
-
-    #[inline]
     pub fn metadata(&self) -> &Option<HashMap<String, Py<PyAny>>> {
         &self.metadata
     }
@@ -1172,17 +1292,14 @@ impl MemberBuilder {
         self.value_validators = Some(v);
     }
 
-    #[inline]
-    pub fn set_pickle(&mut self, new: bool) {
-        self.pickle = new;
-    }
-
     /// Populate unset behaviors from an existing `Member` instance.
     ///
     /// This copies any behavior or validator that is not already set on
     /// the builder from the provided `member`, enabling inheritance of
     /// default behaviors during customization.
     pub fn get_inherited_behavior_from_member(&mut self, member: &Member) {
+        // Copy init behavior
+        self.init = Some(member.init);
         if self.pre_getattr.is_none() {
             self.pre_getattr = Some(member.pre_getattr.clone());
         }
@@ -1216,6 +1333,10 @@ impl MemberBuilder {
         if self.metadata.is_none() {
             self.metadata = clone_metadata(&member.metadata);
         }
+        if self.pickle.is_none() {
+            self.pickle = Some(member.pickle);
+            self.pickle_explicit = member.pickle_explicit;
+        }
     }
 
     /// Finalize the builder and construct a `Member` descriptor.
@@ -1231,6 +1352,16 @@ impl MemberBuilder {
         let Some(index) = self.slot_index else {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "Cannot build member {name} of {type_name} without an assigned slot."
+            )));
+        };
+        let Some(init) = self.init else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without a resolved init flag."
+            )));
+        };
+        let Some(pickle) = self.pickle else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Cannot build member {name} of {type_name} without a resolved pickle flag."
             )));
         };
         let py = type_name.py();
@@ -1308,6 +1439,9 @@ impl MemberBuilder {
                 init_coercer: self.coerce_init,
             },
             metadata: self.metadata,
+            init,
+            pickle,
+            pickle_explicit: self.pickle_explicit,
         })
     }
 }
@@ -1336,9 +1470,11 @@ impl Clone for MemberBuilder {
                 }
             },
             inherit: self.inherit,
+            init: self.init,
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
             pickle: self.pickle,
+            pickle_explicit: self.pickle_explicit,
         }
     }
 }

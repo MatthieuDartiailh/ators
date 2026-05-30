@@ -17,26 +17,36 @@ and two frontends:
 - `test_set_untyped.py`: untyped `__set__` writes.
 - `test_set_untyped_alternating.py`: alternating untyped writes.
 - `test_get_descriptor.py`: class-level descriptor reads.
+- `test_init.py`: object construction (`no_validators` and `init_coercion` groups).
 - `validators/test_validation_*.py`: typed validation families.
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
 - `containers/test_dict.py`: Rust-backed dict method family.
+- `test_typecheck.py`: generic-aware `issubclass`/`isinstance` family.
 
 ### Shared pyperf entrypoints
 
 - `run_pyperf.py`: suite-wide case listing and execution frontend.
-- `bench_get_untyped.py`: convenience runner for `get_untyped`.
-- `bench_set_untyped.py`: convenience runner for `set_untyped`.
-- `bench_set_untyped_alternating.py`: convenience runner for alternating set.
-- `bench_get_descriptor.py`: convenience runner for `get_descriptor`.
-- `bench_validation.py`: convenience runner for validation families.
-- `containers/bench_list.py`: convenience runner for list method family.
-- `containers/bench_set.py`: convenience runner for set method family.
-- `containers/bench_dict.py`: convenience runner for dict method family.
 
 ## Running Benchmarks
 
-Activate the local environment first:
+If a `.venv/` directory is present, activate it first using the
+shell-appropriate activation command.
+
+Before running benchmarks, install the package with an optimized install step:
+
+```bash
+pip install .
+# or
+uv pip install .
+```
+
+Do not use `maturin develop` as the benchmark install step. It compiles the
+extension in debug mode, which is not suitable for benchmark measurements.
+
+For regular development (non-benchmark), `maturin develop` is still appropriate.
+
+Example environment activation in PowerShell:
 
 ```bash
 & .venv/Scripts/Activate.ps1
@@ -78,19 +88,13 @@ python benchmarks/run_pyperf.py --family dict --group update_dict \
   --implementation ators
 ```
 
-Run convenience pyperf scripts:
+Export shared pyperf results to markdown:
 
 ```bash
-python benchmarks/bench_validation.py
-python benchmarks/bench_containers_assignment.py
-python benchmarks/bench_get_untyped.py
-python benchmarks/bench_set_untyped.py
-python benchmarks/bench_set_untyped_alternating.py
-python benchmarks/bench_get_descriptor.py
-python benchmarks/containers/bench_list.py
-python benchmarks/containers/bench_set.py
-python benchmarks/containers/bench_dict.py
+python benchmarks/run_pyperf.py --family dict --group update_dict \
+   --implementation ators --markdown-output benchmarks/results/latest.md
 ```
+
 
 When `rich` is installed, `run_pyperf.py --list` prints a grouped table
 with summary counts.
@@ -114,8 +118,6 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
    `benchmarks/shared/pytest_frontend.py`.
 
 4. Add a pyperf wrapper when useful.
-   Prefer `python benchmarks/run_pyperf.py --family <name>` for general use.
-   Add a `bench_*.py` helper only if it improves local ergonomics.
 
 5. Verify both frontends.
    Run pytest smoke checks:
@@ -136,4 +138,7 @@ Use this workflow to keep pytest/CodSpeed and pyperf aligned.
 - `property_typed`: property copy-and-validate assignment baseline.
 - `ators`: Ators implementation.
 - `ators_frozen`: frozen Ators variant where relevant.
+- `ators_generic_concrete`: fully-concrete Ators generic specialisation checks.
+- `ators_generic_typevar`: TypeVar-pattern Ators generic checks.
+- `ators_generic_typevar_both`: both args are TypeVars (widest wildcard).
 - `atom`: Atom implementation, included only when available.

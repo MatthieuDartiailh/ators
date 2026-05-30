@@ -13,28 +13,9 @@ import pytest
 
 from ators import Ators, freeze, member
 from ators.behaviors import ValueValidator
+from benchmarks.shared.runtime import atom_benchmarks_available
 
-try:
-    from atom.api import (
-        Atom,
-        Bool,
-        Bytes,
-        Dict,
-        Enum,
-        FixedTuple,
-        Float,
-        Int,
-        List,
-        Set,
-        Str,
-        Tuple,
-        Typed,
-        Value,
-    )
-
-    ATOM_AVAILABLE = True
-except ImportError:
-    ATOM_AVAILABLE = False
+ATOM_AVAILABLE = atom_benchmarks_available()
 
 
 # ============================================================================
@@ -133,6 +114,22 @@ class AtorsForwardRefClass(Ators):
 
 
 if ATOM_AVAILABLE:
+    from atom.api import (
+        Atom,
+        Bool,
+        Bytes,
+        Dict,
+        Enum,
+        FixedTuple,
+        Float,
+        Int,
+        List,
+        Set,
+        Str,
+        Tuple,
+        Typed,
+        Value,
+    )
 
     class AtomUntypedClass(Atom):
         """Atom class with untyped field (Value descriptor)."""

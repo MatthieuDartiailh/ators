@@ -5,12 +5,17 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-""""""
+"""Public Python API for Ators.
+
+This module re-exports the core Rust extension types/functions and provides
+the user-facing `Ators` base class built on top of `AtorsMeta`.
+"""
 
 from ._ators import (
     AtorsBase as _Base,
     AtorsChange,
     Member,
+    PicklePolicy,
     _register_ators_ordered_dict_type,
     add_generic_type_attributes,
     disable_notifications,
@@ -31,8 +36,8 @@ from ._ators import (
 from ._containers import AtorsOrderedDict
 from ._meta import AtorsMeta as _Meta
 
-# Register the Python AtorsOrderedDict class with the Rust validator so that
-# TypeValidator::OrderedDict can produce it at runtime.
+# Register the AtorsOrderedDict class with the Rust type-validator so that it
+# can produce instances when an `OrderedDict` annotation is encountered.
 _register_ators_ordered_dict_type(AtorsOrderedDict)
 
 # Register generic type attributes for numpy ndarray if numpy is available
@@ -63,7 +68,11 @@ def __newobj__(cls, *args):
 
 
 class Ators(_Base, metaclass=_Meta):
-    """"""
+    """Base class for Ators models.
+
+    Subclasses declare members in the class body and receive validated,
+    slotted storage plus optional freezing and observation support.
+    """
 
     def __reduce_ex__(self, proto):
         """An implementation of the reduce protocol.
@@ -90,6 +99,7 @@ __all__ = [
     "AtorsChange",
     "AtorsOrderedDict",
     "Member",
+    "PicklePolicy",
     "add_generic_type_attributes",
     "disable_notifications",
     "enable_notifications",

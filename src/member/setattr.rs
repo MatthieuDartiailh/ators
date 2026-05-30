@@ -41,7 +41,7 @@ impl PreSetattrBehavior {
     pub(crate) fn pre_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
-        object: &Bound<'py, crate::core::AtorsBase>,
+        object: &Bound<'py, crate::class::base::AtorsBase>,
         current: &Option<&Py<PyAny>>,
     ) -> PyResult<()> {
         match self {
@@ -118,7 +118,7 @@ impl PostSetattrBehavior {
     pub(crate) fn post_set<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
-        object: &Bound<'py, crate::core::AtorsBase>,
+        object: &Bound<'py, crate::class::base::AtorsBase>,
         old: &Option<&Py<PyAny>>,
         new: &Bound<'py, PyAny>,
     ) -> PyResult<()> {

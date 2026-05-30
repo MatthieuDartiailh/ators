@@ -10,16 +10,15 @@
 use pyo3::{
     Bound, Py, PyResult, Python, pymodule,
     sync::PyOnceLock,
-    types::{PyAnyMethods, PyDict, PyTuple, PyType},
+    types::{PyAnyMethods, PyType},
 };
 
-use crate::utils::TypeMutabilityMap;
+use crate::utils::{GenericAttributesMap, TypeMutabilityMap};
 
 mod annotations;
+mod class;
 mod containers;
-mod core;
 mod member;
-mod meta;
 mod observers;
 mod utils;
 mod validators;
@@ -27,11 +26,11 @@ mod validators;
 // XXX would prefer to have module state to do this
 // static ANNOTATIONS_TOOLS : PyOnceLock
 
-static GENERIC_ATTRIBUTES: PyOnceLock<Py<PyDict>> = PyOnceLock::new();
+static GENERIC_ATTRIBUTES: PyOnceLock<Py<GenericAttributesMap>> = PyOnceLock::new();
 
-fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+fn get_generic_attributes_map<'py>(py: Python<'py>) -> Bound<'py, GenericAttributesMap> {
     GENERIC_ATTRIBUTES
-        .get_or_init(py, || PyDict::new(py).into())
+        .get_or_init(py, || GenericAttributesMap::new(py))
         .clone_ref(py)
         .into_bound(py)
 }
@@ -49,7 +48,7 @@ fn get_type_mutability_map<'py>(py: Python<'py>) -> Bound<'py, TypeMutabilityMap
 static ORDERED_DICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
 /// Return the `collections.OrderedDict` type, initialising the cache on first call.
-pub(crate) fn get_ordered_dict_type(py: Python<'_>) -> Bound<'_, PyType> {
+pub(crate) fn get_ordered_dict_type<'py>(py: Python<'py>) -> Bound<'py, PyType> {
     ORDERED_DICT_TYPE
         .get_or_init(py, || {
             py.import("collections")
@@ -68,10 +67,10 @@ static ATORS_ORDERED_DICT_TYPE: std::sync::OnceLock<Py<pyo3::PyAny>> =
 
 /// Return the Python `AtorsOrderedDict` class, or an error if it has not been
 /// registered yet via `_register_ators_ordered_dict_type`.
-pub(crate) fn get_ators_ordered_dict_type(py: Python<'_>) -> PyResult<Bound<'_, pyo3::PyAny>> {
+pub(crate) fn get_ators_ordered_dict_type(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
     ATORS_ORDERED_DICT_TYPE
         .get()
-        .map(|t| t.clone_ref(py).into_bound(py))
+        .map(|cls| cls.clone_ref(py).into_bound(py))
         .ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err(
                 "AtorsOrderedDict has not been registered. \
@@ -88,13 +87,16 @@ mod _ators {
     use super::*;
 
     #[pymodule_export]
-    use self::core::{
-        AtorsBase, disable_notifications, enable_notifications, freeze, get_member,
+    use self::class::{
+        AtorsBase, MembersByNameMapping, PicklePolicy, create_ators_specialized_alias,
+        create_ators_specialized_subclass, create_ators_subclass, disable_notifications,
+        drop_class_info, enable_notifications, freeze, get_ators_abstract_methods, get_ators_args,
+        get_ators_frozen_flag, get_ators_init_member_names, get_ators_members_by_name,
+        get_ators_origin, get_ators_specific_member_names, get_ators_type_params, get_member,
         get_member_customization_tool, get_members, get_members_by_tag,
-        get_members_by_tag_and_value, is_frozen, is_notifications_enabled, observe, unobserve,
+        get_members_by_tag_and_value, get_tracked_class_info_size, is_frozen,
+        is_notifications_enabled, maybe_freeze_instance_after_call, observe, unobserve,
     };
-    #[pymodule_export]
-    use self::meta::{create_ators_specialized_subclass, create_ators_subclass};
 
     #[pymodule_export]
     use self::member::{
@@ -116,17 +118,30 @@ mod _ators {
     /// Register the Python `AtorsOrderedDict` class so that the Rust type-validator
     /// can produce it when an `OrderedDict` annotation is encountered.
     ///
-    /// This is called automatically by `ators/__init__.py` when the package is
-    /// imported; users do not need to call it directly.
+    /// This must be called once at `ators` import time (done in `python/ators/__init__.py`).
     pub(crate) fn _register_ators_ordered_dict_type(cls: &pyo3::Bound<'_, pyo3::PyAny>) {
         let _ = ATORS_ORDERED_DICT_TYPE.set(cls.clone().unbind());
     }
 
     #[pyfunction]
+    /// Register generic attribute names for a Python type.
+    ///
+    /// Stores the list of attribute names associated with a generic type so they
+    /// can be reused by the runtime when handling parametrized type information.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_` - The Python type for which generic attribute names are registered.
+    /// * `attributes` - The attribute names to associate with the given type.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the registration succeeds.
+    /// * `Err(PyErr)` - If inserting the mapping into the internal storage fails.
     pub(crate) fn add_generic_type_attributes<'py>(
         py: Python<'py>,
         type_: &Bound<'py, PyType>,
-        attributes: Bound<'py, PyTuple>,
+        attributes: Vec<String>,
     ) -> PyResult<()> {
         let map = get_generic_attributes_map(py);
         map.set_item(type_, attributes)

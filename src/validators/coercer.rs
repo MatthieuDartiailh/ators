@@ -44,7 +44,7 @@ impl Coercer {
         is_init_coercion: bool,
         type_validator: &TypeValidator,
         name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = value.py();

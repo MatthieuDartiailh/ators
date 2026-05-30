@@ -8,6 +8,7 @@
 /// Tools to manipulate and extract information from type annotations.
 use pyo3::{
     Bound, PyAny, PyErr, PyResult, PyTypeInfo, Python, intern, pyclass,
+    sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
@@ -19,7 +20,7 @@ use std::ffi::CString;
 
 use crate::{
     get_generic_attributes_map,
-    member::{DefaultBehavior, DelattrBehavior, MemberBuilder, PreSetattrBehavior},
+    member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
     utils::err_with_cause,
     validators::{
         TypeValidator, ValidValues, Validator, ValueValidator,
@@ -53,10 +54,10 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
-    ordered_dict: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
+    ordered_dict: Bound<'py, PyAny>,
 }
 
 /// Tools to manipulate and extract information from type annotations.
@@ -102,9 +103,9 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
-            ordered_dict: collections_mod.getattr(intern!(py, "OrderedDict"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
+            ordered_dict: collections_mod.getattr(intern!(py, "OrderedDict"))?,
         },
     })
 }
@@ -121,6 +122,15 @@ pub fn build_validator_from_annotation<'py>(
     ctx_provider: Option<&Bound<'py, PyAny>>,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
+    // Ators generic specializations can be represented as GenericAlias wrappers
+    // on the Python side; unwrap them to the canonical specialized class for
+    // validator inference.
+    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))? {
+        ann.getattr(intern!(name.py(), "__ators_specialized_class__"))?
+    } else {
+        ann.clone()
+    };
+
     if ann.is_instance_of::<PyString>() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
             "Str annotations ({}) are not supported in ators classes, use ForwardRef instead",
@@ -131,7 +141,7 @@ pub fn build_validator_from_annotation<'py>(
             Validator::new(
                 TypeValidator::ForwardValidator {
                     late_validator: LateResolvedValidator::new(
-                        ann,
+                        &ann,
                         ctx_provider,
                         type_containers,
                         name,
@@ -165,13 +175,13 @@ pub fn build_validator_from_annotation<'py>(
     // Applicable on any type and return None for non generic types
     // Using this rather than is_instance is easier to get right since
     // some generics such as Literal use specific private classes.
-    let origin = tools.get_origin.call1((ann,))?;
+    let origin = tools.get_origin.call1((&ann,))?;
 
     // In 3.14, Union[int, float] and int | float share the same type
     if !origin.is_none() {
         // FIXME extract in a dedicated function since it will be expanded
         // to cover list, dict, Numpy.NDArray etc
-        let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+        let args = tools.get_args.call1((&ann,))?.cast_into::<PyTuple>()?;
         if origin.is(&tools.types.literal) {
             Ok((
                 Validator::new(
@@ -406,14 +416,22 @@ pub fn build_validator_from_annotation<'py>(
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {
-            let generic_attrs = get_generic_attributes_map(py);
-            if let Some(attr_list) = generic_attrs.get_item(&origin)? {
+            let attr_names_opt: Option<Vec<String>> = {
+                let generic_attrs_bound = get_generic_attributes_map(py);
+                with_critical_section(generic_attrs_bound.as_any(), || {
+                    let generic_attrs = generic_attrs_bound.borrow();
+                    origin
+                        .cast::<PyType>()
+                        .ok()
+                        .and_then(|t| generic_attrs.get_attributes(t))
+                        .cloned()
+                })
+            };
+            if let Some(attr_names) = attr_names_opt {
+                let origin_type = origin.cast_into::<PyType>()?;
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
-                for (attr_name, attr_type) in
-                    attr_list.cast_into::<PyTuple>()?.iter().zip(args.iter())
-                {
-                    let attr_name_str = attr_name.extract::<String>()?;
+                for (attr_name_str, attr_type) in attr_names.into_iter().zip(args.iter()) {
                     let (attr_validator, attr_info) = build_validator_from_annotation(
                         PyString::new(py, &format!("{name}-{attr_name_str}")).cast()?,
                         &attr_type,
@@ -428,7 +446,7 @@ pub fn build_validator_from_annotation<'py>(
                 Ok((
                     Validator::new(
                         TypeValidator::GenericAttributes {
-                            type_: origin.cast_into::<PyType>()?.unbind(),
+                            type_: origin_type.unbind(),
                             attributes,
                         },
                         None,
@@ -466,7 +484,7 @@ pub fn build_validator_from_annotation<'py>(
         }
     } else if ann.is_instance(&tools.types.type_var)? {
         if let Some(bindings) = typevar_bindings
-            && let Some(bound_ann) = bindings.get_item(ann)?
+            && let Some(bound_ann) = bindings.get_item(&ann)?
         {
             return build_validator_from_annotation(
                 name,
@@ -478,16 +496,30 @@ pub fn build_validator_from_annotation<'py>(
             );
         }
 
-        // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are not
-        // supported.  Callers should use a Union annotation instead.
+        // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are treated
+        // as a union of their constraints.
         let constraints = ann.getattr(intern!(py, "__constraints__"))?;
         if let Ok(constraints_tuple) = constraints.cast::<PyTuple>()
             && !constraints_tuple.is_empty()
         {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Constrained TypeVars are not supported for member '{name}'. \
-                 Use a Union type annotation instead.",
-            )));
+            let mut members = Vec::new();
+            let mut requires_owner = false;
+            for constraint in constraints_tuple.iter() {
+                let (validator, info) = build_validator_from_annotation(
+                    name,
+                    &constraint,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                requires_owner = requires_owner || info.requires_owner;
+                members.push(validator);
+            }
+            return Ok((
+                Validator::new(TypeValidator::Union { members }, None, None, None),
+                ValidatorBuildInfo { requires_owner },
+            ));
         }
 
         let bound = ann.getattr(intern!(py, "__bound__"))?;
@@ -696,6 +728,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     dct: &Bound<'py, PyDict>,
     type_containers: i64,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
+    validate_attr: bool,
 ) -> PyResult<HashMap<String, MemberBuilder>> {
     let py = name.py();
 
@@ -730,14 +763,18 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
 
     let tools = get_type_tools(py)?;
 
+    // `Member` type object used for annotation-coerce pairing checks.
+    let member_type = py.get_type::<Member>();
+
     let mut builders = HashMap::new();
     for item in annotations.items()?.iter() {
         let (name, ann) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
         // Get the origin of the type annotation
         let origin = tools.get_origin.call1((&ann,))?;
 
-        // Check we are not dealing with a ClassVar
-        if origin.is(&class_var) {
+        // Check we are not dealing with a ClassVar (parameterized ClassVar[T] or
+        // bare ClassVar).  Both cases must be skipped even when validate_attr=False.
+        if origin.is(&class_var) || ann.is(&class_var) {
             continue;
         }
 
@@ -761,30 +798,109 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             MemberBuilder::default()
         };
 
-        // Analyze the annotation to configure the builder
-        configure_member_builder_from_annotation(
-            &mut builder,
-            name.cast()?,
-            &ann,
-            type_containers,
-            &tools,
-            false,
-            typevar_bindings,
-        )
-        .map_err(|err| {
-            err_with_cause(
-                py,
-                pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Failed to configure Member {name} from annotation {ann:?}"
-                )),
-                err,
+        // Enforce the annotation–coerce pairing contract.
+        //
+        // Bare `Member` is never a valid annotation.  `Member[T1, T2]` is only
+        // valid when the RHS member explicitly calls `.coerce(...)`.
+        // Conversely, `.coerce(...)` on an annotated member requires the
+        // annotation to be `Member[T1, T2]` with exactly two type arguments.
+        //
+        // The `effective_ann` resolved here replaces the outer `Member[T1, T2]`
+        // with its first type argument (T1) for subsequent validator inference.
+        let attr_name: String = name.extract()?;
+        let has_coerce = builder.coercer().is_some();
+
+        // Track whether `effective_ann` differs from the original `ann`
+        // so the validate_attr=False path can reuse the already-computed
+        // `origin` instead of making a redundant `get_origin` call.
+        let effective_ann: Bound<'py, PyAny>;
+        let ann_replaced: bool;
+
+        if ann.is(member_type.as_any()) {
+            // Bare `Member` annotation — never valid.
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Attribute '{attr_name}': Member must be subscripted as Member[T1, T2]."
+            )));
+        } else if origin.is(member_type.as_any()) {
+            // `Member[T1, T2]` annotation: validate arity and require coerce.
+            // This is done here because raising in __class_getitem__ simply turns
+            // the annotations into a forward reference which leads to
+            // generating poor and late error messages.
+            let args = tools.get_args.call1((&ann,))?.cast_into::<PyTuple>()?;
+            let arg_count = args.len();
+            if arg_count != 2 {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Attribute '{attr_name}': Member[T1, T2] expects exactly 2 type \
+                     arguments, got {arg_count}."
+                )));
+            }
+            if !has_coerce {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Attribute '{attr_name}': Member annotation requires an explicitly \
+                     coerced RHS member (call .coerce(...))."
+                )));
+            }
+            // Use T1 (the first type arg) for validator inference.
+            effective_ann = args.get_item(0)?;
+            ann_replaced = true;
+        } else {
+            if has_coerce {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Attribute '{attr_name}': coerced RHS member requires a \
+                     Member[T1, T2] annotation."
+                )));
+            }
+            effective_ann = ann.clone();
+            ann_replaced = false;
+        }
+
+        if validate_attr {
+            // Analyze the annotation to configure the builder
+            configure_member_builder_from_annotation(
+                &mut builder,
+                name.cast()?,
+                &effective_ann,
+                type_containers,
+                &tools,
+                false,
+                typevar_bindings,
             )
-        })?;
+            .map_err(|err| {
+                err_with_cause(
+                    py,
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Failed to configure Member {name} from annotation {ann:?}"
+                    )),
+                    err,
+                )
+            })?;
+        } else {
+            // When validate_attr=False, skip building type/value validators and
+            // coercers.  Only Final semantics (read-only + undeletable) are
+            // still enforced; everything else is treated as untyped.
+            // Reuse the already-computed `origin` when the annotation was not
+            // replaced (the common non-Member case) to avoid a redundant
+            // `get_origin` Python call.
+            let effective_origin = if ann_replaced {
+                tools.get_origin.call1((&effective_ann,))?
+            } else {
+                origin.clone()
+            };
+            let is_final =
+                effective_origin.is(&tools.types.final_) || effective_ann.is(&tools.types.final_);
+            if is_final {
+                match builder.pre_setattr() {
+                    Some(PreSetattrBehavior::Constant {}) => {}
+                    _ => builder.set_pre_setattr(PreSetattrBehavior::ReadOnly {}),
+                };
+                builder.set_delattr(DelattrBehavior::Undeletable {});
+            }
+        }
 
         // Set the member name
-        builder.name = Some(name.extract()?);
+        builder.name = Some(attr_name.clone());
 
-        builders.insert(name.extract()?, builder);
+        builders.insert(attr_name, builder);
     }
 
     Ok(builders)

@@ -91,7 +91,7 @@ impl Validator {
     pub fn validate<'py>(
         &self,
         name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self.strict_validate(name, object, value) {
@@ -121,7 +121,7 @@ impl Validator {
         &self,
         is_init: bool,
         member_name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if is_init && let Some(c) = &self.init_coercer {
@@ -144,7 +144,7 @@ impl Validator {
     fn strict_validate<'py>(
         &self,
         member_name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let v = self

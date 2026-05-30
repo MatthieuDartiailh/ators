@@ -42,7 +42,7 @@ impl DefaultBehavior {
     pub(crate) fn default<'py>(
         &self,
         member: &PyRef<'py, super::Member>,
-        object: &Bound<'py, crate::core::AtorsBase>,
+        object: &Bound<'py, crate::class::base::AtorsBase>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Self::NoDefault {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -65,6 +65,15 @@ impl DefaultBehavior {
             Self::ObjectMethod { meth_name } => object.call_method1(meth_name, (member,)),
         }
     }
+}
+
+/// Construct a [`DefaultBehavior::Call`] from a Python callable, validating
+/// that the callable accepts exactly zero arguments.
+pub(super) fn call_default_from_factory<'py>(
+    callable: Bound<'py, PyAny>,
+) -> PyResult<DefaultBehavior> {
+    let c: db_call::Callable = callable.extract()?;
+    Ok(DefaultBehavior::Call { callable: c })
 }
 
 impl Clone for DefaultBehavior {

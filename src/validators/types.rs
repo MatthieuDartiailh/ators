@@ -438,7 +438,7 @@ impl TypeValidator {
     pub fn validate_type<'py>(
         &self,
         name: Option<&str>,
-        object: Option<&Bound<'py, crate::core::AtorsBase>>,
+        object: Option<&Bound<'py, crate::class::base::AtorsBase>>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
