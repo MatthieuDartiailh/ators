@@ -74,7 +74,14 @@ def test_frozendict_rejects_plain_dict_without_coercion():
         a.mapping = {"a": 1}
 
 
-@pytest.mark.parametrize("value", [{1: "2", "3": 4}, MappingLike({1: "2", "3": 4})])
+@pytest.mark.parametrize(
+    "value",
+    [
+        {1: "2", "3": 4},
+        MappingLike({1: "2", "3": 4}),
+        [(1, "2"), ("3", 4)],
+    ],
+)
 def test_frozendict_coercion_accepts_mapping_like_inputs(value):
     class A(Ators):
         mapping: Member[FROZENDICT[str, int], Any] = member().coerce()
@@ -93,6 +100,21 @@ def test_frozendict_nested_coercion_recursively_applies_validators():
 
     assert type(a.mapping) is FROZENDICT
     assert a.mapping == FROZENDICT({"items": (1, 2)})
+
+
+def test_frozendict_validation_rebuilds_when_nested_values_are_copied():
+    class A(Ators):
+        mapping: FROZENDICT[str, list[int]] = member()
+
+    items = [1, 2]
+    value = FROZENDICT({"items": items})
+    a = A(mapping=value)
+
+    assert type(a.mapping) is FROZENDICT
+    assert a.mapping == value
+    assert a.mapping is not value
+    assert a.mapping["items"] == items
+    assert a.mapping["items"] is not items
 
 
 def test_frozendict_is_compatible_with_frozen_classes():
