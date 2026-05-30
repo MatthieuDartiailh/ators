@@ -24,6 +24,7 @@ from ators import (
     observe,
     unobserve,
 )
+from ators.behaviors import ValueValidator
 
 # ---------------------------------------------------------------------------
 # 1. Class declaration tests
@@ -503,3 +504,146 @@ def test_get_event_customization_tool_outside_init_subclass_raises():
 
     with pytest.raises(RuntimeError, match="__init_subclass__"):
         get_event_customization_tool(A)
+
+
+def test_event_customization_tool_unknown_key_raises():
+    """EventCustomizationTool[unknown_name] raises KeyError."""
+    errors = []
+
+    class Base(Ators, observable=True):
+        clicked: Event[int]
+
+        @classmethod
+        def __init_subclass__(cls, **kwargs):
+            super().__init_subclass__(**kwargs)
+            tool = get_event_customization_tool(cls)
+            try:
+                tool["no_such_event"]
+            except KeyError:
+                errors.append(True)
+
+    class Child(Base):
+        pass
+
+    assert errors == [True]
+
+
+# ---------------------------------------------------------------------------
+# 8. Instance-based accessor functions
+# ---------------------------------------------------------------------------
+
+
+def test_get_events_on_instance():
+    """get_events(instance) returns the same events dict as get_events(class)."""
+
+    class A(Ators, observable=True):
+        e1: Event[int]
+        e2: Event[str]
+
+    a = A()
+    events_from_instance = get_events(a)
+    events_from_class = get_events(A)
+    assert set(events_from_instance.keys()) == set(events_from_class.keys())
+    assert all(isinstance(e, Event) for e in events_from_instance.values())
+
+
+def test_get_events_by_tag_on_instance():
+    """get_events_by_tag(instance, tag) works just like the class-level call."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(category="action")
+        e2: Event[str]
+
+    a = A()
+    result = get_events_by_tag(a, "category")
+    assert "e1" in result
+    assert "e2" not in result
+
+
+def test_get_events_by_tag_and_value_on_instance():
+    """get_events_by_tag_and_value(instance, tag, value) works on instances."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(kind="click")
+        e2: Event[str] = event().tag(kind="hover")
+
+    a = A()
+    result = get_events_by_tag_and_value(a, "kind", "click")
+    assert set(result.keys()) == {"e1"}
+
+
+# ---------------------------------------------------------------------------
+# 9. get_events_by_tag return value structure
+# ---------------------------------------------------------------------------
+
+
+def test_get_events_by_tag_value_is_tuple_of_event_and_tag_value():
+    """get_events_by_tag returns {name: (Event, tag_value)} tuples."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(ui="button")
+
+    result = get_events_by_tag(A, "ui")
+    assert "e1" in result
+    ev, tag_val = result["e1"]
+    assert isinstance(ev, Event)
+    assert tag_val == "button"
+
+
+def test_get_events_by_tag_no_match_returns_empty_dict():
+    """get_events_by_tag returns an empty dict when no events have the given tag."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(ui="button")
+
+    result = get_events_by_tag(A, "nonexistent_tag")
+    assert result == {}
+
+
+def test_get_events_by_tag_and_value_no_match_returns_empty_dict():
+    """get_events_by_tag_and_value returns an empty dict when no events match."""
+
+    class A(Ators, observable=True):
+        e1: Event[int] = event().tag(ui="button")
+
+    result = get_events_by_tag_and_value(A, "ui", "label")
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# 10. Wrong RHS type for Event[T] annotation raises
+# ---------------------------------------------------------------------------
+
+
+def test_event_wrong_rhs_type_raises():
+    """A non-event() value on the RHS of an Event[T] annotation raises TypeError."""
+    with pytest.raises(TypeError, match="event\\(\\) builder"):
+
+        class A(Ators, observable=True):
+            clicked: Event[int] = 42  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
+# 11. EventBuilder.append_value_validator
+# ---------------------------------------------------------------------------
+
+
+def test_event_builder_append_value_validator():
+    """append_value_validator on an event builder restricts accepted values."""
+
+    class A(Ators, observable=True):
+        clicked: Event[int] = event().append_value_validator(
+            ValueValidator.Values(frozenset({1, 2, 3}))
+        )
+
+    a = A()
+    hits = []
+    observe(a, "clicked", lambda c: hits.append(c.newvalue))
+
+    a.clicked = 2
+    assert hits == [2]
+
+    with pytest.raises(ValueError):
+        a.clicked = 99  # not in {1, 2, 3}
+
+    assert hits == [2]  # observer not called for invalid value
