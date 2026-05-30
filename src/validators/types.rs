@@ -758,7 +758,8 @@ impl TypeValidator {
                                         if validated_items.is_none() {
                                             let dict = PyDict::new(value.py());
                                             for i in 0..index {
-                                                let (pk, pv) = item_pairs.get_item(i)?.extract()?;
+                                                let (pk, pv): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
+                                                    item_pairs.get_item(i)?.extract()?;
                                                 dict.set_item(pk, pv)?;
                                             }
                                             validated_items = Some(dict);
