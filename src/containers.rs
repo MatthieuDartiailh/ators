@@ -9,8 +9,10 @@
 mod common;
 pub mod dict;
 pub mod list;
+pub mod ordered_dict;
 pub mod set;
 
 pub use dict::*;
 pub use list::*;
+pub use ordered_dict::*;
 pub use set::*;

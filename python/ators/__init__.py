@@ -16,6 +16,7 @@ from ._ators import (
     AtorsChange,
     Member,
     PicklePolicy,
+    _register_ators_ordered_dict_type,
     add_generic_type_attributes,
     disable_notifications,
     enable_notifications,
@@ -32,7 +33,12 @@ from ._ators import (
     register_type_mutability_info,
     unobserve,
 )
+from ._containers import AtorsOrderedDict
 from ._meta import AtorsMeta as _Meta
+
+# Register the AtorsOrderedDict class with the Rust type-validator so that it
+# can produce instances when an `OrderedDict` annotation is encountered.
+_register_ators_ordered_dict_type(AtorsOrderedDict)
 
 # Register generic type attributes for numpy ndarray if numpy is available
 try:
@@ -91,6 +97,7 @@ class Ators(_Base, metaclass=_Meta):
 __all__ = [
     "Ators",
     "AtorsChange",
+    "AtorsOrderedDict",
     "Member",
     "PicklePolicy",
     "add_generic_type_attributes",
