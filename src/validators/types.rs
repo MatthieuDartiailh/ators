@@ -9,10 +9,14 @@
 use super::Validator;
 use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
+#[cfg(Py_3_15)]
+use crate::utils::get_builtin_frozendict_type;
 use crate::utils::{Mutability, err_with_cause};
 use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::PyStringMethods;
+#[cfg(Py_3_15)]
+use pyo3::types::{PyMapping, PyMappingMethods};
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
@@ -329,6 +333,10 @@ pub enum TypeValidator {
     },
     #[pyo3(constructor = (item))]
     FrozenSet { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (items))]
+    FrozenDict {
+        items: Option<(BoxedValidator, BoxedValidator)>,
+    },
     #[pyo3(constructor = (item))]
     Set { item: Option<BoxedValidator> },
     #[pyo3(constructor = (item))]
@@ -369,6 +377,33 @@ macro_rules! validation_error {
     };
 }
 
+/// Combine mutability states for immutable container members.
+///
+/// Mutable wins over every other state, undecidable wins over immutable, and a
+/// container is immutable only when all nested parts are immutable.
+fn combine_mutability(lhs: Mutability, rhs: Mutability) -> Mutability {
+    match (lhs, rhs) {
+        (Mutability::Mutable, _) | (_, Mutability::Mutable) => Mutability::Mutable,
+        (Mutability::Undecidable, _) | (_, Mutability::Undecidable) => Mutability::Undecidable,
+        (Mutability::Immutable, Mutability::Immutable) => Mutability::Immutable,
+    }
+}
+
+#[cfg(Py_3_15)]
+fn is_builtin_frozendict(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(value
+        .get_type()
+        .is(get_builtin_frozendict_type(value.py())?))
+}
+
+#[cfg(Py_3_15)]
+fn build_frozendict_from_mapping<'py>(
+    py: Python<'py>,
+    mapping: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    get_builtin_frozendict_type(py)?.call1((mapping,))
+}
+
 impl TypeValidator {
     pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         match self {
@@ -397,6 +432,14 @@ impl TypeValidator {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::FrozenDict { items } => Self::FrozenDict {
+                items: items.as_ref().map(|(k, v)| {
+                    (
+                        BoxedValidator::from(k.with_owner(py, owner)),
+                        BoxedValidator::from(v.with_owner(py, owner)),
+                    )
+                }),
             },
             Self::Set { item } => Self::Set {
                 item: item
@@ -694,6 +737,112 @@ impl TypeValidator {
                 } else {
                     validation_error!("frozenset", name, object, value)
                 }
+            }
+            Self::FrozenDict {
+                items: Some((_key_v, _val_v)),
+            } => {
+                #[cfg(Py_3_15)]
+                {
+                    let (key_v, val_v) = (_key_v, _val_v);
+                    if is_builtin_frozendict(value)? {
+                        let item_pairs = value.cast::<PyMapping>()?.items()?;
+                        let mut validated_items: Option<Bound<'_, PyDict>> = None;
+                        for (index, pair) in item_pairs.iter().enumerate() {
+                            let (tk, tv) = pair.extract()?;
+                            match (
+                                key_v.validate(name, object, &tk),
+                                val_v.validate(name, object, &tv),
+                            ) {
+                                (Ok(k), Ok(v)) => {
+                                    if validated_items.is_some() || !k.is(&tk) || !v.is(&tv) {
+                                        if validated_items.is_none() {
+                                            let dict = PyDict::new(value.py());
+                                            for i in 0..index {
+                                                let (pk, pv): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
+                                                    item_pairs.get_item(i)?.extract()?;
+                                                dict.set_item(pk, pv)?;
+                                            }
+                                            validated_items = Some(dict);
+                                        }
+                                        validated_items
+                                            .as_ref()
+                                            .expect(
+                                                "validated_items should have been initialized above",
+                                            )
+                                            .set_item(k, v)?;
+                                    }
+                                }
+                                (Err(err), _) => {
+                                    if let Some(m) = name
+                                        && let Some(o) = object
+                                    {
+                                        return Err(err_with_cause(
+                                            value.py(),
+                                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                                "Failed to validate key '{}' for the member {} of {}.",
+                                                tk.repr()?,
+                                                m,
+                                                o.repr()?
+                                            )),
+                                            err,
+                                        ));
+                                    } else {
+                                        return Err(err_with_cause(
+                                            value.py(),
+                                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                                "Failed to validate key '{}'.",
+                                                tk.repr()?,
+                                            )),
+                                            err,
+                                        ));
+                                    }
+                                }
+                                (Ok(_), Err(err)) => {
+                                    if let Some(m) = name
+                                        && let Some(o) = object
+                                    {
+                                        return Err(err_with_cause(
+                                            value.py(),
+                                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                                "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                                tv.repr()?,
+                                                tk.repr()?,
+                                                m,
+                                                o.repr()?
+                                            )),
+                                            err,
+                                        ));
+                                    } else {
+                                        return Err(err_with_cause(
+                                            value.py(),
+                                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                                "Failed to validate value '{}' with key '{}'.",
+                                                tk.repr()?,
+                                                tv.repr()?
+                                            )),
+                                            err,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        return if let Some(validated) = validated_items {
+                            build_frozendict_from_mapping(value.py(), validated.as_any())
+                        } else {
+                            Ok(value.clone())
+                        };
+                    }
+                }
+                validation_error!("frozendict", name, object, value)
+            }
+            Self::FrozenDict { items: None } => {
+                #[cfg(Py_3_15)]
+                {
+                    if is_builtin_frozendict(value)? {
+                        return Ok(value.clone());
+                    }
+                }
+                validation_error!("frozendict", name, object, value)
             }
             Self::Set { item: Some(item) } => {
                 if let Ok(ators_set) = value.cast::<crate::containers::AtorsSet>()
@@ -1031,29 +1180,19 @@ impl TypeValidator {
                 None => Mutability::Immutable,
                 Some(iv) => iv.type_validator.is_type_mutable(py),
             },
+            Self::FrozenDict { items } => match items {
+                None => Mutability::Immutable,
+                Some((key, value)) => combine_mutability(
+                    key.type_validator.is_type_mutable(py),
+                    value.type_validator.is_type_mutable(py),
+                ),
+            },
             // NOTE try_fold does not seem relevant here
-            Self::Tuple { items } => {
-                items
-                    .iter()
-                    .fold(Mutability::Immutable, |acc: Mutability, e| {
-                        match (acc, e.type_validator.is_type_mutable(py)) {
-                            // If one item is mutable the tuple is seen as mutable
-                            (Mutability::Mutable, _) => Mutability::Mutable,
-                            // If one item is undecidable, the tuple is mutable if the
-                            // new item is otherwise it remains undecidable
-                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
-                            (Mutability::Undecidable, Mutability::Undecidable) => {
-                                Mutability::Undecidable
-                            }
-                            (Mutability::Undecidable, Mutability::Immutable) => {
-                                Mutability::Undecidable
-                            }
-                            // If all previous items are immutable everything depend on
-                            // the last visited one.
-                            (Mutability::Immutable, im) => im,
-                        }
-                    })
-            }
+            Self::Tuple { items } => items
+                .iter()
+                .fold(Mutability::Immutable, |acc: Mutability, e| {
+                    combine_mutability(acc, e.type_validator.is_type_mutable(py))
+                }),
             Self::Set { item: _ } => Mutability::Mutable,
             Self::List { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
@@ -1143,6 +1282,9 @@ impl Clone for TypeValidator {
             },
             Self::VarTuple { item } => Self::VarTuple { item: item.clone() },
             Self::FrozenSet { item } => Self::FrozenSet { item: item.clone() },
+            Self::FrozenDict { items } => Self::FrozenDict {
+                items: items.clone(),
+            },
             Self::Set { item } => Self::Set { item: item.clone() },
             Self::List { item } => Self::List { item: item.clone() },
             Self::Dict { items } => Self::Dict {

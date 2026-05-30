@@ -16,6 +16,8 @@ use pyo3::{
 };
 
 use super::TypeValidator;
+#[cfg(Py_3_15)]
+use crate::utils::get_builtin_frozendict_type;
 use crate::utils::{create_behavior_callable_checker, err_with_cause};
 
 create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
@@ -122,6 +124,89 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
+                TypeValidator::FrozenDict { items } => {
+                    let coerced = PyDict::new(py);
+                    if let Ok(t) = value.cast::<PyDict>() {
+                        for (k, v) in t.iter() {
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                );
+                                let cv = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                );
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    } else if let Ok(tm) = value.cast::<PyMapping>() {
+                        for i in tm.items()?.iter() {
+                            let (k, v) = i.extract()?;
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                );
+                                let cv = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                );
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    } else {
+                        for p in value.try_iter()? {
+                            let (k, v) = p?.extract()?;
+                            if let Some((key_validator, val_validator)) = items {
+                                let ck = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                );
+                                let cv = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                );
+                                coerced.set_item(ck?, cv?)?;
+                            } else {
+                                coerced.set_item(k, v)?;
+                            }
+                        }
+                    };
+
+                    #[cfg(Py_3_15)]
+                    {
+                        get_builtin_frozendict_type(py)?.call1((coerced,))
+                    }
+                    #[cfg(not(Py_3_15))]
+                    {
+                        Err(pyo3::exceptions::PyTypeError::new_err(
+                            "Cannot coerce to frozendict on Python versions older than 3.15",
+                        ))
+                    }
+                }
                 TypeValidator::Set { item } => {
                     let temp = value.cast::<PySequence>()?;
                     // FIXME create the right container upfront so that we can use
