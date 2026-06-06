@@ -27,6 +27,7 @@ use crate::{
         insert_definitive_class_info, insert_temp_class_info, pop_temp_class_info,
         take_pending_specialization_bindings_for_inputs,
     },
+    event::{Event, EventBuilder, EventCustomizationTool},
     member::PreGetattrBehavior,
     member::{
         DefaultBehavior, Member, PostGetattrBehavior, PostSetattrBehavior, PreSetattrBehavior,
@@ -243,7 +244,8 @@ pub fn create_ators_subclass<'py>(
     let typevar_bindings = take_pending_specialization_bindings_for_inputs(py, &name, &dct)?;
     let typevar_bindings_ref = typevar_bindings.as_ref().map(|tb| tb.bind(py));
 
-    let mut member_builders = generate_member_builders_from_cls_namespace(
+    // Single annotation pass: returns both member builders and event builders.
+    let (mut member_builders, mut event_builders) = generate_member_builders_from_cls_namespace(
         &name,
         &dct,
         type_containers,
@@ -310,6 +312,8 @@ pub fn create_ators_subclass<'py>(
     // preserve the mro in presence of multiple inheritance.
     // Note that the custom computed mro does not contain ourself.
     let mut members = HashMap::new();
+    // Also collect inherited events using the same MRO walk.
+    let mut base_events: HashMap<String, Bound<'py, Event>> = HashMap::new();
     for base in mro.iter().rev() {
         // Ensure there is no frozen class among our ancestors if we are not frozen
         if base.is_subclass(&ators_base_ty)? && !base.is(&ators_base_ty) {
@@ -328,7 +332,33 @@ pub fn create_ators_subclass<'py>(
                     .filter(|(k, _)| spm.contains(k.as_str()))
                     .map(|(k, v)| (k.clone(), v.bind(py).clone())),
             );
+            let spe = base_info.specific_event_names();
+            base_events.extend(
+                base_info
+                    .events_by_name()
+                    .iter()
+                    .filter(|(k, _)| spe.contains(k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.bind(py).clone())),
+            );
         }
+    }
+
+    // Events require observable infrastructure and cannot be declared on non-observable classes.
+    // If this class declares any new or inherits any events, it must be observable.
+    // Frozen classes with events are rejected since events can never fire on frozen instances.
+    let has_events = !event_builders.is_empty() || !base_events.is_empty();
+    if has_events && !is_observable {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Class '{name}' declares or inherits events but is not declared observable. \
+             Add `observable=True` to the class definition."
+        )));
+    }
+    if frozen && has_events {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Class '{name}' is declared as frozen but defines or inherits events. \
+             Frozen objects cannot emit events because events require notifications \
+             to be enabled."
+        )));
     }
 
     // If this class explicitly overrides `pickle_policy`, re-evaluate inherited
@@ -395,6 +425,8 @@ pub fn create_ators_subclass<'py>(
     // Collect member builder without type annotation.
     // Also classify each namespace entry as abstract or concrete in a single pass.
     let mut unannotated_member_builder_ids = HashMap::new();
+    // Also track bare EventBuilder objects (with no annotation, only allowed with inherit=True).
+    let mut unannotated_event_builder_ids = HashMap::new();
     let mut declared_abstract_methods: HashSet<String> = HashSet::new();
     let mut concrete_names: HashSet<String> = HashSet::new();
     for (k, v) in dct.iter() {
@@ -407,7 +439,7 @@ pub fn create_ators_subclass<'py>(
         if v.is_exact_instance_of::<PyFunction>() {
             methods.add(&k)?;
             methods_by_name.insert(k_str);
-        } else if let Ok(mb) = v.cast_into::<MemberBuilder>() {
+        } else if let Ok(mb) = v.clone().cast_into::<MemberBuilder>() {
             let mb_id: usize = mb.as_ptr().addr();
             if unannotated_member_builder_ids.contains_key(&mb_id) {
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
@@ -425,6 +457,32 @@ pub fn create_ators_subclass<'py>(
                 });
             }
             member_builders.insert(k_str, mb.extract()?);
+        } else if let Ok(eb) = v.cast_into::<EventBuilder>() {
+            // Bare event() builder (no annotation): only valid when inherit=True.
+            let inherits = with_critical_section(eb.as_any(), || eb.borrow().should_inherit());
+            if !inherits {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Attribute '{k_str}': event() builder used without an Event[T] \
+                     annotation. Add an Event[T] annotation, or use event().inherit() \
+                     to inherit from a parent-class declaration."
+                )));
+            }
+            let eb_id: usize = eb.as_ptr().addr();
+            if unannotated_event_builder_ids.contains_key(&eb_id) {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "'{k_str}' and '{}' are assigned the same event builder which is not supported",
+                    unannotated_event_builder_ids
+                        .get(&eb_id)
+                        .expect("Key is known to be in the map")
+                )));
+            }
+            unannotated_event_builder_ids.insert(eb_id, k_str.clone());
+            {
+                with_critical_section(eb.as_any(), || {
+                    eb.borrow_mut().name = Some(k_str.clone());
+                });
+            }
+            event_builders.insert(k_str, eb.extract()?);
         }
     }
 
@@ -585,6 +643,40 @@ pub fn create_ators_subclass<'py>(
         }
     }
 
+    // Process event builders: assign names, handle inherit, and build Event descriptors.
+    // Unlike members, events do not need slot indices (no storage).
+    let mut specific_events = HashSet::new();
+    let mut new_events: HashMap<String, Py<Event>> = HashMap::new();
+    for (k, eb) in event_builders.iter_mut() {
+        specific_events.insert(k.clone());
+
+        if let Some(base_event) = base_events.get(k) {
+            if eb.should_inherit() {
+                eb.get_inherited_behavior_from_event(base_event.get());
+            }
+        } else if eb.should_inherit() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Event '{}' is marked as inheriting from the event defined on a parent \
+                 of {} but no such event exists. Known events are: {:?}",
+                k,
+                name,
+                base_events.keys().collect::<Vec<_>>()
+            )));
+        }
+
+        let event = Bound::new(py, eb.clone().build(&name)?)?;
+        // Insert the Event descriptor into dct so that it becomes a class attribute.
+        dct.set_item(k, &event)?;
+        new_events.insert(k.clone(), event.unbind());
+    }
+
+    // Build the combined event map (inherited + new events for this class).
+    let mut all_events: HashMap<String, Py<Event>> = base_events
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone().unbind()))
+        .collect();
+    all_events.extend(new_events);
+
     let new_members = member_builders
         .into_iter()
         .map(|(k, v)| v.build(&name).map(|v| (k, v)))
@@ -630,6 +722,12 @@ pub fn create_ators_subclass<'py>(
         abstract_methods,
         None,
         Some(Py::new(py, MemberCustomizationTool::new(&all_members))?),
+        Some(Py::new(
+            py,
+            EventCustomizationTool::new(all_events.keys().cloned()),
+        )?),
+        all_events,
+        specific_events,
     )?;
     let fqname = insert_temp_class_info(py, &name, &dct, class_info)?;
 
@@ -667,6 +765,28 @@ pub fn create_ators_subclass<'py>(
         all_members.set_item(&mname, Bound::clone(&new_member))?;
         updated_members_by_name.insert(mname.clone(), new_member.clone().unbind());
     }
+    drop(tool); // release borrow before mutable access to class_info
+
+    // Retrieve and clear the event customization tool and rebuild any customized events.
+    // We also track replacements in updated_events_by_name so that class_info reflects the
+    // customized descriptors (get_event / get_events read from class_info, not cls.__dict__).
+    let mut updated_events_by_name: HashMap<String, Py<Event>> = class_info
+        .events_by_name()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+        .collect();
+    let mut event_tool = class_info.take_event_customizer().bind(py).borrow_mut();
+    for (ename, mut eb) in event_tool.get_builders(py) {
+        // Inherit from the existing event descriptor.
+        let existing_event = cls.getattr(&ename)?.cast_into::<Event>()?;
+        let ee = existing_event.get();
+        eb.name = Some(ee.name.clone());
+        eb.get_inherited_behavior_from_event(ee);
+        let new_event = Bound::new(py, eb.build(&name)?)?;
+        cls.setattr(&ename, Bound::clone(&new_event))?;
+        updated_events_by_name.insert(ename, new_event.unbind());
+    }
+    drop(event_tool); // release borrow before proceeding
 
     // Determine class mutability based on member type validators
     let members_dict = &all_members;
@@ -749,6 +869,7 @@ pub fn create_ators_subclass<'py>(
 
     let final_class_info = class_info
         .with_members(py, updated_members_by_name)?
+        .with_events(updated_events_by_name)
         .with_generic(generic)
         .with_mutability(Some(class_mutability));
 
