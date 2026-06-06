@@ -8,10 +8,12 @@
 """Tests for callable validation decorators."""
 
 import asyncio
+import inspect
+from typing import ClassVar
 
 import pytest
 
-from ators import validated
+from ators import Member, validated
 
 
 def test_validated_function_argument_and_return() -> None:
@@ -37,33 +39,35 @@ def test_validated_aggregate_errors() -> None:
     assert "y" in msg
 
 
-def test_validated_methods_static_and_class() -> None:
+def test_validated_methods_instance() -> None:
     class C:
         @validated
         def inst(self, x: int) -> int:
             return x
 
-        @validated
-        @staticmethod
-        def stat(x: int) -> int:
-            return x
-
-        @validated
-        @classmethod
-        def cls(cls, x: int) -> int:
-            return x
-
     c = C()
     assert c.inst(1) == 1
-    assert c.stat(2) == 2
-    assert c.cls(3) == 3
 
     with pytest.raises(TypeError):
         c.inst("1")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        c.stat("2")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        c.cls("3")  # type: ignore[arg-type]
+
+
+def test_validated_rejects_staticmethod_target() -> None:
+    with pytest.raises(TypeError, match="validated cannot be applied to staticmethod"):
+        class C:
+            @validated
+            @staticmethod
+            def stat(x: int) -> int:
+                return x
+
+
+def test_validated_rejects_classmethod_target() -> None:
+    with pytest.raises(TypeError, match="validated cannot be applied to classmethod"):
+        class C:
+            @validated
+            @classmethod
+            def cls(cls, x: int) -> int:
+                return x
 
 
 def test_validated_async_function() -> None:
@@ -109,3 +113,33 @@ def test_validated_validate_return_false() -> None:
 def test_validated_rejects_non_callable() -> None:
     with pytest.raises(TypeError, match="validated can only be applied to callables"):
         validated(1)  # type: ignore[arg-type]
+
+
+def test_validated_factory_requires_callable_target() -> None:
+    decorator = validated(aggregate_errors=True)
+    with pytest.raises(TypeError):
+        decorator()
+
+
+def test_validated_preserves_wrapped_metadata() -> None:
+    @validated
+    def add_one(x: int) -> int:
+        return x + 1
+
+    assert add_one.__name__ == "add_one"
+    assert hasattr(add_one, "__wrapped__")
+    assert str(inspect.signature(add_one)) == "(x: int) -> int"
+
+
+def test_validated_rejects_classvar_annotation() -> None:
+    with pytest.raises(TypeError, match="ClassVar"):
+        @validated
+        def f(x: ClassVar[int]) -> int:
+            return x  # type: ignore[return-value]
+
+
+def test_validated_rejects_subscripted_member_annotation() -> None:
+    with pytest.raises(TypeError, match="subscripted Member annotations"):
+        @validated
+        def f(x: Member[int, int]) -> int:
+            return x  # type: ignore[return-value]

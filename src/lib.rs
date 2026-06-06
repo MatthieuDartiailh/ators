@@ -86,7 +86,9 @@ mod _ators {
     use self::observers::AtorsChange;
 
     #[pymodule_export]
-    use self::callable_validation::{CallableValidator, validated};
+    use self::callable_validation::{
+        AsyncCallableValidator, SyncCallableValidator, ValidatedDecorator, validated,
+    };
 
     #[pyfunction]
     /// Register generic attribute names for a Python type.

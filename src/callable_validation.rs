@@ -6,11 +6,15 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 /// Callable validation decorators implemented in Rust.
+use crate::{
+    annotations::{build_validator_from_annotation, get_type_tools},
+    member::Member,
+    validators::Validator,
+};
 use pyo3::{
     Bound, Py, PyAny, PyResult, Python, pyclass, pyfunction, pymethods,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyTuple, PyTupleMethods},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyString, PyTuple, PyTupleMethods},
 };
-use std::ffi::CString;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParamKind {
@@ -23,171 +27,69 @@ enum ParamKind {
 struct ParamPlan {
     name: String,
     kind: ParamKind,
-    slot_name: String,
+    validator: Validator,
 }
 
 #[derive(Debug)]
-struct CompiledPlan {
+struct SyncValidationPlan {
     signature: Py<PyAny>,
-    validator_class: Py<PyAny>,
     params: Vec<ParamPlan>,
-    return_slot: Option<String>,
-    is_async: bool,
+    return_validator: Option<Validator>,
 }
 
-fn make_slot_name(raw: &str, index: usize) -> String {
-    let mut safe = String::with_capacity(raw.len() + 16);
-    for ch in raw.chars() {
-        if ch.is_alphanumeric() || ch == '_' {
-            safe.push(ch);
-        } else {
-            safe.push('_');
-        }
-    }
-    if safe.is_empty() {
-        safe.push_str("value");
-    }
-    format!("_v_{index}_{safe}")
+#[derive(Debug)]
+struct AsyncValidationPlan {
+    signature: Py<PyAny>,
+    params: Vec<ParamPlan>,
+    return_validator: Option<Validator>,
 }
 
-fn validate_single<'py>(
-    instance: &Bound<'py, PyAny>,
-    slot_name: &str,
-    value: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    instance.setattr(slot_name, value)?;
-    instance.getattr(slot_name)
+#[derive(Debug)]
+enum CompiledCallablePlan {
+    Sync(SyncValidationPlan),
+    Async(AsyncValidationPlan),
 }
 
-fn build_localns<'py>(py: Python<'py>, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, PyDict>> {
-    let localns = PyDict::new(py);
-    if !args.is_empty() {
-        let first = args.get_item(0)?;
-        let owner = if first.is_instance_of::<pyo3::types::PyType>() {
-            first
-        } else {
-            first.get_type().into_any()
-        };
-        localns.set_item(owner.getattr("__name__")?, owner)?;
-    }
-    Ok(localns)
-}
-
-fn compile_plan<'py>(
+fn build_function_validator<'py>(
     py: Python<'py>,
-    target: &Bound<'py, PyAny>,
-    validate_return: bool,
-    args: &Bound<'py, PyTuple>,
-) -> PyResult<CompiledPlan> {
-    let inspect = py.import("inspect")?;
+    tools: &crate::annotations::TypeTools<'py>,
+    name: &str,
+    ann: &Bound<'py, PyAny>,
+) -> PyResult<Validator> {
     let typing = py.import("typing")?;
-    let builtins = py.import("builtins")?;
-    let ators_mod = py.import("ators")?;
-    let ext_mod = py.import("ators._ators")?;
-
-    let signature = inspect.getattr("signature")?.call1((target,))?;
-    let localns = build_localns(py, args)?;
-    let globalns = target
-        .getattr("__globals__")
-        .unwrap_or_else(|_| PyDict::new(py).into_any());
-    let th_kwargs = PyDict::new(py);
-    th_kwargs.set_item("globalns", &globalns)?;
-    th_kwargs.set_item("localns", &localns)?;
-    th_kwargs.set_item("include_extras", true)?;
-
-    let type_hints = typing
-        .getattr("get_type_hints")?
-        .call((target,), Some(&th_kwargs))?;
-
-    let empty_ann = inspect.getattr("Signature")?.getattr("empty")?;
-    let var_pos = inspect.getattr("Parameter")?.getattr("VAR_POSITIONAL")?;
-    let var_kw = inspect.getattr("Parameter")?.getattr("VAR_KEYWORD")?;
-
-    let annotations = PyDict::new(py);
-    let namespace = PyDict::new(py);
-    namespace.set_item("__annotations__", &annotations)?;
-
-    let mut params = Vec::new();
-    let parameters = signature.getattr("parameters")?;
-    for (idx, item) in parameters.call_method0("items")?.try_iter()?.enumerate() {
-        let tuple = item?.cast_into::<PyTuple>()?;
-        let name_obj = tuple.get_item(0)?;
-        let name = name_obj.extract::<String>()?;
-        let param = tuple.get_item(1)?;
-
-        let annotation = match type_hints.cast::<PyDict>()?.get_item(&name)? {
-            Some(v) => v,
-            None => param.getattr("annotation")?,
-        };
-        if annotation.is(&empty_ann) {
-            continue;
-        }
-
-        let slot_name = make_slot_name(&name, idx);
-        let member_kwargs = PyDict::new(py);
-        member_kwargs.set_item("init", false)?;
-        let member_builder = ext_mod.getattr("member")?.call((), Some(&member_kwargs))?;
-
-        annotations.set_item(&slot_name, annotation)?;
-        namespace.set_item(&slot_name, member_builder)?;
-
-        let kind = {
-            let k = param.getattr("kind")?;
-            if k.is(&var_pos) {
-                ParamKind::VarPositional
-            } else if k.is(&var_kw) {
-                ParamKind::VarKeyword
-            } else {
-                ParamKind::Regular
-            }
-        };
-
-        params.push(ParamPlan {
-            name,
-            kind,
-            slot_name,
-        });
+    let class_var = typing.getattr("ClassVar")?;
+    let origin = typing.getattr("get_origin")?.call1((ann,))?;
+    if origin.is(&class_var) || ann.is(&class_var) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{name}': ClassVar is not allowed in function annotations."
+        )));
     }
 
-    let mut return_slot = None;
-    if validate_return {
-        let return_annotation = match type_hints.cast::<PyDict>()?.get_item("return")? {
-            Some(v) => v,
-            None => signature.getattr("return_annotation")?,
-        };
-        if !return_annotation.is(&empty_ann) {
-            let slot = "_v_return".to_string();
-            let member_kwargs = PyDict::new(py);
-            member_kwargs.set_item("init", false)?;
-            let member_builder = ext_mod.getattr("member")?.call((), Some(&member_kwargs))?;
-            annotations.set_item(&slot, return_annotation)?;
-            namespace.set_item(&slot, member_builder)?;
-            return_slot = Some(slot);
-        }
+    let member_type = py.get_type::<Member>();
+    if origin.is(member_type.as_any()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{name}': subscripted Member annotations are not supported in function annotations."
+        )));
     }
 
-    let class_name = format!(
-        "_CallableValidation_{}_{}",
-        target.getattr("__name__")?.extract::<String>()?,
-        target.as_ptr() as usize
-    );
-    let validator_class =
-        builtins
-            .getattr("type")?
-            .call1((class_name, (ators_mod.getattr("Ators")?,), namespace))?;
+    if let Ok(ators_mod) = py.import("ators")
+        && let Ok(event_type) = ators_mod.getattr("Event")
+        && origin.is(&event_type)
+    {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{name}': subscripted Event annotations are not supported in function annotations."
+        )));
+    }
 
-    let is_async = inspect
-        .getattr("iscoroutinefunction")?
-        .call1((target,))?
-        .extract()?;
-
-    Ok(CompiledPlan {
-        signature: signature.unbind(),
-        validator_class: validator_class.unbind(),
-        params,
-        return_slot,
-        is_async,
-    })
+    let (validator, _) = build_validator_from_annotation(
+        PyString::new(py, name).cast()?,
+        ann,
+        0,
+        tools,
+        None,
+        None,
+    )?;
+    Ok(validator)
 }
 
 fn aggregate_error(issues: &[(String, pyo3::PyErr)]) -> pyo3::PyErr {
@@ -207,48 +109,17 @@ fn aggregate_error(issues: &[(String, pyo3::PyErr)]) -> pyo3::PyErr {
     ))
 }
 
-#[pyclass(module = "ators._ators")]
+#[pyclass(module = "ators._ators", dict)]
 #[derive(Debug)]
-pub struct CallableValidator {
+pub struct SyncCallableValidator {
     target: Py<PyAny>,
+    plan: SyncValidationPlan,
     aggregate_errors: bool,
-    validate_return: bool,
     strict: bool,
 }
 
-impl CallableValidator {
-    fn validate_return_with_plan<'py>(
-        &self,
-        py: Python<'py>,
-        plan: &CompiledPlan,
-        value: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        if let Some(slot) = &plan.return_slot {
-            let validator_instance = plan.validator_class.bind(py).call0()?;
-            validate_single(&validator_instance, slot, value)
-        } else {
-            Ok(value.clone())
-        }
-    }
-}
-
 #[pymethods]
-impl CallableValidator {
-    #[new]
-    pub fn new(
-        target: Bound<'_, PyAny>,
-        aggregate_errors: bool,
-        validate_return: bool,
-        strict: bool,
-    ) -> Self {
-        Self {
-            target: target.unbind(),
-            aggregate_errors,
-            validate_return,
-            strict,
-        }
-    }
-
+impl SyncCallableValidator {
     #[pyo3(signature = (*args, **kwargs))]
     fn __call__<'py>(
         &self,
@@ -257,16 +128,17 @@ impl CallableValidator {
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let target = self.target.bind(py);
-        let plan = compile_plan(py, target, self.validate_return, args)?;
-
-        let bound = plan.signature.bind(py).call_method("bind", args, kwargs)?;
+        let bound = self
+            .plan
+            .signature
+            .bind(py)
+            .call_method("bind", args, kwargs)?;
         bound.call_method0("apply_defaults")?;
 
         let arguments = bound.getattr("arguments")?.cast_into::<PyDict>()?;
-        let validator_instance = plan.validator_class.bind(py).call0()?;
 
         let mut issues: Vec<(String, pyo3::PyErr)> = Vec::new();
-        for param in &plan.params {
+        for param in &self.plan.params {
             let current = arguments
                 .get_item(&param.name)?
                 .expect("Bound arguments should include validated parameters");
@@ -276,7 +148,7 @@ impl CallableValidator {
                     let mut validated = Vec::new();
                     for (idx, item) in current.try_iter()?.enumerate() {
                         let item = item?;
-                        match validate_single(&validator_instance, &param.slot_name, &item) {
+                        match param.validator.validate(Some(&param.name), None, &item) {
                             Ok(v) => validated.push(v.into_any().unbind()),
                             Err(err) => {
                                 if self.strict || !self.aggregate_errors {
@@ -297,7 +169,7 @@ impl CallableValidator {
                         let key_str = key
                             .extract::<String>()
                             .unwrap_or_else(|_| "<key>".to_string());
-                        match validate_single(&validator_instance, &param.slot_name, &item) {
+                        match param.validator.validate(Some(&param.name), None, &item) {
                             Ok(v) => {
                                 validated_kw.set_item(key, v)?;
                             }
@@ -312,7 +184,7 @@ impl CallableValidator {
                     arguments.set_item(&param.name, validated_kw)?;
                 }
                 ParamKind::Regular => {
-                    match validate_single(&validator_instance, &param.slot_name, &current) {
+                    match param.validator.validate(Some(&param.name), None, &current) {
                         Ok(v) => {
                             arguments.set_item(&param.name, v)?;
                         }
@@ -335,69 +207,387 @@ impl CallableValidator {
         let call_kwargs = bound.getattr("kwargs")?.cast_into::<PyDict>()?;
         let result = target.call(call_args, Some(&call_kwargs))?;
 
-        if !self.validate_return || plan.return_slot.is_none() {
-            return Ok(result);
+        if let Some(return_validator) = &self.plan.return_validator {
+            return return_validator.validate(Some("return"), None, &result);
         }
-
-        if plan.is_async {
-            let locals = PyDict::new(py);
-            let validator_obj = Bound::new(
-                py,
-                CallableValidator {
-                    target: self.target.clone_ref(py),
-                    aggregate_errors: self.aggregate_errors,
-                    validate_return: self.validate_return,
-                    strict: self.strict,
-                },
-            )?;
-            let code = CString::new(
-                "async def _ators_await_and_validate(coro, validator):\n    result = await coro\n    return validator._validate_return_after_await(result)",
-            )
-            .expect("string literal should be a valid C string");
-            py.run(code.as_c_str(), None, Some(&locals))?;
-            let helper = locals
-                .get_item("_ators_await_and_validate")?
-                .expect("helper should be defined by run");
-            return helper.call1((&result, &validator_obj));
-        }
-
-        self.validate_return_with_plan(py, &plan, &result)
+        Ok(result)
     }
 
-    fn _validate_return_after_await<'py>(
-        &self,
-        py: Python<'py>,
-        value: &Bound<'py, PyAny>,
+    fn __get__<'py>(
+        slf: Bound<'py, Self>,
+        obj: Option<&Bound<'py, PyAny>>,
+        _owner: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let empty = PyTuple::empty(py);
-        let plan = compile_plan(py, self.target.bind(py), self.validate_return, &empty)?;
-        self.validate_return_with_plan(py, &plan, value)
+        if let Some(instance) = obj {
+            let types_mod = slf.py().import("types")?;
+            return types_mod.getattr("MethodType")?.call1((slf, instance));
+        }
+        Ok(slf.into_any())
     }
 }
 
-fn make_wrapped_callable<'py>(
-    py: Python<'py>,
-    validator: Bound<'py, CallableValidator>,
-    target: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let locals = PyDict::new(py);
-    locals.set_item("__validator", validator)?;
-    let wrapper_code =
-        CString::new("(lambda *a, __validator=__validator, **k: __validator(*a, **k))")
-            .expect("string literal should be a valid C string");
-    let wrapper = py.eval(wrapper_code.as_c_str(), None, Some(&locals))?;
+impl SyncCallableValidator {
+    fn new(
+        target: Bound<'_, PyAny>,
+        plan: SyncValidationPlan,
+        aggregate_errors: bool,
+        strict: bool,
+    ) -> Self {
+        Self {
+            target: target.unbind(),
+            plan,
+            aggregate_errors,
+            strict,
+        }
+    }
+}
 
-    let functools = py.import("functools")?;
-    let wrapped = functools
-        .getattr("wraps")?
+#[pyclass(module = "ators._ators")]
+#[derive(Debug)]
+pub struct AsyncValidatedIterator {
+    iterator: Py<PyAny>,
+    return_validator: Validator,
+}
+
+fn extract_stop_iteration_value<'py>(
+    py: Python<'py>,
+    err: &pyo3::PyErr,
+) -> PyResult<Bound<'py, PyAny>> {
+    let args = err.value(py).getattr("args")?.cast_into::<PyTuple>()?;
+    if args.is_empty() {
+        Ok(py.None().into_bound(py))
+    } else {
+        args.get_item(0)
+    }
+}
+
+fn handle_iterator_error<'py>(
+    py: Python<'py>,
+    err: pyo3::PyErr,
+    return_validator: &Validator,
+) -> PyResult<Bound<'py, PyAny>> {
+    if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+        let value = extract_stop_iteration_value(py, &err)?;
+        let validated = return_validator.validate(Some("return"), None, &value)?;
+        return Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
+            validated.unbind(),
+        )));
+    }
+    Err(err)
+}
+
+#[pymethods]
+impl AsyncValidatedIterator {
+    fn __iter__(slf: Bound<'_, Self>) -> Bound<'_, Self> {
+        slf
+    }
+
+    fn __next__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self.iterator.bind(py).call_method0("__next__") {
+            Ok(v) => Ok(v),
+            Err(err) => handle_iterator_error(py, err, &self.return_validator),
+        }
+    }
+
+    fn send<'py>(&self, py: Python<'py>, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        match self.iterator.bind(py).call_method1("send", (value,)) {
+            Ok(v) => Ok(v),
+            Err(err) => handle_iterator_error(py, err, &self.return_validator),
+        }
+    }
+
+    #[pyo3(signature = (*args))]
+    fn throw<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self.iterator.bind(py).call_method("throw", args, None) {
+            Ok(v) => Ok(v),
+            Err(err) => handle_iterator_error(py, err, &self.return_validator),
+        }
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.iterator.bind(py).call_method0("close")
+    }
+}
+
+#[pyclass(module = "ators._ators")]
+#[derive(Debug)]
+pub struct AsyncValidatedResult {
+    awaitable: Py<PyAny>,
+    return_validator: Validator,
+}
+
+#[pymethods]
+impl AsyncValidatedResult {
+    fn __await__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let iterator = self.awaitable.bind(py).call_method0("__await__")?;
+        Ok(Bound::new(
+            py,
+            AsyncValidatedIterator {
+                iterator: iterator.unbind(),
+                return_validator: self.return_validator.clone(),
+            },
+        )?
+        .into_any())
+    }
+}
+
+#[pyclass(module = "ators._ators", dict)]
+#[derive(Debug)]
+pub struct AsyncCallableValidator {
+    target: Py<PyAny>,
+    plan: AsyncValidationPlan,
+    aggregate_errors: bool,
+    strict: bool,
+}
+
+#[pymethods]
+impl AsyncCallableValidator {
+    #[pyo3(signature = (*args, **kwargs))]
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let target = self.target.bind(py);
+        let bound = self
+            .plan
+            .signature
+            .bind(py)
+            .call_method("bind", args, kwargs)?;
+        bound.call_method0("apply_defaults")?;
+
+        let arguments = bound.getattr("arguments")?.cast_into::<PyDict>()?;
+        let mut issues: Vec<(String, pyo3::PyErr)> = Vec::new();
+        for param in &self.plan.params {
+            let current = arguments
+                .get_item(&param.name)?
+                .expect("Bound arguments should include validated parameters");
+
+            match param.kind {
+                ParamKind::VarPositional => {
+                    let mut validated = Vec::new();
+                    for (idx, item) in current.try_iter()?.enumerate() {
+                        let item = item?;
+                        match param.validator.validate(Some(&param.name), None, &item) {
+                            Ok(v) => validated.push(v.into_any().unbind()),
+                            Err(err) => {
+                                if self.strict || !self.aggregate_errors {
+                                    return Err(err);
+                                }
+                                issues.push((format!("{}[{idx}]", param.name), err));
+                            }
+                        }
+                    }
+                    arguments.set_item(&param.name, PyTuple::new(py, validated)?)?;
+                }
+                ParamKind::VarKeyword => {
+                    let validated_kw = PyDict::new(py);
+                    for kv in current.call_method0("items")?.try_iter()? {
+                        let kv = kv?.cast_into::<PyTuple>()?;
+                        let key = kv.get_item(0)?;
+                        let item = kv.get_item(1)?;
+                        let key_str = key
+                            .extract::<String>()
+                            .unwrap_or_else(|_| "<key>".to_string());
+                        match param.validator.validate(Some(&param.name), None, &item) {
+                            Ok(v) => {
+                                validated_kw.set_item(key, v)?;
+                            }
+                            Err(err) => {
+                                if self.strict || !self.aggregate_errors {
+                                    return Err(err);
+                                }
+                                issues.push((format!("{}.{}", param.name, key_str), err));
+                            }
+                        }
+                    }
+                    arguments.set_item(&param.name, validated_kw)?;
+                }
+                ParamKind::Regular => {
+                    match param.validator.validate(Some(&param.name), None, &current) {
+                        Ok(v) => {
+                            arguments.set_item(&param.name, v)?;
+                        }
+                        Err(err) => {
+                            if self.strict || !self.aggregate_errors {
+                                return Err(err);
+                            }
+                            issues.push((param.name.clone(), err));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !issues.is_empty() {
+            return Err(aggregate_error(&issues));
+        }
+
+        let call_args = bound.getattr("args")?.cast_into::<PyTuple>()?;
+        let call_kwargs = bound.getattr("kwargs")?.cast_into::<PyDict>()?;
+        let result = target.call(call_args, Some(&call_kwargs))?;
+
+        if let Some(return_validator) = &self.plan.return_validator {
+            return Ok(Bound::new(
+                py,
+                AsyncValidatedResult {
+                    awaitable: result.unbind(),
+                    return_validator: return_validator.clone(),
+                },
+            )?
+            .into_any());
+        }
+
+        Ok(result)
+    }
+
+    fn __get__<'py>(
+        slf: Bound<'py, Self>,
+        obj: Option<&Bound<'py, PyAny>>,
+        _owner: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(instance) = obj {
+            let types_mod = slf.py().import("types")?;
+            return types_mod.getattr("MethodType")?.call1((slf, instance));
+        }
+        Ok(slf.into_any())
+    }
+}
+
+impl AsyncCallableValidator {
+    fn new(
+        target: Bound<'_, PyAny>,
+        plan: AsyncValidationPlan,
+        aggregate_errors: bool,
+        strict: bool,
+    ) -> Self {
+        Self {
+            target: target.unbind(),
+            plan,
+            aggregate_errors,
+            strict,
+        }
+    }
+}
+
+fn compile_plan<'py>(
+    py: Python<'py>,
+    target: &Bound<'py, PyAny>,
+    validate_return: bool,
+) -> PyResult<CompiledCallablePlan> {
+    let inspect = py.import("inspect")?;
+    let typing = py.import("typing")?;
+    let tools = get_type_tools(py)?;
+
+    let signature = inspect.getattr("signature")?.call1((target,))?;
+    let globalns = target
+        .getattr("__globals__")
+        .unwrap_or_else(|_| PyDict::new(py).into_any());
+    let th_kwargs = PyDict::new(py);
+    th_kwargs.set_item("globalns", &globalns)?;
+    th_kwargs.set_item("include_extras", true)?;
+    let type_hints = typing
+        .getattr("get_type_hints")?
+        .call((target,), Some(&th_kwargs))?
+        .cast_into::<PyDict>()?;
+
+    let empty_ann = inspect.getattr("Signature")?.getattr("empty")?;
+    let var_pos = inspect.getattr("Parameter")?.getattr("VAR_POSITIONAL")?;
+    let var_kw = inspect.getattr("Parameter")?.getattr("VAR_KEYWORD")?;
+
+    let mut params = Vec::new();
+    let parameters = signature.getattr("parameters")?;
+    for item in parameters.call_method0("items")?.try_iter()? {
+        let tuple = item?.cast_into::<PyTuple>()?;
+        let name_obj = tuple.get_item(0)?;
+        let name = name_obj.extract::<String>()?;
+        let param = tuple.get_item(1)?;
+
+        let annotation = match type_hints.get_item(&name)? {
+            Some(v) => v,
+            None => param.getattr("annotation")?,
+        };
+        if annotation.is(&empty_ann) {
+            continue;
+        }
+
+        let kind = {
+            let k = param.getattr("kind")?;
+            if k.is(&var_pos) {
+                ParamKind::VarPositional
+            } else if k.is(&var_kw) {
+                ParamKind::VarKeyword
+            } else {
+                ParamKind::Regular
+            }
+        };
+
+        params.push(ParamPlan {
+            name: name.clone(),
+            kind,
+            validator: build_function_validator(py, &tools, &name, &annotation)?,
+        });
+    }
+
+    let return_validator = if validate_return {
+        let return_annotation = match type_hints.get_item("return")? {
+            Some(v) => v,
+            None => signature.getattr("return_annotation")?,
+        };
+        if return_annotation.is(&empty_ann) {
+            None
+        } else {
+            Some(build_function_validator(
+                py,
+                &tools,
+                "return",
+                &return_annotation,
+            )?)
+        }
+    } else {
+        None
+    };
+
+    let is_async = inspect
+        .getattr("iscoroutinefunction")?
         .call1((target,))?
-        .call1((wrapper,))?;
+        .extract()?;
+
+    if is_async {
+        Ok(CompiledCallablePlan::Async(AsyncValidationPlan {
+            signature: signature.unbind(),
+            params,
+            return_validator,
+        }))
+    } else {
+        Ok(CompiledCallablePlan::Sync(SyncValidationPlan {
+            signature: signature.unbind(),
+            params,
+            return_validator,
+        }))
+    }
+}
+
+fn update_wrapper_metadata<'py>(
+    py: Python<'py>,
+    wrapped: &Bound<'py, PyAny>,
+    target: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let functools = py.import("functools")?;
+    functools
+        .getattr("update_wrapper")?
+        .call1((wrapped, target))?;
     let inspect = py.import("inspect")?;
     wrapped.setattr(
         "__signature__",
         inspect.getattr("signature")?.call1((target,))?,
     )?;
-    Ok(wrapped)
+    Ok(())
 }
 
 fn decorate_target<'py>(
@@ -410,16 +600,16 @@ fn decorate_target<'py>(
     let builtins = py.import("builtins")?;
     let staticmethod_ty = builtins.getattr("staticmethod")?;
     if target.is_instance(&staticmethod_ty)? {
-        let inner = target.getattr("__func__")?;
-        let wrapped = decorate_target(py, &inner, aggregate_errors, validate_return, strict)?;
-        return staticmethod_ty.call1((wrapped,));
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "validated cannot be applied to staticmethod objects; decorate the underlying function before wrapping it as staticmethod.",
+        ));
     }
 
     let classmethod_ty = builtins.getattr("classmethod")?;
     if target.is_instance(&classmethod_ty)? {
-        let inner = target.getattr("__func__")?;
-        let wrapped = decorate_target(py, &inner, aggregate_errors, validate_return, strict)?;
-        return classmethod_ty.call1((wrapped,));
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "validated cannot be applied to classmethod objects; decorate the underlying function before wrapping it as classmethod.",
+        ));
     }
 
     if !target.is_callable() {
@@ -428,11 +618,55 @@ fn decorate_target<'py>(
         ));
     }
 
-    let validator = Bound::new(
-        py,
-        CallableValidator::new(target.clone(), aggregate_errors, validate_return, strict),
-    )?;
-    make_wrapped_callable(py, validator, target)
+    let wrapped = match compile_plan(py, target, validate_return)? {
+        CompiledCallablePlan::Sync(plan) => Bound::new(
+            py,
+            SyncCallableValidator::new(target.clone(), plan, aggregate_errors, strict),
+        )?
+        .into_any(),
+        CompiledCallablePlan::Async(plan) => Bound::new(
+            py,
+            AsyncCallableValidator::new(target.clone(), plan, aggregate_errors, strict),
+        )?
+        .into_any(),
+    };
+    update_wrapper_metadata(py, &wrapped, target)?;
+    Ok(wrapped)
+}
+
+#[pyclass(module = "ators._ators", frozen)]
+#[derive(Debug)]
+pub struct ValidatedDecorator {
+    aggregate_errors: bool,
+    validate_return: bool,
+    strict: bool,
+}
+
+#[pymethods]
+impl ValidatedDecorator {
+    #[new]
+    #[pyo3(signature = (*, aggregate_errors=true, validate_return=true, strict=false))]
+    fn new(aggregate_errors: bool, validate_return: bool, strict: bool) -> Self {
+        Self {
+            aggregate_errors,
+            validate_return,
+            strict,
+        }
+    }
+
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        target: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        decorate_target(
+            py,
+            &target,
+            self.aggregate_errors,
+            self.validate_return,
+            self.strict,
+        )
+    }
 }
 
 #[pyfunction(signature=(func=None, *, aggregate_errors=true, validate_return=true, strict=false))]
@@ -447,13 +681,13 @@ pub fn validated<'py>(
         return decorate_target(py, &target, aggregate_errors, validate_return, strict);
     }
 
-    let functools = py.import("functools")?;
-    let module = py.import("ators._ators")?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("aggregate_errors", aggregate_errors)?;
-    kwargs.set_item("validate_return", validate_return)?;
-    kwargs.set_item("strict", strict)?;
-    functools
-        .getattr("partial")?
-        .call((module.getattr("validated")?,), Some(&kwargs))
+    Ok(Bound::new(
+        py,
+        ValidatedDecorator {
+            aggregate_errors,
+            validate_return,
+            strict,
+        },
+    )?
+    .into_any())
 }
