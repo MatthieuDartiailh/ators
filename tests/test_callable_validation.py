@@ -61,6 +61,19 @@ def test_validated_rejects_staticmethod_target() -> None:
                 return x
 
 
+def test_validated_then_staticmethod_works() -> None:
+    class C:
+        @staticmethod
+        @validated
+        def stat(x: int) -> int:
+            return x
+
+    assert C.stat(1) == 1
+    assert C().stat(1) == 1
+    with pytest.raises(TypeError):
+        C.stat("1")  # type: ignore[arg-type]
+
+
 def test_validated_rejects_classmethod_target() -> None:
     with pytest.raises(TypeError, match="validated cannot be applied to classmethod"):
         class C:
@@ -68,6 +81,19 @@ def test_validated_rejects_classmethod_target() -> None:
             @classmethod
             def cls(cls, x: int) -> int:
                 return x
+
+
+def test_validated_then_classmethod_works() -> None:
+    class C:
+        @classmethod
+        @validated
+        def cls(cls, x: int) -> int:
+            return x
+
+    assert C.cls(1) == 1
+    assert C().cls(2) == 2
+    with pytest.raises(TypeError):
+        C.cls("1")  # type: ignore[arg-type]
 
 
 def test_validated_async_function() -> None:
@@ -78,6 +104,26 @@ def test_validated_async_function() -> None:
     assert asyncio.run(af(3)) == 4
     with pytest.raises(TypeError):
         asyncio.run(af("3"))  # type: ignore[arg-type]
+
+
+def test_validated_async_function_return_validation() -> None:
+    @validated
+    async def af(x: int) -> int:
+        return str(x)  # type: ignore[return-value]
+
+    with pytest.raises(TypeError):
+        asyncio.run(af(3))
+
+
+def test_validated_checks_default_values_when_argument_missing() -> None:
+    @validated
+    def f(x: int = "1"):  # type: ignore[assignment]
+        return x
+
+    with pytest.raises(TypeError):
+        f()
+
+    assert f(2) == 2
 
 
 def test_strict_mode_fails_fast() -> None:

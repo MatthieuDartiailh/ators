@@ -47,6 +47,7 @@ impl ValidatorBuildInfo {
 pub(crate) struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
+    class_var: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
     union_: Bound<'py, PyAny>,
     type_var: Bound<'py, PyAny>,
@@ -67,6 +68,16 @@ pub(crate) struct TypeTools<'py> {
     call_evaluate_function: Bound<'py, PyAny>,
     forwardref_format: Bound<'py, PyAny>,
     types: PyTypes<'py>,
+}
+
+impl<'py> TypeTools<'py> {
+    pub(crate) fn get_origin(&self, ann: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.get_origin.call1((ann,))
+    }
+
+    pub(crate) fn class_var(&self) -> &Bound<'py, PyAny> {
+        &self.types.class_var
+    }
 }
 
 pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyErr> {
@@ -94,6 +105,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
         types: PyTypes {
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
+            class_var: typing_mod.getattr(intern!(py, "ClassVar"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
             union_: types_mod.getattr(intern!(py, "UnionType"))?,
             type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
