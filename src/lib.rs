@@ -16,8 +16,8 @@ use pyo3::{
 use crate::utils::{GenericAttributesMap, TypeMutabilityMap};
 
 mod annotations;
-mod class;
 mod callable_validation;
+mod class;
 mod containers;
 mod event;
 mod member;

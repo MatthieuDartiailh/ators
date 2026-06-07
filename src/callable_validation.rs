@@ -55,7 +55,6 @@ enum CompiledCallablePlan {
     Async(AsyncValidationPlan),
 }
 
-
 fn ensure_positional_storage<'py, 'a>(
     args: &Bound<'py, PyTuple>,
     out_positional: &'a mut Option<Vec<Py<PyAny>>>,
@@ -308,7 +307,10 @@ fn validate_call_arguments<'py>(
                                 if issues.is_none() {
                                     issues = Some(Vec::new());
                                 }
-                                issues.as_mut().unwrap().push((format!("{}[{idx}]", param.name), err));
+                                issues
+                                    .as_mut()
+                                    .unwrap()
+                                    .push((format!("{}[{idx}]", param.name), err));
                             }
                         }
                     } else if let Some(ref mut out) = out_positional {
@@ -344,7 +346,10 @@ fn validate_call_arguments<'py>(
                                 if issues.is_none() {
                                     issues = Some(Vec::new());
                                 }
-                                issues.as_mut().unwrap().push((format!("{}.{}", param.name, key_str), err));
+                                issues
+                                    .as_mut()
+                                    .unwrap()
+                                    .push((format!("{}.{}", param.name, key_str), err));
                             }
                         }
                     }
@@ -357,7 +362,7 @@ fn validate_call_arguments<'py>(
         let exception_group = py
             .import(intern!(py, "builtins"))?
             .getattr(intern!(py, "ExceptionGroup"))?
-            .call1((format!("Failed to validate {} arguments", self.target_name), issues))?;
+            .call1((format!("Failed to validate {name} arguments"), issues))?;
         return Err(pyo3::PyErr::from_value(exception_group));
     }
     let final_args = if let Some(mut out) = out_positional {
@@ -432,14 +437,11 @@ impl SyncCallableValidator {
 }
 
 impl SyncCallableValidator {
-    fn new(
-        target: Bound<'_, PyAny>,
-        plan: SyncValidationPlan,
-        aggregate_errors: bool,
-    ) -> Self {
+    fn new(target: Bound<'_, PyAny>, plan: SyncValidationPlan, aggregate_errors: bool) -> Self {
         Self {
-            target_name: target.getattr(intern!(target.py(), "__name__"))
-                .and_then(|name| name.cast_into::<PyString>())
+            target_name: target
+                .getattr(intern!(target.py(), "__name__"))
+                .and_then(|name| Ok(name.cast_into::<PyString>()?))
                 .map(|name| name.to_string())
                 .unwrap_or_else(|_| "<unknown>".to_string()),
             target: target.unbind(),
@@ -581,7 +583,7 @@ impl AsyncCallableValidator {
             args,
             kwargs,
             &self.plan.params,
-            self.aggregaste_errors,
+            self.aggregate_errors,
         )?;
 
         let result = target.call(&call_args, call_kwargs.as_ref())?;
@@ -613,17 +615,14 @@ impl AsyncCallableValidator {
 }
 
 impl AsyncCallableValidator {
-    fn new(
-        target: Bound<'_, PyAny>,
-        plan: AsyncValidationPlan,
-        aggregate_errors: bool,
-    ) -> Self {
+    fn new(target: Bound<'_, PyAny>, plan: AsyncValidationPlan, aggregate_errors: bool) -> Self {
         Self {
-            target: target.unbind(),
-            target_name: target.getattr(intern!(target.py(), "__name__"))
-                .and_then(|name| name.cast_into::<PyString>())
+            target_name: target
+                .getattr(intern!(target.py(), "__name__"))
+                .and_then(|name| Ok(name.cast_into::<PyString>()?))
                 .map(|name| name.to_string())
                 .unwrap_or_else(|_| "<unknown>".to_string()),
+            target: target.unbind(),
             plan,
             aggregate_errors,
         }
@@ -839,12 +838,7 @@ impl ValidatedDecorator {
         py: Python<'py>,
         target: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        decorate_target(
-            py,
-            &target,
-            self.aggregate_errors,
-            self.validate_return,
-        )
+        decorate_target(py, &target, self.aggregate_errors, self.validate_return)
     }
 }
 
