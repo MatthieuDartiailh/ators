@@ -54,6 +54,7 @@ def test_validated_methods_instance() -> None:
 
 def test_validated_rejects_staticmethod_target() -> None:
     with pytest.raises(TypeError, match="validated cannot be applied to staticmethod"):
+
         class C:
             @validated
             @staticmethod
@@ -76,6 +77,7 @@ def test_validated_then_staticmethod_works() -> None:
 
 def test_validated_rejects_classmethod_target() -> None:
     with pytest.raises(TypeError, match="validated cannot be applied to classmethod"):
+
         class C:
             @validated
             @classmethod
@@ -109,7 +111,7 @@ def test_validated_async_function() -> None:
 def test_validated_async_function_return_validation() -> None:
     @validated
     async def af(x: int) -> int:
-        return str(x)  # type: ignore[return-value]
+        return str(x)  # type: ignore
 
     with pytest.raises(TypeError):
         asyncio.run(af(3))
@@ -117,7 +119,7 @@ def test_validated_async_function_return_validation() -> None:
 
 def test_validated_checks_default_values_when_argument_missing() -> None:
     @validated
-    def f(x: int = "1"):  # type: ignore[assignment]
+    def f(x: int = "1"):  # type: ignore
         return x
 
     with pytest.raises(TypeError):
@@ -174,7 +176,7 @@ def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
 def test_validated_validate_return_false() -> None:
     @validated(validate_return=False)
     def f(x: int) -> int:
-        return str(x)  # type: ignore[return-value]
+        return str(x)  # type: ignore
 
     assert f(1) == "1"
 
@@ -202,13 +204,129 @@ def test_validated_preserves_wrapped_metadata() -> None:
 
 def test_validated_rejects_classvar_annotation() -> None:
     with pytest.raises(TypeError, match="ClassVar"):
+
         @validated
-        def f(x: ClassVar[int]) -> int:
-            return x  # type: ignore[return-value]
+        def f(x: ClassVar[int]) -> int:  # type: ignore
+            return x
 
 
 def test_validated_rejects_subscripted_member_annotation() -> None:
     with pytest.raises(TypeError, match="subscripted Member annotations"):
+
         @validated
         def f(x: Member[int, int]) -> int:
             return x  # type: ignore[return-value]
+
+
+# ============================================================================
+# Tests for validation with argument transformation (list[int] across positions)
+# ============================================================================
+
+
+def test_list_validation_positional_only() -> None:
+    """Test list[int] validation in positional-only parameter."""
+
+    @validated
+    def f(items: list[int], /) -> int:
+        return len(items)
+
+    assert f([1, 2, 3]) == 3
+    assert f([]) == 0
+
+
+def test_list_validation_positional_only_invalid_items() -> None:
+    """Test list[int] validation error in positional-only parameter."""
+
+    @validated
+    def f(items: list[int], /) -> int:
+        return len(items)
+
+    with pytest.raises(TypeError) as exc:
+        f([1, "2", 3])  # type: ignore[list-item]
+
+    msg = str(exc.value)
+    # Error should reference the parameter position
+    assert "items" in msg
+
+
+def test_list_validation_positional_or_keyword() -> None:
+    """Test list[int] validation in positional-or-keyword parameter."""
+
+    @validated
+    def f(items: list[int]) -> int:
+        return sum(items)
+
+    assert f([1, 2, 3]) == 6
+    assert f(items=[10, 20]) == 30
+
+
+def test_list_validation_positional_or_keyword_invalid_items() -> None:
+    """Test list[int] validation error in positional-or-keyword parameter."""
+
+    @validated
+    def f(items: list[int]) -> int:
+        return sum(items)
+
+    with pytest.raises(TypeError) as exc:
+        f([1, "2", 3])  # type: ignore[list-item]
+
+    msg = str(exc.value)
+    assert "items" in msg
+
+    with pytest.raises(TypeError) as exc:
+        f(items=[1, "2", 3])  # type: ignore[list-item]
+
+    msg = str(exc.value)
+    assert "items" in msg
+
+
+def test_list_validation_varargs() -> None:
+    """Test list[int] validation in *args parameter."""
+
+    @validated
+    def f(*values: list[int]) -> int:
+        return sum(len(v) for v in values)
+
+    assert f([1, 2], [3, 4, 5]) == 5
+    assert f([]) == 0
+
+
+def test_list_validation_varargs_invalid_items() -> None:
+    """Test list[int] validation error in *args parameter."""
+
+    @validated
+    def f(*values: list[int]) -> int:
+        return sum(len(v) for v in values)
+
+    with pytest.raises(TypeError) as exc:
+        f([1, 2], [3, "4", 5])  # type: ignore[list-item]
+
+    msg = str(exc.value)
+    # Error should reference the *args position with index
+    assert "values" in msg
+
+
+def test_list_validation_kwargs() -> None:
+    """Test list[int] validation in **kwargs parameter."""
+
+    @validated
+    def f(**mappings: list[int]) -> int:
+        return sum(len(v) for v in mappings.values())
+
+    assert f(a=[1, 2], b=[3, 4, 5]) == 5
+    assert f() == 0
+
+
+def test_list_validation_kwargs_invalid_items() -> None:
+    """Test list[int] validation error in **kwargs parameter."""
+
+    @validated
+    def f(**mappings: list[int]) -> int:
+        return sum(len(v) for v in mappings.values())
+
+    with pytest.raises(TypeError) as exc:
+        f(a=[1, 2], b=[3, "4", 5])  # type: ignore[list-item]
+
+    msg = str(exc.value)
+    # Error should reference the **kwargs key
+    assert "mappings" in msg

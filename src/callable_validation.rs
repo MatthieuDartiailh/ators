@@ -55,22 +55,6 @@ enum CompiledCallablePlan {
     Async(AsyncValidationPlan),
 }
 
-fn aggregate_error(issues: &[(String, pyo3::PyErr)]) -> pyo3::PyErr {
-    let mut details = String::new();
-    for (idx, (location, err)) in issues.iter().enumerate() {
-        let line = format!("- {location}: {err}\n");
-        if idx == 0 {
-            details.push_str(&line);
-        } else {
-            details.push_str(&line);
-        }
-    }
-    pyo3::exceptions::PyTypeError::new_err(format!(
-        "Callable validation failed with {} issue(s):\n{}",
-        issues.len(),
-        details.trim_end()
-    ))
-}
 
 fn ensure_positional_storage<'py, 'a>(
     args: &Bound<'py, PyTuple>,
@@ -108,13 +92,13 @@ fn ensure_kwargs_storage<'py>(
 
 fn validate_call_arguments<'py>(
     py: Python<'py>,
+    name: &str,
     args: &Bound<'py, PyTuple>,
     kwargs: Option<&Bound<'py, PyDict>>,
     params: &[ParamPlan],
-    strict: bool,
     aggregate_errors: bool,
 ) -> PyResult<(Bound<'py, PyTuple>, Option<Bound<'py, PyDict>>)> {
-    let mut issues: Vec<(String, pyo3::PyErr)> = Vec::new();
+    let mut issues: Option<Vec<(String, pyo3::PyErr)>> = None;
     let mut out_positional: Option<Vec<Py<PyAny>>> = None;
     let mut out_kwargs: Option<Bound<'py, PyDict>> = None;
     let mut pending_positional_defaults: Vec<Py<PyAny>> = Vec::new();
@@ -171,10 +155,14 @@ fn validate_call_arguments<'py>(
                             }
                         }
                         Err(err) => {
-                            if strict || !aggregate_errors {
+                            std::hint::cold_path();
+                            if !aggregate_errors {
                                 return Err(err);
                             }
-                            issues.push((param.name.clone(), err));
+                            if issues.is_none() {
+                                issues = Some(Vec::new());
+                            }
+                            issues.as_mut().unwrap().push((param.name.clone(), err));
                         }
                     }
                 } else if let Some(ref mut out) = out_positional {
@@ -235,10 +223,13 @@ fn validate_call_arguments<'py>(
                             }
                         }
                         Err(err) => {
-                            if strict || !aggregate_errors {
+                            if !aggregate_errors {
                                 return Err(err);
                             }
-                            issues.push((param.name.clone(), err));
+                            if issues.is_none() {
+                                issues = Some(Vec::new());
+                            }
+                            issues.as_mut().unwrap().push((param.name.clone(), err));
                         }
                     }
                 } else if from_positional && let Some(ref mut out) = out_positional {
@@ -278,10 +269,14 @@ fn validate_call_arguments<'py>(
                             }
                         }
                         Err(err) => {
-                            if strict || !aggregate_errors {
+                            std::hint::cold_path();
+                            if !aggregate_errors {
                                 return Err(err);
                             }
-                            issues.push((param.name.clone(), err));
+                            if issues.is_none() {
+                                issues = Some(Vec::new());
+                            }
+                            issues.as_mut().unwrap().push((param.name.clone(), err));
                         }
                     }
                 }
@@ -307,10 +302,13 @@ fn validate_call_arguments<'py>(
                                 }
                             }
                             Err(err) => {
-                                if strict || !aggregate_errors {
+                                if !aggregate_errors {
                                     return Err(err);
                                 }
-                                issues.push((format!("{}[{idx}]", param.name), err));
+                                if issues.is_none() {
+                                    issues = Some(Vec::new());
+                                }
+                                issues.as_mut().unwrap().push((format!("{}[{idx}]", param.name), err));
                             }
                         }
                     } else if let Some(ref mut out) = out_positional {
@@ -323,10 +321,7 @@ fn validate_call_arguments<'py>(
                 let Some(kw) = kwargs else {
                     continue;
                 };
-                for kv in kw.call_method0(intern!(py, "items"))?.try_iter()? {
-                    let kv = kv?.cast_into::<PyTuple>()?;
-                    let key = kv.get_item(0)?;
-                    let item = kv.get_item(1)?;
+                for (key, item) in kw.iter() {
                     let key_str = key
                         .extract::<String>()
                         .unwrap_or_else(|_| "<non-string-key>".to_string());
@@ -342,10 +337,14 @@ fn validate_call_arguments<'py>(
                                 }
                             }
                             Err(err) => {
-                                if strict || !aggregate_errors {
+                                std::hint::cold_path();
+                                if !aggregate_errors {
                                     return Err(err);
                                 }
-                                issues.push((format!("{}.{}", param.name, key_str), err));
+                                if issues.is_none() {
+                                    issues = Some(Vec::new());
+                                }
+                                issues.as_mut().unwrap().push((format!("{}.{}", param.name, key_str), err));
                             }
                         }
                     }
@@ -354,8 +353,12 @@ fn validate_call_arguments<'py>(
         }
     }
 
-    if !issues.is_empty() {
-        return Err(aggregate_error(&issues));
+    if let Some(issues) = issues {
+        let exception_group = py
+            .import(intern!(py, "builtins"))?
+            .getattr(intern!(py, "ExceptionGroup"))?
+            .call1((format!("Failed to validate {} arguments", self.target_name), issues))?;
+        return Err(pyo3::PyErr::from_value(exception_group));
     }
     let final_args = if let Some(mut out) = out_positional {
         out.extend(pending_positional_defaults);
@@ -383,10 +386,10 @@ fn get_method_type<'py>(py: Python<'py>) -> &'py Bound<'py, PyAny> {
 #[pyclass(module = "ators._ators", dict)]
 #[derive(Debug)]
 pub struct SyncCallableValidator {
+    target_name: String,
     target: Py<PyAny>,
     plan: SyncValidationPlan,
     aggregate_errors: bool,
-    strict: bool,
 }
 
 #[pymethods]
@@ -401,10 +404,10 @@ impl SyncCallableValidator {
         let target = self.target.bind(py);
         let (call_args, call_kwargs) = validate_call_arguments(
             py,
+            self.target_name.as_str(),
             args,
             kwargs,
             &self.plan.params,
-            self.strict,
             self.aggregate_errors,
         )?;
 
@@ -433,13 +436,15 @@ impl SyncCallableValidator {
         target: Bound<'_, PyAny>,
         plan: SyncValidationPlan,
         aggregate_errors: bool,
-        strict: bool,
     ) -> Self {
         Self {
+            target_name: target.getattr(intern!(target.py(), "__name__"))
+                .and_then(|name| name.cast_into::<PyString>())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string()),
             target: target.unbind(),
             plan,
             aggregate_errors,
-            strict,
         }
     }
 }
@@ -555,9 +560,9 @@ impl AsyncValidatedResult {
 #[derive(Debug)]
 pub struct AsyncCallableValidator {
     target: Py<PyAny>,
+    target_name: String,
     plan: AsyncValidationPlan,
     aggregate_errors: bool,
-    strict: bool,
 }
 
 #[pymethods]
@@ -572,11 +577,11 @@ impl AsyncCallableValidator {
         let target = self.target.bind(py);
         let (call_args, call_kwargs) = validate_call_arguments(
             py,
+            self.target_name.as_str(),
             args,
             kwargs,
             &self.plan.params,
-            self.strict,
-            self.aggregate_errors,
+            self.aggregaste_errors,
         )?;
 
         let result = target.call(&call_args, call_kwargs.as_ref())?;
@@ -612,13 +617,15 @@ impl AsyncCallableValidator {
         target: Bound<'_, PyAny>,
         plan: AsyncValidationPlan,
         aggregate_errors: bool,
-        strict: bool,
     ) -> Self {
         Self {
             target: target.unbind(),
+            target_name: target.getattr(intern!(target.py(), "__name__"))
+                .and_then(|name| name.cast_into::<PyString>())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string()),
             plan,
             aggregate_errors,
-            strict,
         }
     }
 }
@@ -771,7 +778,6 @@ fn decorate_target<'py>(
     target: &Bound<'py, PyAny>,
     aggregate_errors: bool,
     validate_return: bool,
-    strict: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let builtins = py.import("builtins")?;
     let staticmethod_ty = builtins.getattr(intern!(py, "staticmethod"))?;
@@ -797,12 +803,12 @@ fn decorate_target<'py>(
     let wrapped = match compile_plan(py, target, validate_return)? {
         CompiledCallablePlan::Sync(plan) => Bound::new(
             py,
-            SyncCallableValidator::new(target.clone(), plan, aggregate_errors, strict),
+            SyncCallableValidator::new(target.clone(), plan, aggregate_errors),
         )?
         .into_any(),
         CompiledCallablePlan::Async(plan) => Bound::new(
             py,
-            AsyncCallableValidator::new(target.clone(), plan, aggregate_errors, strict),
+            AsyncCallableValidator::new(target.clone(), plan, aggregate_errors),
         )?
         .into_any(),
     };
@@ -815,18 +821,16 @@ fn decorate_target<'py>(
 pub struct ValidatedDecorator {
     aggregate_errors: bool,
     validate_return: bool,
-    strict: bool,
 }
 
 #[pymethods]
 impl ValidatedDecorator {
     #[new]
-    #[pyo3(signature = (*, aggregate_errors=true, validate_return=true, strict=false))]
-    fn new(aggregate_errors: bool, validate_return: bool, strict: bool) -> Self {
+    #[pyo3(signature = (*, aggregate_errors=true, validate_return=true))]
+    fn new(aggregate_errors: bool, validate_return: bool) -> Self {
         Self {
             aggregate_errors,
             validate_return,
-            strict,
         }
     }
 
@@ -840,7 +844,6 @@ impl ValidatedDecorator {
             &target,
             self.aggregate_errors,
             self.validate_return,
-            self.strict,
         )
     }
 }
@@ -850,20 +853,18 @@ impl ValidatedDecorator {
 /// When called as `@validated`, defaults are:
 /// - `aggregate_errors=True`: collect all argument errors before raising.
 /// - `validate_return=True`: validate the return annotation when present.
-/// - `strict=False`: stop on first error only when set to `True`.
 ///
 /// It can also be used as a decorator factory, for example:
-/// `@validated(aggregate_errors=False, validate_return=False, strict=True)`.
-#[pyfunction(signature=(func=None, *, aggregate_errors=true, validate_return=true, strict=false))]
+/// `@validated(aggregate_errors=False, validate_return=False)`.
+#[pyfunction(signature=(func=None, *, aggregate_errors=true, validate_return=true))]
 pub fn validated<'py>(
     py: Python<'py>,
     func: Option<Bound<'py, PyAny>>,
     aggregate_errors: bool,
     validate_return: bool,
-    strict: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     if let Some(target) = func {
-        return decorate_target(py, &target, aggregate_errors, validate_return, strict);
+        return decorate_target(py, &target, aggregate_errors, validate_return);
     }
 
     Ok(Bound::new(
@@ -871,7 +872,6 @@ pub fn validated<'py>(
         ValidatedDecorator {
             aggregate_errors,
             validate_return,
-            strict,
         },
     )?
     .into_any())
