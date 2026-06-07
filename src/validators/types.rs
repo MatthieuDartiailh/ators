@@ -9,7 +9,7 @@
 use super::Validator;
 use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
-use crate::utils::{Mutability, err_with_cause};
+use crate::utils::{Mutability, TupleBuilder, err_with_cause};
 use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::PyStringMethods;
@@ -505,27 +505,25 @@ impl TypeValidator {
                             }
                         };
                     }
-                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                    let mut validated_items: Option<TupleBuilder<'_>> = None;
                     for (index, (item, validator)) in tuple.iter().zip(items).enumerate() {
                         // FIXME the loop body logic could be extracted into a helper function
                         match validator.validate(name, object, &item) {
                             Ok(v) => {
-                                if !v.is(item) {
-                                    match &mut validated_items {
-                                        Some(vec) => vec.push(v),
-                                        None => {
-                                            let mut vec = Vec::with_capacity(t_length);
-                                            for i in 0..index {
-                                                vec.push(
-                                                    tuple.get_item(i).expect(
-                                                        "All indexes are known to be valid.",
-                                                    ),
-                                                );
-                                            }
-                                            vec.push(v);
-                                            validated_items = Some(vec);
-                                        }
+                                let is_same = v.is(&item);
+                                if let Some(builder) = validated_items.take() {
+                                    validated_items =
+                                        Some(builder.add_item(if is_same { item } else { v })?);
+                                } else if !is_same {
+                                    let mut builder = TupleBuilder::new(value.py(), t_length)?;
+                                    for i in 0..index {
+                                        builder = builder.add_item(
+                                            tuple
+                                                .get_item(i)
+                                                .expect("All indexes are known to be valid."),
+                                        )?;
                                     }
+                                    validated_items = Some(builder.add_item(v)?);
                                 }
                             }
                             Err(cause) => {
@@ -554,8 +552,8 @@ impl TypeValidator {
                             }
                         }
                     }
-                    Ok(if let Some(vi) = validated_items {
-                        pyo3::types::PyTuple::new(value.py(), vi)?.into_any()
+                    Ok(if let Some(builder) = validated_items {
+                        builder.build()?.into_any()
                     } else {
                         value.clone()
                     })
@@ -565,26 +563,24 @@ impl TypeValidator {
             }
             Self::VarTuple { item: Some(item) } => {
                 if let Ok(tuple) = value.cast_exact::<pyo3::types::PyTuple>() {
-                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                    let mut validated_items: Option<TupleBuilder<'_>> = None;
                     for (index, titem) in tuple.iter().enumerate() {
                         match item.validate(name, object, &titem) {
                             Ok(v) => {
-                                if !v.is(&titem) {
-                                    match &mut validated_items {
-                                        Some(vec) => vec.push(v),
-                                        None => {
-                                            let mut vec = Vec::with_capacity(tuple.len());
-                                            for i in 0..index {
-                                                vec.push(
-                                                    tuple.get_item(i).expect(
-                                                        "All indexes are known to be valid.",
-                                                    ),
-                                                );
-                                            }
-                                            vec.push(v);
-                                            validated_items = Some(vec);
-                                        }
+                                let is_same = v.is(&titem);
+                                if let Some(builder) = validated_items.take() {
+                                    validated_items =
+                                        Some(builder.add_item(if is_same { titem } else { v })?);
+                                } else if !is_same {
+                                    let mut builder = TupleBuilder::new(value.py(), tuple.len())?;
+                                    for i in 0..index {
+                                        builder = builder.add_item(
+                                            tuple
+                                                .get_item(i)
+                                                .expect("All indexes are known to be valid."),
+                                        )?;
                                     }
+                                    validated_items = Some(builder.add_item(v)?);
                                 }
                             }
                             Err(cause) => {
@@ -613,8 +609,8 @@ impl TypeValidator {
                             }
                         }
                     }
-                    Ok(if let Some(vi) = validated_items {
-                        pyo3::types::PyTuple::new(value.py(), vi)?.into_any()
+                    Ok(if let Some(builder) = validated_items {
+                        builder.build()?.into_any()
                     } else {
                         value.clone()
                     })

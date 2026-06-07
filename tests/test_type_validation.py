@@ -528,3 +528,25 @@ def test_constrained_generic_partial_specialization_rejects_bound_outside_constr
     T_float_bound = TypeVar("T_float_bound", bound=float)
     with pytest.raises(TypeError, match="not within the constraints"):
         _ = ConstrainedGenericPair[T_float_bound, str]
+
+
+def test_fixed_tuple_validation_preserves_unchanged_items_after_transformation():
+    class A(Ators):
+        a: tuple[list[int], int] = member()
+
+    a = A()
+    a.a = ([1], 2)
+    assert len(a.a) == 2
+    assert a.a[0] == [1]
+    assert a.a[1] == 2
+
+
+def test_var_tuple_validation_preserves_unchanged_items_after_transformation():
+    class A(Ators):
+        a: tuple[list[int] | int, ...] = member()
+
+    a = A()
+    a.a = ([1], 2)
+    assert len(a.a) == 2
+    assert a.a[0] == [1]
+    assert a.a[1] == 2

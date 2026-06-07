@@ -10,10 +10,12 @@ use crate::class::base::AtorsBase;
 /// particular aspect of the library.
 use crate::class::info::get_class_info;
 use pyo3::{
-    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, intern, pyclass,
-    pymethods,
+    Bound, FromPyObject, Py, PyAny, PyErr, PyRefMut, PyResult, PyTypeInfo, Python, ffi, intern,
+    pyclass, pymethods,
     sync::PyOnceLock,
-    types::{PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyType, PyTypeMethods},
+    types::{
+        PyAnyMethods, PyBool, PyBytes, PyFloat, PyInt, PyString, PyTuple, PyType, PyTypeMethods,
+    },
 };
 use std::collections::HashMap;
 
@@ -54,6 +56,106 @@ pub(crate) fn is_type_var(param: &Bound<'_, PyAny>) -> PyResult<bool> {
 pub(crate) fn err_with_cause<'py>(py: Python<'py>, err: PyErr, cause: PyErr) -> PyErr {
     err.set_cause(py, Some(cause));
     err
+}
+
+/// Zero-copy tuple builder that avoids intermediate Vec allocations.
+///
+/// Allocates a Python tuple upfront and populates it item-by-item with
+/// `PyTuple_SET_ITEM`.
+pub(crate) struct TupleBuilder<'py> {
+    /// Owned pointer to the tuple under construction.
+    ///
+    /// This remains owned by the builder until `build()` transfers ownership to
+    /// a `Bound<PyTuple>` (and nulls this pointer) or until `Drop` decrements it.
+    tuple: *mut ffi::PyObject,
+    size: usize,
+    index: usize,
+    py: Python<'py>,
+}
+
+impl<'py> TupleBuilder<'py> {
+    /// Create a tuple builder with the provided number of slots.
+    pub(crate) fn new(py: Python<'py>, size: usize) -> PyResult<Self> {
+        if size == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "TupleBuilder size must be greater than 0",
+            ));
+        }
+
+        let py_size: ffi::Py_ssize_t = size.try_into().map_err(|_| {
+            pyo3::exceptions::PyOverflowError::new_err("TupleBuilder size exceeds Py_ssize_t")
+        })?;
+
+        let tuple = unsafe {
+            // SAFETY: GIL is held by `py`, and `py_size` was checked to fit Py_ssize_t.
+            ffi::PyTuple_New(py_size)
+        };
+        if tuple.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+
+        Ok(Self {
+            tuple,
+            size,
+            index: 0,
+            py,
+        })
+    }
+
+    /// Add an item at the current index.
+    pub(crate) fn add_item(mut self, item: Bound<'py, PyAny>) -> PyResult<Self> {
+        if self.index >= self.size {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "TupleBuilder index exceeds tuple size",
+            ));
+        }
+
+        let py_index: ffi::Py_ssize_t = self.index.try_into().map_err(|_| {
+            pyo3::exceptions::PyOverflowError::new_err("TupleBuilder index exceeds Py_ssize_t")
+        })?;
+
+        unsafe {
+            // SAFETY:
+            // - `self.tuple` is a valid tuple pointer owned by this builder.
+            // - `py_index < self.size` was checked above.
+            // - `item.into_ptr()` hands ownership to CPython, as required by SET_ITEM.
+            ffi::PyTuple_SET_ITEM(self.tuple, py_index, item.into_ptr());
+        }
+        self.index += 1;
+        Ok(self)
+    }
+
+    /// Consume the builder and return the populated tuple.
+    pub(crate) fn build(mut self) -> PyResult<Bound<'py, PyTuple>> {
+        if self.index != self.size {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "TupleBuilder expected {} items but got {}",
+                self.size, self.index
+            )));
+        }
+
+        let tuple = self.tuple;
+        // Prevent `Drop` from decrefing the tuple after ownership is transferred
+        // to the returned `Bound<PyTuple>`.
+        self.tuple = std::ptr::null_mut();
+        unsafe {
+            // SAFETY: `tuple` is owned by this builder and fully initialized.
+            Ok(Bound::from_owned_ptr(self.py, tuple)
+                .cast_into::<PyTuple>()
+                .expect("PyTuple_New returns a tuple object"))
+        }
+    }
+}
+
+impl Drop for TupleBuilder<'_> {
+    fn drop(&mut self) {
+        if !self.tuple.is_null() {
+            unsafe {
+                // SAFETY: `self.tuple` is owned by the builder and must be DECREF'd on drop.
+                ffi::Py_DECREF(self.tuple);
+            }
+        }
+    }
 }
 
 // Copied from pyo3 internals
