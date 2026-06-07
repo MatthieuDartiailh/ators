@@ -16,7 +16,7 @@ use pyo3::{
 };
 
 use super::TypeValidator;
-use crate::utils::{create_behavior_callable_checker, err_with_cause};
+use crate::utils::{TupleBuilder, create_behavior_callable_checker, err_with_cause};
 
 create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallNameObjectValueInit, 4);
@@ -74,35 +74,52 @@ impl Coercer {
                             )
                         );
                     }
-                    PyTuple::new(
-                        py,
-                        temp
-                        .try_iter()?
+                    if items.is_empty() {
+                        return Ok(PyTuple::empty(py).into_any());
+                    }
+
+                    let builder = TupleBuilder::new(py, items.len())?;
+                    temp.try_iter()?
                         .zip(items)
-                        .map(|(v, t)| -> PyResult<Bound<'py, PyAny>> {
-                            self.coerce_value(is_init_coercion, &t.type_validator, name, object, &v?)
-                            }
-                        )
-                        .collect::<PyResult<Vec<_>>>()?
-                    ).map(|ob| ob.as_any().clone())
+                        .try_fold(builder, |builder, (v, t)| {
+                            let coerced = self.coerce_value(
+                                is_init_coercion,
+                                &t.type_validator,
+                                name,
+                                object,
+                                &v?,
+                            )?;
+                            builder.add_item(coerced)
+                        })?
+                        .build()
+                        .map(|ob| ob.into_any())
                 },
                 TypeValidator::VarTuple { item } => {
                     let temp = value.cast::<PySequence>()?;
-                    PyTuple::new(
-                        py,
-                        temp
-                        .try_iter()?
-                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
-                                if let Some(item_validator) = item {
-                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
-                                }
-                                else {
-                                    v
-                                }
-                            }
-                        )
-                        .collect::<PyResult<Vec<_>>>()?
-                    ).map(|ob| ob.as_any().clone())
+                    let size = temp.len()?;
+                    if size == 0 {
+                        return Ok(PyTuple::empty(py).into_any());
+                    }
+
+                    let builder = TupleBuilder::new(py, size)?;
+                    temp.try_iter()?
+                        .try_fold(builder, |builder, v| {
+                            let v = v?;
+                            let coerced = if let Some(item_validator) = item {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &item_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                )?
+                            } else {
+                                v
+                            };
+                            builder.add_item(coerced)
+                        })?
+                        .build()
+                        .map(|ob| ob.into_any())
                 },
                 TypeValidator::FrozenSet { item } => {
                     let temp = value.cast::<PySequence>()?;
