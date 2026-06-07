@@ -63,6 +63,10 @@ pub(crate) fn err_with_cause<'py>(py: Python<'py>, err: PyErr, cause: PyErr) -> 
 /// Allocates a Python tuple upfront and populates it item-by-item with
 /// `PyTuple_SET_ITEM`.
 pub(crate) struct TupleBuilder<'py> {
+    /// Owned pointer to the tuple under construction.
+    ///
+    /// This remains owned by the builder until `build()` transfers ownership to
+    /// a `Bound<PyTuple>` (and nulls this pointer) or until `Drop` decrements it.
     tuple: *mut ffi::PyObject,
     size: usize,
     index: usize,
@@ -131,6 +135,8 @@ impl<'py> TupleBuilder<'py> {
         }
 
         let tuple = self.tuple;
+        // Prevent `Drop` from decrefing the tuple after ownership is transferred
+        // to the returned `Bound<PyTuple>`.
         self.tuple = std::ptr::null_mut();
         unsafe {
             // SAFETY: `tuple` is owned by this builder and fully initialized.
