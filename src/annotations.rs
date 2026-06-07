@@ -11,8 +11,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
-        PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString,
+        PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -78,6 +78,32 @@ impl<'py> TypeTools<'py> {
     pub(crate) fn class_var(&self) -> &Bound<'py, PyAny> {
         &self.types.class_var
     }
+}
+
+pub fn build_function_argument_validator<'py>(
+    name: &Bound<'py, PyString>,
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+) -> PyResult<Validator> {
+    let class_var = tools.class_var();
+    let origin = tools.get_origin(ann)?;
+    if origin.is(class_var) || ann.is(class_var) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': ClassVar is not allowed in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    let member_type = name.py().get_type::<Member>();
+    if origin.is(member_type.as_any()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
+    Ok(validator)
 }
 
 pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyErr> {

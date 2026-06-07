@@ -148,6 +148,29 @@ def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
     assert "mapping.ko" in msg
 
 
+def test_validated_positional_only_argument() -> None:
+    @validated
+    def f(x: int, /, y: int) -> int:
+        return x + y
+
+    assert f(1, 2) == 3
+    with pytest.raises(TypeError):
+        f("1", 2)  # type: ignore[arg-type]
+
+
+def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
+    @validated(aggregate_errors=True)
+    def f(*, x: int, **rest: int) -> int:
+        return x + sum(rest.values())
+
+    with pytest.raises(TypeError) as exc:
+        f(x="1", y="2")  # type: ignore[arg-type]
+
+    msg = str(exc.value)
+    assert "x" in msg
+    assert "rest.y" in msg
+
+
 def test_validated_validate_return_false() -> None:
     @validated(validate_return=False)
     def f(x: int) -> int:
