@@ -123,7 +123,7 @@ __all__ = [
     "is_notifications_enabled",
     "member",
     "observe",
-    "validated",
     "register_type_mutability_info",
     "unobserve",
+    "validated",
 ]
