@@ -56,7 +56,6 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
-    member: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
@@ -75,14 +74,6 @@ impl<'py> TypeTools<'py> {
     pub(crate) fn get_origin(&self, ann: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         self.get_origin.call1((ann,))
     }
-
-    pub(crate) fn class_var(&self) -> &Bound<'py, PyAny> {
-        &self.types.class_var
-    }
-
-    pub(crate) fn member(&self) -> &Bound<'py, PyAny> {
-        &self.types.member
-    }
 }
 
 pub fn build_function_argument_validator<'py>(
@@ -90,7 +81,7 @@ pub fn build_function_argument_validator<'py>(
     ann: &Bound<'py, PyAny>,
     tools: &TypeTools<'py>,
 ) -> PyResult<Validator> {
-    let class_var = tools.class_var();
+    let class_var = &tools.types.class_var;
     let origin = tools.get_origin(ann)?;
     if origin.is(class_var) || ann.is(class_var) {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
@@ -99,7 +90,7 @@ pub fn build_function_argument_validator<'py>(
         )));
     }
 
-    if origin.is(tools.member()) {
+    if origin.is(name.py().get_type::<Member>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
             name.to_cow()?
@@ -144,7 +135,6 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
-            member: py.get_type::<Member>().as_any().clone(),
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },

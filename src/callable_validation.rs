@@ -33,7 +33,7 @@ struct ParamPlan {
     name: String,
     py_name: Py<PyString>,
     kind: ParamKind,
-    validator: Validator,
+    validator: Option<Validator>,
     default: Option<Py<PyAny>>,
 }
 
@@ -72,6 +72,40 @@ fn aggregate_error(issues: &[(String, pyo3::PyErr)]) -> pyo3::PyErr {
     ))
 }
 
+fn ensure_positional_storage<'py, 'a>(
+    args: &Bound<'py, PyTuple>,
+    out_positional: &'a mut Option<Vec<Py<PyAny>>>,
+    prefix_len: usize,
+) -> PyResult<&'a mut Vec<Py<PyAny>>> {
+    if out_positional.is_none() {
+        let mut created = Vec::with_capacity(args.len());
+        for i in 0..prefix_len {
+            created.push(args.get_item(i)?.unbind());
+        }
+        *out_positional = Some(created);
+    }
+    Ok(out_positional
+        .as_mut()
+        .expect("out_positional should be initialized"))
+}
+
+fn ensure_kwargs_storage<'py>(
+    py: Python<'py>,
+    kwargs: Option<&Bound<'py, PyDict>>,
+    out_kwargs: &mut Option<Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    if let Some(current) = out_kwargs.as_ref() {
+        return Ok(current.clone());
+    }
+    let created = if let Some(kw) = kwargs {
+        kw.copy()?
+    } else {
+        PyDict::new(py)
+    };
+    *out_kwargs = Some(created.clone());
+    Ok(created)
+}
+
 fn validate_call_arguments<'py>(
     py: Python<'py>,
     args: &Bound<'py, PyTuple>,
@@ -81,44 +115,70 @@ fn validate_call_arguments<'py>(
     aggregate_errors: bool,
 ) -> PyResult<(Bound<'py, PyTuple>, Option<Bound<'py, PyDict>>)> {
     let mut issues: Vec<(String, pyo3::PyErr)> = Vec::new();
-    let mut out_positional: Vec<Py<PyAny>> = Vec::new();
-    let mut out_kwargs: Option<Bound<'py, PyDict>> = kwargs.cloned();
+    let mut out_positional: Option<Vec<Py<PyAny>>> = None;
+    let mut out_kwargs: Option<Bound<'py, PyDict>> = None;
+    let mut pending_positional_defaults: Vec<Py<PyAny>> = Vec::new();
     let mut consumed_kwargs: HashSet<String> = HashSet::new();
     let mut pos_index = 0usize;
-
-    let mut ensure_kwargs = || -> Bound<'py, PyDict> {
-        if let Some(ref current) = out_kwargs {
-            return current.clone();
-        }
-        let created = PyDict::new(py);
-        out_kwargs = Some(created.clone());
-        created
-    };
 
     for param in params {
         match param.kind {
             ParamKind::PositionalOnly => {
-                let current = if pos_index < args.len() {
+                let from_positional = pos_index < args.len();
+                let current = if from_positional {
                     let value = args.get_item(pos_index)?;
                     pos_index += 1;
                     Some(value)
-                } else {
+                } else if param.validator.is_some() {
                     param
                         .default
                         .as_ref()
                         .map(|default| default.bind(py).clone())
+                } else {
+                    None
                 };
                 let Some(current) = current else {
                     continue;
                 };
-                match param.validator.validate(Some(&param.name), None, &current) {
-                    Ok(v) => out_positional.push(v.into_any().unbind()),
-                    Err(err) => {
-                        if strict || !aggregate_errors {
-                            return Err(err);
+                if let Some(validator) = &param.validator {
+                    match validator.validate(Some(&param.name), None, &current) {
+                        Ok(v) => {
+                            let validated = v.into_any();
+                            if from_positional {
+                                let arg_index = pos_index - 1;
+                                if let Some(ref mut out) = out_positional {
+                                    out.push(validated.unbind());
+                                } else if !validated.is(&args.get_item(arg_index)?) {
+                                    ensure_positional_storage(
+                                        args,
+                                        &mut out_positional,
+                                        arg_index,
+                                    )?
+                                    .push(validated.unbind());
+                                }
+                            } else if let Some(ref mut out) = out_positional {
+                                out.push(validated.unbind());
+                            } else if !validated.is(&current) {
+                                let out = ensure_positional_storage(
+                                    args,
+                                    &mut out_positional,
+                                    pos_index,
+                                )?;
+                                out.append(&mut pending_positional_defaults);
+                                out.push(validated.unbind());
+                            } else {
+                                pending_positional_defaults.push(validated.unbind());
+                            }
                         }
-                        issues.push((param.name.clone(), err));
+                        Err(err) => {
+                            if strict || !aggregate_errors {
+                                return Err(err);
+                            }
+                            issues.push((param.name.clone(), err));
+                        }
                     }
+                } else if let Some(ref mut out) = out_positional {
+                    out.push(current.unbind());
                 }
             }
             ParamKind::PositionalOrKeyword => {
@@ -149,22 +209,40 @@ fn validate_call_arguments<'py>(
                 let Some(current) = current else {
                     continue;
                 };
-                match param.validator.validate(Some(&param.name), None, &current) {
-                    Ok(v) => {
-                        if from_keyword {
-                            ensure_kwargs().set_item(param.py_name.bind(py), &v)?;
-                        } else if from_positional {
-                            out_positional.push(v.into_any().unbind());
-                        } else {
-                            ensure_kwargs().set_item(param.py_name.bind(py), &v)?;
+                if let Some(validator) = &param.validator {
+                    match validator.validate(Some(&param.name), None, &current) {
+                        Ok(v) => {
+                            if from_keyword {
+                                if !v.is(&current) {
+                                    ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
+                                        .set_item(param.py_name.bind(py), &v)?;
+                                }
+                            } else if from_positional {
+                                let arg_index = pos_index - 1;
+                                if let Some(ref mut out) = out_positional {
+                                    out.push(v.into_any().unbind());
+                                } else if !v.is(&args.get_item(arg_index)?) {
+                                    ensure_positional_storage(
+                                        args,
+                                        &mut out_positional,
+                                        arg_index,
+                                    )?
+                                    .push(v.into_any().unbind());
+                                }
+                            } else if !v.is(&current) {
+                                ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
+                                    .set_item(param.py_name.bind(py), &v)?;
+                            }
+                        }
+                        Err(err) => {
+                            if strict || !aggregate_errors {
+                                return Err(err);
+                            }
+                            issues.push((param.name.clone(), err));
                         }
                     }
-                    Err(err) => {
-                        if strict || !aggregate_errors {
-                            return Err(err);
-                        }
-                        issues.push((param.name.clone(), err));
-                    }
+                } else if from_positional && let Some(ref mut out) = out_positional {
+                    out.push(current.unbind());
                 }
             }
             ParamKind::KeywordOnly => {
@@ -172,28 +250,39 @@ fn validate_call_arguments<'py>(
                     if let Some(value) = kw.get_item(param.py_name.bind(py))? {
                         consumed_kwargs.insert(param.name.clone());
                         Some(value)
-                    } else {
+                    } else if param.validator.is_some() {
                         param
                             .default
                             .as_ref()
                             .map(|default| default.bind(py).clone())
+                    } else {
+                        None
                     }
-                } else {
+                } else if param.validator.is_some() {
                     param
                         .default
                         .as_ref()
                         .map(|default| default.bind(py).clone())
+                } else {
+                    None
                 };
                 let Some(current) = current else {
                     continue;
                 };
-                match param.validator.validate(Some(&param.name), None, &current) {
-                    Ok(v) => ensure_kwargs().set_item(param.py_name.bind(py), &v)?,
-                    Err(err) => {
-                        if strict || !aggregate_errors {
-                            return Err(err);
+                if let Some(validator) = &param.validator {
+                    match validator.validate(Some(&param.name), None, &current) {
+                        Ok(v) => {
+                            if !v.is(&current) {
+                                ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
+                                    .set_item(param.py_name.bind(py), &v)?;
+                            }
                         }
-                        issues.push((param.name.clone(), err));
+                        Err(err) => {
+                            if strict || !aggregate_errors {
+                                return Err(err);
+                            }
+                            issues.push((param.name.clone(), err));
+                        }
                     }
                 }
             }
@@ -201,15 +290,31 @@ fn validate_call_arguments<'py>(
                 let mut idx = 0usize;
                 while pos_index < args.len() {
                     let item = args.get_item(pos_index)?;
+                    let arg_index = pos_index;
                     pos_index += 1;
-                    match param.validator.validate(Some(&param.name), None, &item) {
-                        Ok(v) => out_positional.push(v.into_any().unbind()),
-                        Err(err) => {
-                            if strict || !aggregate_errors {
-                                return Err(err);
+                    if let Some(validator) = &param.validator {
+                        match validator.validate(Some(&param.name), None, &item) {
+                            Ok(v) => {
+                                if let Some(ref mut out) = out_positional {
+                                    out.push(v.into_any().unbind());
+                                } else if !v.is(&args.get_item(arg_index)?) {
+                                    ensure_positional_storage(
+                                        args,
+                                        &mut out_positional,
+                                        arg_index,
+                                    )?
+                                    .push(v.into_any().unbind());
+                                }
                             }
-                            issues.push((format!("{}[{idx}]", param.name), err));
+                            Err(err) => {
+                                if strict || !aggregate_errors {
+                                    return Err(err);
+                                }
+                                issues.push((format!("{}[{idx}]", param.name), err));
+                            }
                         }
+                    } else if let Some(ref mut out) = out_positional {
+                        out.push(item.unbind());
                     }
                     idx += 1;
                 }
@@ -228,15 +333,20 @@ fn validate_call_arguments<'py>(
                     if consumed_kwargs.contains(&key_str) {
                         continue;
                     }
-                    match param.validator.validate(Some(&param.name), None, &item) {
-                        Ok(v) => {
-                            ensure_kwargs().set_item(key, v)?;
-                        }
-                        Err(err) => {
-                            if strict || !aggregate_errors {
-                                return Err(err);
+                    if let Some(validator) = &param.validator {
+                        match validator.validate(Some(&param.name), None, &item) {
+                            Ok(v) => {
+                                if !v.is(&item) {
+                                    ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
+                                        .set_item(key, v)?;
+                                }
                             }
-                            issues.push((format!("{}.{}", param.name, key_str), err));
+                            Err(err) => {
+                                if strict || !aggregate_errors {
+                                    return Err(err);
+                                }
+                                issues.push((format!("{}.{}", param.name, key_str), err));
+                            }
                         }
                     }
                 }
@@ -247,7 +357,18 @@ fn validate_call_arguments<'py>(
     if !issues.is_empty() {
         return Err(aggregate_error(&issues));
     }
-    Ok((PyTuple::new(py, out_positional)?, out_kwargs))
+    let final_args = if let Some(mut out) = out_positional {
+        out.extend(pending_positional_defaults);
+        PyTuple::new(py, out)?
+    } else {
+        args.clone()
+    };
+    let final_kwargs = if let Some(out) = out_kwargs {
+        Some(out)
+    } else {
+        kwargs.cloned()
+    };
+    Ok((final_args, final_kwargs))
 }
 
 static METHOD_TYPE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
@@ -547,11 +668,21 @@ fn compile_plan<'py>(
             Some(v) => v,
             None => param.getattr(intern!(py, "annotation"))?,
         };
-        if annotation.is(&empty_ann) {
-            continue;
-        }
+        let validator = if annotation.is(&empty_ann) {
+            None
+        } else {
+            Some(build_function_argument_validator(
+                &name_obj,
+                &annotation,
+                &tools,
+            )?)
+        };
         let default = param.getattr(intern!(py, "default"))?;
-        let default = (!default.is(&empty_ann)).then(|| default.unbind());
+        let default = if validator.is_some() && !default.is(&empty_ann) {
+            Some(default.unbind())
+        } else {
+            None
+        };
 
         let kind = {
             let k = param.getattr(intern!(py, "kind"))?;
@@ -574,7 +705,7 @@ fn compile_plan<'py>(
             name: name.clone(),
             py_name: name_obj.clone().unbind(),
             kind,
-            validator: build_function_argument_validator(&name_obj, &annotation, &tools)?,
+            validator,
             default,
         });
     }
@@ -714,6 +845,15 @@ impl ValidatedDecorator {
     }
 }
 
+/// Decorate a callable (or create a decorator) that validates call arguments and return values.
+///
+/// When called as `@validated`, defaults are:
+/// - `aggregate_errors=True`: collect all argument errors before raising.
+/// - `validate_return=True`: validate the return annotation when present.
+/// - `strict=False`: stop on first error only when set to `True`.
+///
+/// It can also be used as a decorator factory, for example:
+/// `@validated(aggregate_errors=False, validate_return=False, strict=True)`.
 #[pyfunction(signature=(func=None, *, aggregate_errors=true, validate_return=true, strict=false))]
 pub fn validated<'py>(
     py: Python<'py>,
