@@ -222,7 +222,9 @@ fn validate_call_arguments<'py>(
                     let kv = kv?.cast_into::<PyTuple>()?;
                     let key = kv.get_item(0)?;
                     let item = kv.get_item(1)?;
-                    let key_str = key.extract::<String>().unwrap_or_default();
+                    let key_str = key
+                        .extract::<String>()
+                        .unwrap_or_else(|_| "<non-string-key>".to_string());
                     if consumed_kwargs.contains(&key_str) {
                         continue;
                     }
