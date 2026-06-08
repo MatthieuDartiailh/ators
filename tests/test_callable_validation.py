@@ -24,7 +24,7 @@ def test_validated_function_argument_and_return() -> None:
     assert add_one(1) == 2
     with pytest.raises(BaseException) as exc:
         add_one("1")  # type: ignore[arg-type]
-    
+
     # Should be an ExceptionGroup since aggregate_errors defaults to True
     assert exc.typename == "ExceptionGroup"
     assert hasattr(exc.value, "exceptions")
@@ -56,7 +56,7 @@ def test_validated_methods_instance() -> None:
 
     with pytest.raises(BaseException) as exc:
         c.inst("1")  # type: ignore[arg-type]
-    
+
     assert exc.typename == "ExceptionGroup"
 
 
@@ -81,7 +81,7 @@ def test_validated_then_staticmethod_works() -> None:
     assert C().stat(1) == 1
     with pytest.raises(BaseException) as exc:
         C.stat("1")  # type: ignore[arg-type]
-    
+
     assert exc.typename == "ExceptionGroup"
 
 
@@ -106,7 +106,7 @@ def test_validated_then_classmethod_works() -> None:
     assert C().cls(2) == 2
     with pytest.raises(BaseException) as exc:
         C.cls("1")  # type: ignore[arg-type]
-    
+
     assert exc.typename == "ExceptionGroup"
 
 
@@ -118,7 +118,7 @@ def test_validated_async_function() -> None:
     assert asyncio.run(af(3)) == 4
     with pytest.raises(BaseException) as exc:
         asyncio.run(af("3"))  # type: ignore[arg-type]
-    
+
     assert exc.typename == "ExceptionGroup"
 
 
@@ -138,7 +138,7 @@ def test_validated_checks_default_values_when_argument_missing() -> None:
 
     with pytest.raises(BaseException) as exc:
         f()
-    
+
     assert exc.typename == "ExceptionGroup"
 
     assert f(2) == 2
@@ -175,7 +175,7 @@ def test_validated_positional_only_argument() -> None:
     assert f(1, 2) == 3
     with pytest.raises(BaseException) as exc:
         f("1", 2)  # type: ignore[arg-type]
-    
+
     assert exc.typename == "ExceptionGroup"
 
 
