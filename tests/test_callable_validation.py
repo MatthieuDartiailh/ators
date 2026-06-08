@@ -16,7 +16,7 @@ import pytest
 from ators import Member, validated
 
 
-def test_validated_function_argument_and_return() -> None:
+def test_validated_function_argument() -> None:
     @validated
     def add_one(x: int) -> int:
         return x + 1
@@ -176,8 +176,13 @@ def test_validated_async_function_return_validation() -> None:
     async def af(x: int) -> int:
         return str(x)  # type: ignore
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError) as exc:
         asyncio.run(af(3))
+
+    # Verify error message indicates type mismatch for return value
+    error_msg = str(exc.value)
+    assert "Expected a int" in error_msg
+    assert "str" in error_msg
 
 
 def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
@@ -557,7 +562,9 @@ def test_validated_function_with_no_args() -> None:
     with pytest.raises(TypeError) as exc:
         g()
 
-    assert "return value" in str(exc.value)
+    # Verify the error is about type mismatch
+    error_msg = str(exc.value)
+    assert "Expected a int" in error_msg
 
 
 def test_validated_positional_only_no_annotation() -> None:
@@ -597,3 +604,68 @@ def test_validated_decorator_factory_reused() -> None:
 
     with pytest.raises(TypeError):
         g("invalid")  # type: ignore[arg-type]
+
+
+# ============================================================================
+# Tests for Return Value Error Wrapping and Cause Chain
+# ============================================================================
+
+
+def test_validated_return_error_wrapped_with_cause() -> None:
+    """Test that return value validation errors are wrapped with cause chain."""
+
+    @validated
+    def f(x: int) -> int:
+        return str(x)  # type: ignore
+
+    with pytest.raises(TypeError) as exc:
+        f(1)
+
+    # Verify wrapped message format
+    error_msg = str(exc.value)
+    assert "Failed to validate return value:" in error_msg
+    assert "Expected a int" in error_msg
+
+    # Verify original error is set as cause
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert "Expected a int" in str(exc.value.__cause__)
+
+
+def test_validated_async_return_error_wrapped_with_cause() -> None:
+    """Test that async return value validation errors are wrapped with cause chain."""
+
+    @validated
+    async def f(x: int) -> int:
+        return str(x)  # type: ignore
+
+    with pytest.raises(TypeError) as exc:
+        asyncio.run(f(1))
+
+    # Verify wrapped message format
+    error_msg = str(exc.value)
+    assert "Failed to validate return value:" in error_msg
+    assert "Expected a int" in error_msg
+
+    # Verify original error is set as cause
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert "Expected a int" in str(exc.value.__cause__)
+
+
+def test_validated_return_error_preserves_original_context() -> None:
+    """Test that wrapped return error preserves full original error context."""
+
+    @validated
+    def f() -> list[int]:
+        return "not a list"  # type: ignore
+
+    with pytest.raises(TypeError) as exc:
+        f()
+
+    # The wrapped message explains it's the return value
+    assert "Failed to validate return value:" in str(exc.value)
+
+    # The original error explains what was expected vs received
+    original_error = str(exc.value.__cause__)
+    assert "Expected a" in original_error or "list" in original_error

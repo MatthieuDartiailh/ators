@@ -8,6 +8,7 @@
 /// Callable validation decorators implemented in Rust.
 use crate::{
     annotations::{build_function_argument_validator, get_type_tools},
+    utils::err_with_cause,
     validators::Validator,
 };
 use pyo3::{
@@ -429,7 +430,17 @@ impl SyncCallableValidator {
         let result = target.call(&call_args, call_kwargs.as_ref())?;
 
         if let Some(return_validator) = &self.plan.return_validator {
-            return return_validator.validate(Some("return"), None, &result);
+            // Validate the return value. If validation fails, wrap the error with
+            // context explaining that it's the return value that didn't match expectations.
+            return return_validator
+                .validate(Some("return"), None, &result)
+                .map_err(|original_err| {
+                    let wrapped_msg = format!("Failed to validate return value: {}", original_err);
+                    let wrapped_err =
+                        pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(wrapped_msg);
+                    // Set the original error as the cause
+                    err_with_cause(py, wrapped_err, original_err)
+                });
         }
         Ok(result)
     }
@@ -492,10 +503,19 @@ fn handle_iterator_error<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
         let value = extract_stop_iteration_value(py, &err)?;
-        let validated = return_validator.validate(Some("return"), None, &value)?;
-        return Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
-            validated.unbind(),
-        )));
+        // Validate the return value. If validation fails, wrap the error with
+        // context explaining that it's the return value that didn't match expectations.
+        return match return_validator.validate(Some("return"), None, &value) {
+            Ok(validated) => Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
+                validated.unbind(),
+            ))),
+            Err(original_err) => {
+                let wrapped_msg = format!("Failed to validate return value: {}", original_err);
+                let wrapped_err = pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(wrapped_msg);
+                // Set the original error as the cause
+                Err(err_with_cause(py, wrapped_err, original_err))
+            }
+        };
     }
     Err(err)
 }
@@ -838,15 +858,6 @@ pub struct ValidatedDecorator {
 
 #[pymethods]
 impl ValidatedDecorator {
-    #[new]
-    #[pyo3(signature = (*, aggregate_errors=true, validate_return=true))]
-    fn new(aggregate_errors: bool, validate_return: bool) -> Self {
-        Self {
-            aggregate_errors,
-            validate_return,
-        }
-    }
-
     fn __call__<'py>(
         &self,
         py: Python<'py>,
