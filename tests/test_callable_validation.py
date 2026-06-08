@@ -185,39 +185,6 @@ def test_validated_async_function_return_validation() -> None:
     assert "str" in error_msg
 
 
-def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
-    @validated(aggregate_errors=True)
-    def f(*values: int, **mapping: int) -> int:
-        return sum(values) + sum(mapping.values())
-
-    # Test success case
-    assert f(1, 2, ok=3, ko=4) == 10
-
-    # Test failure case: values[1] and mapping["ko"] have type mismatches
-    with pytest.raises(ExceptionGroup) as exc:
-        f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
-
-    assert len(exc.value.exceptions) == 2
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-        assert "Failed to validate" in str(inner_exc)
-
-
-def test_validated_positional_only_argument() -> None:
-    @validated
-    def f(x: int, /, y: int) -> int:
-        return x + y
-
-    assert f(1, 2) == 3
-    with pytest.raises(ExceptionGroup) as exc:
-        f("1", 2)  # type: ignore[arg-type]
-
-    # Expected failure: x (positional-only) has type mismatch
-    assert len(exc.value.exceptions) == 1
-    assert isinstance(exc.value.exceptions[0], TypeError)
-    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
-
-
 def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
     @validated(aggregate_errors=True)
     def f(*, x: int, **rest: int) -> int:
@@ -236,21 +203,61 @@ def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
         assert "Failed to validate" in str(inner_exc)
 
 
+def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
+    @validated(aggregate_errors=True)
+    def f(*values: int, **mapping: int) -> int:
+        return sum(values) + sum(mapping.values())
+
+    # Test success case
+    assert f(1, 2, ok=3, ko=4) == 10
+
+    # Test failure case: values[1] and mapping["ko"] have type mismatches
+    with pytest.raises(ExceptionGroup) as exc:
+        f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
+
+    assert len(exc.value.exceptions) == 2
+    for inner_exc in exc.value.exceptions:
+        assert isinstance(inner_exc, TypeError)
+        assert "Failed to validate" in str(inner_exc)
+
+
 # ============================================================================
-# Tests for validation with argument transformation (list[int] across positions)
+# Positional only arguments
 # ============================================================================
 
 
-def test_validation_change_arg_positional_only() -> None:
+def test_validated_positional_only_argument() -> None:
+    @validated
+    def f(x: int, /, y: int) -> int:
+        return x + y
+
+    assert f(1, 2) == 3
+    with pytest.raises(ExceptionGroup) as exc:
+        f("1", 2)  # type: ignore[arg-type]
+
+    # Expected failure: x (positional-only) has type mismatch
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_positional_only_change_arg_and_default() -> None:
     """Test list[int] validation in positional-only parameter."""
 
     @validated
-    def f(items: list[int], /) -> int:
-        return len(items)
+    def f(items: list[int], x: int = 1, /) -> int:
+        ln = len(items) + x
+        with pytest.raises(TypeError) as exc:
+            items.append("invalid")  # type: ignore
+
+        assert "items" in str(exc.value) and "int" in str(exc.value)
+
+        return ln
 
     # Test success cases
-    assert f([1, 2, 3]) == 3
-    assert f([]) == 0
+    assert f([1, 2, 3]) == 4
+    assert f([]) == 1
+    assert f([], 2) == 2
 
     # Test failure case
     with pytest.raises(ExceptionGroup) as exc:
@@ -261,157 +268,14 @@ def test_validation_change_arg_positional_only() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
-def test_validation_change_arg_positional_or_keyword() -> None:
-    """Test list[int] validation in positional-or-keyword parameter."""
+def test_validated_positional_only_change_arg_second() -> None:
 
     @validated
-    def f(items: list[int]) -> int:
-        return sum(items)
+    def f(x: int, y: list[int], /) -> int:
+        return x + len(y)
 
-    # Test success cases
-    assert f([1, 2, 3]) == 6
-    assert f(items=[10, 20]) == 30
-
-    # Test failure cases
-    with pytest.raises(ExceptionGroup) as exc:
-        f([1, "2", 3])  # type: ignore[list-item]
-
-    assert len(exc.value.exceptions) == 1
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-
-    with pytest.raises(ExceptionGroup) as exc:
-        f(items=[1, "2", 3])  # type: ignore[list-item]
-
-    assert len(exc.value.exceptions) == 1
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-
-
-def test_validation_change_arg_varargs() -> None:
-    """Test list[int] validation in *args parameter."""
-
-    @validated
-    def f(*values: list[int]) -> int:
-        return sum(len(v) for v in values)
-
-    # Test success cases
-    assert f([1, 2], [3, 4, 5]) == 5
-    assert f([]) == 0
-
-    # Test failure case
-    with pytest.raises(ExceptionGroup) as exc:
-        f([1, 2], [3, "4", 5])  # type: ignore[list-item]
-
-    assert len(exc.value.exceptions) == 1
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-
-
-def test_validation_change_arg_kwargs() -> None:
-    """Test list[int] validation in **kwargs parameter."""
-
-    @validated
-    def f(**mappings: list[int]) -> int:
-        return sum(len(v) for v in mappings.values())
-
-    # Test success cases
-    assert f(a=[1, 2], b=[3, 4, 5]) == 5
-    assert f() == 0
-
-    # Test failure case
-    with pytest.raises(ExceptionGroup) as exc:
-        f(a=[1, 2], b=[3, "4", 5])  # type: ignore[list-item]
-
-    assert len(exc.value.exceptions) == 1
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-
-
-def test_validated_positional_only_with_transformation() -> None:
-    """Exercise transformation path for PositionalOnly params (lines 146-152, 160, 169)."""
-
-    @validated
-    def f(x: list[int], /) -> list[int]:
-        # Verify x is a list (validator should have transformed/validated it)
-        assert isinstance(x, list)
-        return x
-
-    # Pass a valid list[int] - validator will accept and return it
-    result = f([1, 2, 3])
-    assert result == [1, 2, 3]
-
-
-def test_validated_positional_or_keyword_keyword_arg_with_transformation() -> None:
-    """Exercise keyword branch with transformation (lines 186-189)."""
-
-    @validated
-    def f(x: list[int]) -> list[int]:
-        assert isinstance(x, list)
-        return x
-
-    # Pass as keyword argument
-    result = f(x=[1, 2, 3])
-    assert result == [1, 2, 3]
-
-
-def test_validated_keyword_only_with_transformation() -> None:
-    """Exercise KeywordOnly branch with transformation (lines 244-250)."""
-
-    @validated
-    def f(*, x: list[int]) -> list[int]:
-        assert isinstance(x, list)
-        return x
-
-    # Must pass as keyword argument
-    result = f(x=[1, 2, 3])
-    assert result == [1, 2, 3]
-
-
-def test_validated_varargs_with_transformation() -> None:
-    """Exercise VarPositional with validated items (lines 274, 306)."""
-
-    @validated
-    def f(*args: list[int]) -> list[list[int]]:
-        # Each arg should be a list[int]
-        for arg in args:
-            assert isinstance(arg, list)
-        return list(args)
-
-    # Pass multiple list[int] args
-    result = f([1, 2], [3, 4], [5, 6])
-    assert result == [[1, 2], [3, 4], [5, 6]]
-
-
-def test_validated_varkw_with_transformation() -> None:
-    """Exercise VarKeyword with validated values (line 345)."""
-
-    @validated
-    def f(**kwargs: list[int]) -> dict[str, list[int]]:
-        # Each kwarg value should be a list[int]
-        for v in kwargs.values():
-            assert isinstance(v, list)
-        return kwargs
-
-    # Pass multiple list[int] kwargs
-    result = f(a=[1, 2], b=[3, 4])
-    assert result == {"a": [1, 2], "b": [3, 4]}
-
-
-# ============================================================================
-# Tests for Default Values in All Parameter Positions
-# ============================================================================
-
-
-def test_validated_positional_only_with_default() -> None:
-    """Test positional-only param with annotated default."""
-
-    @validated
-    def f(x: int, y: int = 42, /) -> int:
-        return x + y
-
-    assert f(1) == 43
-    assert f(1, 100) == 101
+    assert f(1, [42]) == 2
+    assert f(1, [100]) == 2
 
 
 def test_validated_positional_only_bad_default() -> None:
@@ -438,9 +302,10 @@ def test_validated_var_or_keyword_with_default() -> None:
         return x + y
 
     assert f(1) == 43
-    assert f(1, y=10) == 11
-    assert f(x=1, y=10) == 11
     assert f(1, 100) == 101
+    assert f(1, y=10) == 11
+    assert f(x=1) == 43
+    assert f(x=1, y=10) == 11
 
 
 def test_validated_var_or_keyword_bad_default() -> None:
@@ -459,15 +324,65 @@ def test_validated_var_or_keyword_bad_default() -> None:
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
 
 
+def test_validation_positional_or_keyword_change_arg() -> None:
+    """Test list[int] validation in positional-or-keyword parameter."""
+
+    @validated
+    def f(items: list[int], x: int = 1) -> int:
+        s = sum(items) + x
+
+        with pytest.raises(TypeError) as exc:
+            items.append("invalid")  # type: ignore
+
+        assert "items" in str(exc.value) and "int" in str(exc.value)
+
+        return s
+
+    # Test success cases
+    assert f([1, 2, 3]) == 7
+    assert f(items=[10, 20]) == 31
+    assert f([1, 2, 3], 2) == 8
+    assert f(items=[10, 20], x=2) == 32
+
+    # Test failure cases
+    with pytest.raises(ExceptionGroup) as exc:
+        f([1, "2", 3])  # type: ignore[list-item]
+
+    assert len(exc.value.exceptions) == 1
+    for inner_exc in exc.value.exceptions:
+        assert isinstance(inner_exc, TypeError)
+
+    with pytest.raises(ExceptionGroup) as exc:
+        f(items=[1, "2", 3])  # type: ignore[list-item]
+
+    assert len(exc.value.exceptions) == 1
+    for inner_exc in exc.value.exceptions:
+        assert isinstance(inner_exc, TypeError)
+
+
+def test_validation_positional_or_keyword_change_arg_second() -> None:
+    """Test list[int] validation in positional-or-keyword parameter."""
+
+    @validated
+    def f(x: int, items: list[int]) -> int:
+        s = sum(items) + x
+        return s
+
+    # Test success cases
+    assert f(1, [1, 2, 3]) == 7
+    assert f(1, items=[10, 20]) == 31
+    assert f(x=2, items=[10, 20]) == 32
+
+
 def test_validated_keyword_only_with_default() -> None:
     """Test keyword-only param with annotated default."""
 
     @validated
-    def f(*, x: int = 42) -> int:
-        return x
+    def f(*, x: int, y: int = 42) -> int:
+        return x + y
 
-    assert f() == 42
-    assert f(x=100) == 100
+    assert f(x=1) == 43
+    assert f(x=100, y=1) == 101
 
 
 def test_validated_keyword_only_bad_default() -> None:
@@ -484,6 +399,77 @@ def test_validated_keyword_only_bad_default() -> None:
     assert len(exc.value.exceptions) == 1
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_keyword_only_change_arg() -> None:
+    """Exercise KeywordOnly branch with transformation (lines 244-250)."""
+
+    @validated
+    def f(*, x: list[int], y: int = 1) -> int:
+        assert isinstance(x, list)
+        return len(x) + y
+
+    # Must pass as keyword argument
+    assert f(x=[1, 2, 3]) == 4
+    assert f(x=[10, 20], y=2) == 4
+
+
+def test_validated_keyword_only_change_arg_second() -> None:
+    """Exercise KeywordOnly branch with transformation (lines 244-250)."""
+
+    @validated
+    def f(*, y: int, x: list[int]) -> int:
+        assert isinstance(x, list)
+        return len(x) + y
+
+    # Must pass as keyword argument
+    assert f(y=1, x=[1, 2, 3]) == 4
+    assert f(y=2, x=[10, 20]) == 4
+
+
+def test_validated_varargs_change_arg() -> None:
+    """Test list[int] validation in *args parameter."""
+
+    @validated
+    def f(*values: list[int]) -> int:
+        return sum(len(v) for v in values)
+
+    # Test success cases
+    assert f([1, 2], [3, 4, 5]) == 5
+    assert f([]) == 0
+
+    # Test failure case
+    with pytest.raises(ExceptionGroup) as exc:
+        f([1, 2], [3, "4", 5])  # type: ignore[list-item]
+
+    assert len(exc.value.exceptions) == 1
+    for inner_exc in exc.value.exceptions:
+        assert isinstance(inner_exc, TypeError)
+
+
+def test_validated_kwargs_change_arg() -> None:
+    """Test list[int] validation in **kwargs parameter."""
+
+    @validated
+    def f(**mappings: list[int]) -> int:
+        return sum(len(v) for v in mappings.values())
+
+    # Test success cases
+    assert f(a=[1, 2], b=[3, 4, 5]) == 5
+    assert f() == 0
+
+    # Test failure case
+    with pytest.raises(ExceptionGroup) as exc:
+        f(a=[1, 2], b=[3, "4", 5])  # type: ignore[list-item]
+
+    assert len(exc.value.exceptions) == 1
+    for inner_exc in exc.value.exceptions:
+        assert isinstance(inner_exc, TypeError)
+
+
+# ============================================================================
+# Tests for aggregate_errors=False early return paths
+# ============================================================================
 
 
 def test_validated_positional_or_keyword_aggregate_errors_false() -> None:
@@ -539,7 +525,7 @@ def test_validated_varkw_aggregate_errors_false() -> None:
 # ============================================================================
 
 
-def test_validated_sync_instance_method_binding() -> None:
+def test_validated_method_sync_instance_binding() -> None:
     """Test sync method returns bound method descriptor."""
 
     class C:
@@ -566,7 +552,7 @@ def test_validated_sync_instance_method_binding() -> None:
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
 
 
-def test_validated_sync_method_access_from_class() -> None:
+def test_validated_method_sync_access_from_class() -> None:
     """Test accessing sync validated method from class."""
 
     class C:
@@ -587,7 +573,7 @@ def test_validated_sync_method_access_from_class() -> None:
 # ============================================================================
 
 
-def test_validated_async_instance_method_binding() -> None:
+def test_validated_method_async_instance_binding() -> None:
     """Test async method returns bound method descriptor."""
 
     class C:
@@ -614,7 +600,7 @@ def test_validated_async_instance_method_binding() -> None:
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
 
 
-def test_validated_async_method_access_from_class() -> None:
+def test_validated_method_async_access_from_class() -> None:
     """Test accessing async validated method from class."""
 
     class C:
