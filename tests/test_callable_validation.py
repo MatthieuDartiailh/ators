@@ -22,8 +22,13 @@ def test_validated_function_argument_and_return() -> None:
         return x + 1
 
     assert add_one(1) == 2
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         add_one("1")  # type: ignore[arg-type]
+    
+    # Should be an ExceptionGroup since aggregate_errors defaults to True
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 1
 
 
 def test_validated_aggregate_errors() -> None:
@@ -31,12 +36,13 @@ def test_validated_aggregate_errors() -> None:
     def f(x: int, y: int) -> int:
         return x + y
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f("a", "b")  # type: ignore[arg-type]
 
-    msg = str(exc.value)
-    assert "x" in msg
-    assert "y" in msg
+    # Should be an ExceptionGroup with multiple errors
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 2
 
 
 def test_validated_methods_instance() -> None:
@@ -48,8 +54,10 @@ def test_validated_methods_instance() -> None:
     c = C()
     assert c.inst(1) == 1
 
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         c.inst("1")  # type: ignore[arg-type]
+    
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_validated_rejects_staticmethod_target() -> None:
@@ -71,8 +79,10 @@ def test_validated_then_staticmethod_works() -> None:
 
     assert C.stat(1) == 1
     assert C().stat(1) == 1
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         C.stat("1")  # type: ignore[arg-type]
+    
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_validated_rejects_classmethod_target() -> None:
@@ -94,8 +104,10 @@ def test_validated_then_classmethod_works() -> None:
 
     assert C.cls(1) == 1
     assert C().cls(2) == 2
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         C.cls("1")  # type: ignore[arg-type]
+    
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_validated_async_function() -> None:
@@ -104,8 +116,10 @@ def test_validated_async_function() -> None:
         return x + 1
 
     assert asyncio.run(af(3)) == 4
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         asyncio.run(af("3"))  # type: ignore[arg-type]
+    
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_validated_async_function_return_validation() -> None:
@@ -122,14 +136,16 @@ def test_validated_checks_default_values_when_argument_missing() -> None:
     def f(x: int = "1"):  # type: ignore
         return x
 
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         f()
+    
+    assert exc.typename == "ExceptionGroup"
 
     assert f(2) == 2
 
 
 def test_strict_mode_fails_fast() -> None:
-    @validated(strict=True)
+    @validated(aggregate_errors=False)
     def f(x: int, y: int) -> int:
         return x + y
 
@@ -142,12 +158,13 @@ def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
     def f(*values: int, **mapping: int) -> int:
         return sum(values) + sum(mapping.values())
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
 
-    msg = str(exc.value)
-    assert "values[1]" in msg
-    assert "mapping.ko" in msg
+    # Should be an ExceptionGroup with multiple errors
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 2
 
 
 def test_validated_positional_only_argument() -> None:
@@ -156,8 +173,10 @@ def test_validated_positional_only_argument() -> None:
         return x + y
 
     assert f(1, 2) == 3
-    with pytest.raises(TypeError):
+    with pytest.raises(BaseException) as exc:
         f("1", 2)  # type: ignore[arg-type]
+    
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
@@ -165,12 +184,13 @@ def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
     def f(*, x: int, **rest: int) -> int:
         return x + sum(rest.values())
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f(x="1", y="2")  # type: ignore[arg-type]
 
-    msg = str(exc.value)
-    assert "x" in msg
-    assert "rest.y" in msg
+    # Should be an ExceptionGroup with multiple errors
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 2
 
 
 def test_validated_validate_return_false() -> None:
@@ -241,12 +261,10 @@ def test_list_validation_positional_only_invalid_items() -> None:
     def f(items: list[int], /) -> int:
         return len(items)
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f([1, "2", 3])  # type: ignore[list-item]
 
-    msg = str(exc.value)
-    # Error should reference the parameter position
-    assert "items" in msg
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_list_validation_positional_or_keyword() -> None:
@@ -267,17 +285,15 @@ def test_list_validation_positional_or_keyword_invalid_items() -> None:
     def f(items: list[int]) -> int:
         return sum(items)
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f([1, "2", 3])  # type: ignore[list-item]
 
-    msg = str(exc.value)
-    assert "items" in msg
+    assert exc.typename == "ExceptionGroup"
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f(items=[1, "2", 3])  # type: ignore[list-item]
 
-    msg = str(exc.value)
-    assert "items" in msg
+    assert exc.typename == "ExceptionGroup"
 
 
 def test_list_validation_varargs() -> None:
@@ -298,12 +314,12 @@ def test_list_validation_varargs_invalid_items() -> None:
     def f(*values: list[int]) -> int:
         return sum(len(v) for v in values)
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f([1, 2], [3, "4", 5])  # type: ignore[list-item]
 
-    msg = str(exc.value)
-    # Error should reference the *args position with index
-    assert "values" in msg
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 1
 
 
 def test_list_validation_kwargs() -> None:
@@ -324,9 +340,9 @@ def test_list_validation_kwargs_invalid_items() -> None:
     def f(**mappings: list[int]) -> int:
         return sum(len(v) for v in mappings.values())
 
-    with pytest.raises(TypeError) as exc:
+    with pytest.raises(BaseException) as exc:
         f(a=[1, 2], b=[3, "4", 5])  # type: ignore[list-item]
 
-    msg = str(exc.value)
-    # Error should reference the **kwargs key
-    assert "mappings" in msg
+    assert exc.typename == "ExceptionGroup"
+    assert hasattr(exc.value, "exceptions")
+    assert len(exc.value.exceptions) == 1

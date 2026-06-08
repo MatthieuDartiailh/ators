@@ -359,10 +359,20 @@ fn validate_call_arguments<'py>(
     }
 
     if let Some(issues) = issues {
+        let exceptions: Vec<Bound<'py, PyAny>> = issues
+            .into_iter()
+            .map(|(param_name, err)| {
+                // Create a new TypeError with parameter context in the message
+                let msg = format!("Failed to validate '{}': {}", param_name, err);
+                let new_err = pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(msg);
+                new_err.value(py).as_any().clone()
+            })
+            .collect();
+
         let exception_group = py
             .import(intern!(py, "builtins"))?
             .getattr(intern!(py, "ExceptionGroup"))?
-            .call1((format!("Failed to validate {name} arguments"), issues))?;
+            .call1((format!("Failed to validate {} arguments", name), exceptions))?;
         return Err(pyo3::PyErr::from_value(exception_group));
     }
     let final_args = if let Some(mut out) = out_positional {
@@ -438,12 +448,14 @@ impl SyncCallableValidator {
 
 impl SyncCallableValidator {
     fn new(target: Bound<'_, PyAny>, plan: SyncValidationPlan, aggregate_errors: bool) -> Self {
+        let target_name = target
+            .getattr(intern!(target.py(), "__name__"))
+            .ok()
+            .and_then(|name| name.extract::<String>().ok())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
         Self {
-            target_name: target
-                .getattr(intern!(target.py(), "__name__"))
-                .and_then(|name| Ok(name.cast_into::<PyString>()?))
-                .map(|name| name.to_string())
-                .unwrap_or_else(|_| "<unknown>".to_string()),
+            target_name,
             target: target.unbind(),
             plan,
             aggregate_errors,
@@ -616,13 +628,15 @@ impl AsyncCallableValidator {
 
 impl AsyncCallableValidator {
     fn new(target: Bound<'_, PyAny>, plan: AsyncValidationPlan, aggregate_errors: bool) -> Self {
+        let target_name = target
+            .getattr(intern!(target.py(), "__name__"))
+            .ok()
+            .and_then(|name| name.extract::<String>().ok())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
         Self {
-            target_name: target
-                .getattr(intern!(target.py(), "__name__"))
-                .and_then(|name| Ok(name.cast_into::<PyString>()?))
-                .map(|name| name.to_string())
-                .unwrap_or_else(|_| "<unknown>".to_string()),
             target: target.unbind(),
+            target_name,
             plan,
             aggregate_errors,
         }
