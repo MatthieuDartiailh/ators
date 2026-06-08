@@ -328,6 +328,76 @@ def test_validation_change_arg_kwargs() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
+def test_validated_positional_only_with_transformation() -> None:
+    """Exercise transformation path for PositionalOnly params (lines 146-152, 160, 169)."""
+
+    @validated
+    def f(x: list[int], /) -> list[int]:
+        # Verify x is a list (validator should have transformed/validated it)
+        assert isinstance(x, list)
+        return x
+
+    # Pass a valid list[int] - validator will accept and return it
+    result = f([1, 2, 3])
+    assert result == [1, 2, 3]
+
+
+def test_validated_positional_or_keyword_keyword_arg_with_transformation() -> None:
+    """Exercise keyword branch with transformation (lines 186-189)."""
+
+    @validated
+    def f(x: list[int]) -> list[int]:
+        assert isinstance(x, list)
+        return x
+
+    # Pass as keyword argument
+    result = f(x=[1, 2, 3])
+    assert result == [1, 2, 3]
+
+
+def test_validated_keyword_only_with_transformation() -> None:
+    """Exercise KeywordOnly branch with transformation (lines 244-250)."""
+
+    @validated
+    def f(*, x: list[int]) -> list[int]:
+        assert isinstance(x, list)
+        return x
+
+    # Must pass as keyword argument
+    result = f(x=[1, 2, 3])
+    assert result == [1, 2, 3]
+
+
+def test_validated_varargs_with_transformation() -> None:
+    """Exercise VarPositional with validated items (lines 274, 306)."""
+
+    @validated
+    def f(*args: list[int]) -> list[list[int]]:
+        # Each arg should be a list[int]
+        for arg in args:
+            assert isinstance(arg, list)
+        return list(args)
+
+    # Pass multiple list[int] args
+    result = f([1, 2], [3, 4], [5, 6])
+    assert result == [[1, 2], [3, 4], [5, 6]]
+
+
+def test_validated_varkw_with_transformation() -> None:
+    """Exercise VarKeyword with validated values (line 345)."""
+
+    @validated
+    def f(**kwargs: list[int]) -> dict[str, list[int]]:
+        # Each kwarg value should be a list[int]
+        for v in kwargs.values():
+            assert isinstance(v, list)
+        return kwargs
+
+    # Pass multiple list[int] kwargs
+    result = f(a=[1, 2], b=[3, 4])
+    assert result == {"a": [1, 2], "b": [3, 4]}
+
+
 # ============================================================================
 # Tests for Default Values in All Parameter Positions
 # ============================================================================
@@ -414,6 +484,54 @@ def test_validated_keyword_only_bad_default() -> None:
     assert len(exc.value.exceptions) == 1
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_positional_or_keyword_aggregate_errors_false() -> None:
+    """Exercise aggregate_errors=False early return path (line 198)."""
+
+    @validated(aggregate_errors=False)
+    def f(x: int, y: int) -> int:
+        return x + y
+
+    # First arg invalid - should raise immediately, not collect multiple errors
+    with pytest.raises(TypeError):
+        f("invalid", "also_invalid")  # type: ignore[arg-type]
+
+
+def test_validated_keyword_only_aggregate_errors_false() -> None:
+    """Exercise aggregate_errors=False early return path for KeywordOnly (line 261)."""
+
+    @validated(aggregate_errors=False)
+    def f(*, x: int, y: int) -> int:
+        return x + y
+
+    # First kwarg invalid - should raise immediately
+    with pytest.raises(TypeError):
+        f(x="invalid", y="also_invalid")  # type: ignore[arg-type]
+
+
+def test_validated_varargs_aggregate_errors_false() -> None:
+    """Exercise aggregate_errors=False early return for VarPositional (line 306)."""
+
+    @validated(aggregate_errors=False)
+    def f(*args: int) -> int:
+        return sum(args)
+
+    # First arg invalid - should raise immediately with single error
+    with pytest.raises(TypeError):
+        f("invalid", "also_invalid")  # type: ignore[arg-type]
+
+
+def test_validated_varkw_aggregate_errors_false() -> None:
+    """Exercise aggregate_errors=False early return for VarKeyword (line 345)."""
+
+    @validated(aggregate_errors=False)
+    def f(**kwargs: int) -> int:
+        return sum(kwargs.values())
+
+    # First kwarg invalid - should raise immediately
+    with pytest.raises(TypeError):
+        f(a="invalid", b="also_invalid")  # type: ignore[arg-type]
 
 
 # ============================================================================
