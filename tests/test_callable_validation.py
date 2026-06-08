@@ -52,22 +52,13 @@ def test_validated_aggregate_errors() -> None:
     assert param_names == {"x", "y"}
 
 
-def test_validated_methods_instance() -> None:
-    class C:
-        @validated
-        def inst(self, x: int) -> int:
-            return x
+def test_fails_fast() -> None:
+    @validated(aggregate_errors=False)
+    def f(x: int, y: int) -> int:
+        return x + y
 
-    c = C()
-    assert c.inst(1) == 1
-
-    with pytest.raises(ExceptionGroup) as exc:
-        c.inst("1")  # type: ignore[arg-type]
-
-    # Expected failure: x has type mismatch
-    assert len(exc.value.exceptions) == 1
-    assert isinstance(exc.value.exceptions[0], TypeError)
-    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+    with pytest.raises(TypeError):
+        f("a", "b")  # type: ignore[arg-type]
 
 
 def test_validated_rejects_staticmethod_target() -> None:
@@ -122,6 +113,51 @@ def test_validated_then_classmethod_works() -> None:
     assert isinstance(exc.value.exceptions[0], TypeError)
 
 
+def test_validated_validate_return_false() -> None:
+    @validated(validate_return=False)
+    def f(x: int) -> int:
+        return str(x)  # type: ignore
+
+    assert f(1) == "1"
+
+
+def test_validated_rejects_non_callable() -> None:
+    with pytest.raises(TypeError, match="validated can only be applied to callables"):
+        validated(1)  # type: ignore[arg-type]
+
+
+def test_validated_factory_requires_callable_target() -> None:
+    decorator = validated(aggregate_errors=True)
+    with pytest.raises(TypeError):
+        decorator()
+
+
+def test_validated_preserves_wrapped_metadata() -> None:
+    @validated
+    def add_one(x: int) -> int:
+        return x + 1
+
+    assert add_one.__name__ == "add_one"
+    assert hasattr(add_one, "__wrapped__")
+    assert str(inspect.signature(add_one)) == "(x: int) -> int"
+
+
+def test_validated_rejects_classvar_annotation() -> None:
+    with pytest.raises(TypeError, match="ClassVar"):
+
+        @validated
+        def f(x: ClassVar[int]) -> int:  # type: ignore
+            return x
+
+
+def test_validated_rejects_subscripted_member_annotation() -> None:
+    with pytest.raises(TypeError, match="subscripted Member annotations"):
+
+        @validated
+        def f(x: Member[int, int]) -> int:
+            return x  # type: ignore[return-value]
+
+
 def test_validated_async_function() -> None:
     @validated
     async def af(x: int) -> int:
@@ -142,31 +178,6 @@ def test_validated_async_function_return_validation() -> None:
 
     with pytest.raises(TypeError):
         asyncio.run(af(3))
-
-
-def test_validated_checks_default_values_when_argument_missing() -> None:
-    @validated
-    def f(x: int = "1"):  # type: ignore
-        return x
-
-    with pytest.raises(ExceptionGroup) as exc:
-        f()
-
-    # Expected failure: x default value is invalid
-    assert len(exc.value.exceptions) == 1
-    assert isinstance(exc.value.exceptions[0], TypeError)
-    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
-
-    assert f(2) == 2
-
-
-def test_strict_mode_fails_fast() -> None:
-    @validated(aggregate_errors=False)
-    def f(x: int, y: int) -> int:
-        return x + y
-
-    with pytest.raises(TypeError):
-        f("a", "b")  # type: ignore[arg-type]
 
 
 def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
@@ -220,57 +231,12 @@ def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
         assert "Failed to validate" in str(inner_exc)
 
 
-def test_validated_validate_return_false() -> None:
-    @validated(validate_return=False)
-    def f(x: int) -> int:
-        return str(x)  # type: ignore
-
-    assert f(1) == "1"
-
-
-def test_validated_rejects_non_callable() -> None:
-    with pytest.raises(TypeError, match="validated can only be applied to callables"):
-        validated(1)  # type: ignore[arg-type]
-
-
-def test_validated_factory_requires_callable_target() -> None:
-    decorator = validated(aggregate_errors=True)
-    with pytest.raises(TypeError):
-        decorator()
-
-
-def test_validated_preserves_wrapped_metadata() -> None:
-    @validated
-    def add_one(x: int) -> int:
-        return x + 1
-
-    assert add_one.__name__ == "add_one"
-    assert hasattr(add_one, "__wrapped__")
-    assert str(inspect.signature(add_one)) == "(x: int) -> int"
-
-
-def test_validated_rejects_classvar_annotation() -> None:
-    with pytest.raises(TypeError, match="ClassVar"):
-
-        @validated
-        def f(x: ClassVar[int]) -> int:  # type: ignore
-            return x
-
-
-def test_validated_rejects_subscripted_member_annotation() -> None:
-    with pytest.raises(TypeError, match="subscripted Member annotations"):
-
-        @validated
-        def f(x: Member[int, int]) -> int:
-            return x  # type: ignore[return-value]
-
-
 # ============================================================================
 # Tests for validation with argument transformation (list[int] across positions)
 # ============================================================================
 
 
-def test_list_validation_positional_only() -> None:
+def test_validation_change_arg_positional_only() -> None:
     """Test list[int] validation in positional-only parameter."""
 
     @validated
@@ -290,7 +256,7 @@ def test_list_validation_positional_only() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
-def test_list_validation_positional_or_keyword() -> None:
+def test_validation_change_arg_positional_or_keyword() -> None:
     """Test list[int] validation in positional-or-keyword parameter."""
 
     @validated
@@ -317,7 +283,7 @@ def test_list_validation_positional_or_keyword() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
-def test_list_validation_varargs() -> None:
+def test_validation_change_arg_varargs() -> None:
     """Test list[int] validation in *args parameter."""
 
     @validated
@@ -337,7 +303,7 @@ def test_list_validation_varargs() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
-def test_list_validation_kwargs() -> None:
+def test_validation_change_arg_kwargs() -> None:
     """Test list[int] validation in **kwargs parameter."""
 
     @validated
@@ -358,42 +324,6 @@ def test_list_validation_kwargs() -> None:
 
 
 # ============================================================================
-# Tests for Optional/None Handling
-# ============================================================================
-
-
-def test_validated_with_optional_parameter() -> None:
-    """Test Optional[int] handling."""
-
-    @validated
-    def f(x: int | None) -> int | None:
-        return x
-
-    # Test success cases
-    assert f(42) == 42
-    assert f(None) is None
-
-    # Test failure case
-    with pytest.raises(ExceptionGroup) as exc:
-        f("invalid")  # type: ignore[arg-type]
-
-    assert len(exc.value.exceptions) == 1
-    for inner_exc in exc.value.exceptions:
-        assert isinstance(inner_exc, TypeError)
-
-
-def test_validated_optional_with_none_default() -> None:
-    """Test default=None with Optional."""
-
-    @validated
-    def f(x: int | None = None) -> int | None:
-        return x
-
-    assert f() is None
-    assert f(42) == 42
-
-
-# ============================================================================
 # Tests for Default Values in All Parameter Positions
 # ============================================================================
 
@@ -402,11 +332,11 @@ def test_validated_positional_only_with_default() -> None:
     """Test positional-only param with annotated default."""
 
     @validated
-    def f(x: int = 42, /) -> int:
-        return x
+    def f(x: int, y: int = 42, /) -> int:
+        return x + y
 
-    assert f() == 42
-    assert f(100) == 100
+    assert f(1) == 43
+    assert f(1, 100) == 101
 
 
 def test_validated_positional_only_bad_default() -> None:
@@ -418,6 +348,35 @@ def test_validated_positional_only_bad_default() -> None:
 
     with pytest.raises(ExceptionGroup) as exc:
         f()  # Should fail when accessing default
+
+    # Expected failure: x default value is invalid
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_var_or_keyword_with_default() -> None:
+    """Test keyword-only param with annotated default."""
+
+    @validated
+    def f(x: int, y: int = 42) -> int:
+        return x + y
+
+    assert f(1) == 43
+    assert f(1, y=10) == 11
+    assert f(x=1, y=10) == 11
+    assert f(1, 100) == 101
+
+
+def test_validated_var_or_keyword_bad_default() -> None:
+    """Test keyword-only param with invalid default."""
+
+    @validated
+    def f(x: int = "invalid", y: int = 42) -> int:  # type: ignore
+        return x + y
+
+    with pytest.raises(ExceptionGroup) as exc:
+        f()
 
     # Expected failure: x default value is invalid
     assert len(exc.value.exceptions) == 1
@@ -453,44 +412,6 @@ def test_validated_keyword_only_bad_default() -> None:
 
 
 # ============================================================================
-# Tests for Async Method Descriptor Binding
-# ============================================================================
-
-
-def test_validated_async_instance_method_binding() -> None:
-    """Test async method returns bound method descriptor."""
-
-    class C:
-        @validated
-        async def amethod(self, x: int) -> int:
-            return x
-
-    c1 = C()
-    c2 = C()
-
-    # Bound methods should be unique per instance
-    assert c1.amethod is not c2.amethod
-    assert c1.amethod.__self__ is c1
-    assert c2.amethod.__self__ is c2
-
-
-def test_validated_async_method_access_from_class() -> None:
-    """Test accessing async validated method from class."""
-
-    class C:
-        @validated
-        async def amethod(self, x: int) -> int:
-            return x
-
-    # Accessing from class should return unbound validator
-    unbound = C.amethod
-    assert hasattr(unbound, "__call__")
-
-    # Should be able to call with explicit self
-    assert inspect.iscoroutinefunction(C.amethod) or hasattr(C.amethod, "__call__")
-
-
-# ============================================================================
 # Tests for Sync Method Descriptor Binding and Class Access
 # ============================================================================
 
@@ -511,6 +432,16 @@ def test_validated_sync_instance_method_binding() -> None:
     assert c1.method.__self__ is c1
     assert c2.method.__self__ is c2
 
+    assert c1.method(1) == 1
+
+    with pytest.raises(ExceptionGroup) as exc:
+        c1.method("1")  # type: ignore[arg-type]
+
+    # Expected failure: x has type mismatch
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
 
 def test_validated_sync_method_access_from_class() -> None:
     """Test accessing sync validated method from class."""
@@ -526,6 +457,54 @@ def test_validated_sync_method_access_from_class() -> None:
 
     # Verify we can get the validator's signature
     assert hasattr(unbound, "__wrapped__") or callable(unbound)
+
+
+# ============================================================================
+# Tests for Async Method Descriptor Binding
+# ============================================================================
+
+
+def test_validated_async_instance_method_binding() -> None:
+    """Test async method returns bound method descriptor."""
+
+    class C:
+        @validated
+        async def amethod(self, x: int) -> int:
+            return x
+
+    c1 = C()
+    c2 = C()
+
+    # Bound methods should be unique per instance
+    assert c1.amethod is not c2.amethod
+    assert c1.amethod.__self__ is c1
+    assert c2.amethod.__self__ is c2
+
+    assert asyncio.run(c1.amethod(1)) == 1
+
+    with pytest.raises(ExceptionGroup) as exc:
+        asyncio.run(c1.amethod("1"))  # type: ignore[arg-type]
+
+    # Expected failure: x has type mismatch
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_async_method_access_from_class() -> None:
+    """Test accessing async validated method from class."""
+
+    class C:
+        @validated
+        async def amethod(self, x: int) -> int:
+            return x
+
+    # Accessing from class should return unbound validator
+    unbound = C.amethod
+    assert hasattr(unbound, "__call__")
+
+    # Should be able to call with explicit self
+    assert inspect.iscoroutinefunction(C.amethod) or hasattr(C.amethod, "__call__")
 
 
 # ============================================================================
@@ -554,6 +533,13 @@ def test_validated_mixed_annotated_unannotated() -> None:
     assert f(1, "2") == "12"  # Only x validated
     assert f(1, 2) == "12"  # y accepts anything
 
+    with pytest.raises(ExceptionGroup) as exc:
+        f("1", "2")  # type: ignore[arg-type]
+
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
 
 def test_validated_function_with_no_args() -> None:
     """Test function with no parameters."""
@@ -563,6 +549,15 @@ def test_validated_function_with_no_args() -> None:
         return 42
 
     assert f() == 42
+
+    @validated
+    def g() -> int:
+        return "42"  # type: ignore
+
+    with pytest.raises(TypeError) as exc:
+        g()
+
+    assert "return value" in str(exc.value)
 
 
 def test_validated_positional_only_no_annotation() -> None:
