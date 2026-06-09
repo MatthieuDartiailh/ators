@@ -9,7 +9,7 @@
 
 from abc import ABC
 from annotationlib import ForwardRef
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
 
 import pytest
 
@@ -401,7 +401,138 @@ def test_constrained_typevar_rejects_other_types():
     box = ConstrainedBox()
     with pytest.raises(TypeError):
         box.item = 1.5
-    with pytest.raises(TypeError):
+
+# Callable validation tests
+from typing import Callable
+
+
+class CallableBox(Ators):
+    """Test class with Callable type member"""
+    callback: Callable[[int, str], bool] = member()
+
+
+def test_callable_valid_with_correct_signature():
+    """Test that a callable with matching signature is accepted"""
+    def func(x: int, y: str) -> bool:
+        return True
+
+    box = CallableBox()
+    box.callback = func  # Should not raise
+
+
+def test_callable_valid_lambda_not_supported():
+    """Test that unannotated lambdas are rejected"""
+    box = CallableBox()
+    # lambdas don't have annotations, should be rejected
+    with pytest.raises(TypeError, match="annotated|annotation"):
+        box.callback = lambda x, y: True
+
+
+def test_callable_reject_non_callable():
+    """Test that non-callable values are rejected"""
+    box = CallableBox()
+    with pytest.raises(TypeError, match="Callable"):
+        box.callback = 42
+
+
+def test_callable_reject_wrong_arity():
+    """Test that callables with wrong parameter count are rejected"""
+    def wrong_arity(x: int) -> bool:
+        return True
+
+    box = CallableBox()
+    with pytest.raises(TypeError, match="parameter"):
+        box.callback = wrong_arity
+
+
+def test_callable_reject_missing_parameter_annotation():
+    """Test that callables missing parameter annotations are rejected"""
+    def unannotated_param(x, y: str) -> bool:  # x is unannotated
+        return True
+
+    box = CallableBox()
+    with pytest.raises(TypeError, match="annotated|annotation"):
+        box.callback = unannotated_param
+
+
+def test_callable_reject_missing_return_annotation():
+    """Test that callables missing return annotation are rejected"""
+    def no_return_annotation(x: int, y: str):  # No return annotation
+        return True
+
+    box = CallableBox()
+    with pytest.raises(TypeError, match="return|annotation"):
+        box.callback = no_return_annotation
+
+
+def test_callable_reject_wrong_parameter_type():
+    """Test that callables with wrong parameter types are rejected"""
+    def wrong_param_type(x: str, y: str) -> bool:  # x should be int
+        return True
+
+    box = CallableBox()
+    with pytest.raises(TypeError, match="type|parameter"):
+        box.callback = wrong_param_type
+
+
+def test_callable_reject_wrong_return_type():
+    """Test that callables with wrong return type are rejected"""
+    def wrong_return_type(x: int, y: str) -> str:  # Should return bool
+        return "true"
+
+    box = CallableBox()
+    with pytest.raises(TypeError, match="return|type"):
+        box.callback = wrong_return_type
+
+
+# Callable[..., ReturnType] tests
+class VariadicCallableBox(Ators):
+    """Test class with variadic Callable type"""
+    callback: Callable[..., str] = member()
+
+
+def test_callable_variadic_accepts_any_params():
+    """Test that Callable[..., ReturnType] accepts any parameter count"""
+    def any_params_func(x: int, y: str, z: float) -> str:
+        return "ok"
+
+    box = VariadicCallableBox()
+    box.callback = any_params_func  # Should not raise
+
+
+def test_callable_variadic_validates_return_type():
+    """Test that Callable[..., ReturnType] still validates return type"""
+    def wrong_return(x: int) -> int:  # Wrong return type
+        return 42
+
+    box = VariadicCallableBox()
+    with pytest.raises(TypeError, match="return"):
+        box.callback = wrong_return
+
+
+def test_callable_empty_params():
+    """Test Callable with no parameters"""
+    class NoParamCallableBox(Ators):
+        callback: Callable[[], str] = member()
+
+    def no_params() -> str:
+        return "ok"
+
+    box = NoParamCallableBox()
+    box.callback = no_params  # Should not raise
+
+
+def test_callable_empty_params_rejects_if_not_match():
+    """Test Callable with no parameters rejects functions with parameters"""
+    class NoParamCallableBox(Ators):
+        callback: Callable[[], str] = member()
+
+    def has_params(x: int) -> str:
+        return "ok"
+
+    box = NoParamCallableBox()
+    with pytest.raises(TypeError, match="parameter"):
+        box.callback = has_params    with pytest.raises(TypeError):
         box.item = []
     with pytest.raises(TypeError):
         box.item = {}
@@ -550,3 +681,357 @@ def test_var_tuple_validation_preserves_unchanged_items_after_transformation():
     assert len(a.a) == 2
     assert a.a[0] == [1]
     assert a.a[1] == 2
+
+
+# ---------------------------------------------------------------------------
+# Callable variance tests (Phase 2)
+# ---------------------------------------------------------------------------
+# These tests validate Liskov Substitution Principle (LSP) for callables:
+# - Contravariance for parameters: callable accepting more types can substitute
+# - Covariance for return types: callable returning more specific types can substitute
+
+
+class Animal:
+    pass
+
+
+class Dog(Animal):
+    pass
+
+
+class Cat(Animal):
+    pass
+
+
+# Test fixtures for variance
+def callable_animal_to_animal(x: Animal) -> Animal:
+    """Callable that accepts Animal and returns Animal"""
+    return Animal()
+
+
+def callable_object_to_dog(x: object) -> Dog:
+    """Callable that accepts object (supertype) and returns Dog (subtype) - MOST GENERAL"""
+    return Dog()
+
+
+def callable_dog_to_animal(x: Dog) -> Animal:
+    """Callable that accepts Dog and returns Animal"""
+    return Animal()
+
+
+def callable_animal_to_dog(x: Animal) -> Dog:
+    """Callable that accepts Animal and returns Dog"""
+    return Dog()
+
+
+def callable_object_to_animal(x: object) -> Animal:
+    """Callable that accepts object and returns Animal"""
+    return Animal()
+
+
+def callable_dog_to_dog(x: Dog) -> Dog:
+    """Callable that accepts Dog and returns Dog"""
+    return Dog()
+
+
+# =========================================================================
+# Contravariance Tests (Parameter Acceptance)
+# =========================================================================
+
+def test_callable_contravariance_supertype_params_accepted():
+    """Callable accepting supertype (object) should substitute for Animal"""
+    class AnimalHandler(Ators):
+        handler: Callable[[Animal], Animal] = member()
+
+    obj = AnimalHandler()
+    # callable_object_to_dog accepts object (more general) - should be accepted
+    obj.handler = callable_object_to_dog
+
+
+def test_callable_contravariance_subtype_params_rejected():
+    """Callable accepting subtype (Dog) should NOT substitute for Animal"""
+    class AnimalHandler(Ators):
+        handler: Callable[[Animal], Animal] = member()
+
+    obj = AnimalHandler()
+    # callable_dog_to_animal accepts only Dog (more specific) - should be rejected
+    with pytest.raises(TypeError, match="contravariance"):
+        obj.handler = callable_dog_to_animal
+
+
+def test_callable_contravariance_exact_match_still_works():
+    """Exact parameter match should still be accepted (backward compat)"""
+    class AnimalHandler(Ators):
+        handler: Callable[[Animal], Animal] = member()
+
+    obj = AnimalHandler()
+    # callable_animal_to_animal accepts Animal - should be accepted
+    obj.handler = callable_animal_to_animal
+
+
+def test_callable_contravariance_multiple_params():
+    """Test contravariance with multiple parameters"""
+    class MultiParamHandler(Ators):
+        handler: Callable[[Animal, Animal], Animal] = member()
+
+    def handler_with_supertypes(x: object, y: object) -> Animal:
+        return Animal()
+
+    def handler_with_subtypes(x: Dog, y: Dog) -> Animal:
+        return Animal()
+
+    obj = MultiParamHandler()
+    # Supertypes should be accepted (contravariance)
+    obj.handler = handler_with_supertypes
+    # Subtypes should be rejected
+    with pytest.raises(TypeError, match="contravariance"):
+        obj.handler = handler_with_subtypes
+
+
+def test_callable_contravariance_first_param_fails():
+    """Test error when first parameter violates contravariance"""
+    class TwoParamHandler(Ators):
+        handler: Callable[[Animal, Animal], Animal] = member()
+
+    def handler_first_narrow(x: Dog, y: object) -> Animal:
+        return Animal()
+
+    obj = TwoParamHandler()
+    with pytest.raises(TypeError, match="Parameter 0|contravariance"):
+        obj.handler = handler_first_narrow
+
+
+def test_callable_contravariance_second_param_fails():
+    """Test error when second parameter violates contravariance"""
+    class TwoParamHandler(Ators):
+        handler: Callable[[Animal, Animal], Animal] = member()
+
+    def handler_second_narrow(x: object, y: Dog) -> Animal:
+        return Animal()
+
+    obj = TwoParamHandler()
+    with pytest.raises(TypeError, match="Parameter 1|contravariance"):
+        obj.handler = handler_second_narrow
+
+
+# =========================================================================
+# Covariance Tests (Return Type Acceptance)
+# =========================================================================
+
+def test_callable_covariance_subtype_return_accepted():
+    """Callable returning subtype (Dog) should substitute for Animal"""
+    class AnimalProvider(Ators):
+        provider: Callable[[int], Animal] = member()
+
+    def provider_returns_dog(x: int) -> Dog:
+        return Dog()
+
+    obj = AnimalProvider()
+    obj.provider = provider_returns_dog
+
+
+def test_callable_covariance_supertype_return_rejected():
+    """Callable returning supertype (object) should NOT substitute for Animal"""
+    class AnimalProvider(Ators):
+        provider: Callable[[int], Animal] = member()
+
+    def provider_returns_object(x: int) -> object:
+        return object()
+
+    obj = AnimalProvider()
+    with pytest.raises(TypeError, match="covariance"):
+        obj.provider = provider_returns_object
+
+
+def test_callable_covariance_exact_match_still_works():
+    """Exact return type match should still be accepted (backward compat)"""
+    class AnimalProvider(Ators):
+        provider: Callable[[int], Animal] = member()
+
+    def provider_returns_animal(x: int) -> Animal:
+        return Animal()
+
+    obj = AnimalProvider()
+    obj.provider = provider_returns_animal
+
+
+def test_callable_covariance_deep_hierarchy():
+    """Test covariance with deeper inheritance hierarchies"""
+    class AnimalProvider(Ators):
+        provider: Callable[[int], Animal] = member()
+
+    def provider_returns_dog(x: int) -> Dog:
+        return Dog()
+
+    obj = AnimalProvider()
+    obj.provider = provider_returns_dog
+
+
+# =========================================================================
+# Combined Variance Tests
+# =========================================================================
+
+def test_callable_both_variances_correct():
+    """Test that contravariant params + covariant return both work together"""
+    class CallableBox(Ators):
+        callback: Callable[[Animal], Animal] = member()
+
+    # object -> Dog: contravariant params (object > Animal) + covariant return (Dog < Animal)
+    obj = CallableBox()
+    obj.callback = callable_object_to_dog
+
+
+def test_callable_param_contravariance_fail_return_pass():
+    """Test param fails, return passes -> should still reject"""
+    class CallableBox(Ators):
+        callback: Callable[[Animal], Animal] = member()
+
+    def narrow_param_good_return(x: Dog) -> Dog:
+        return Dog()
+
+    obj = CallableBox()
+    with pytest.raises(TypeError, match="contravariance"):
+        obj.callback = narrow_param_good_return
+
+
+def test_callable_param_pass_return_covariance_fail():
+    """Test param passes, return fails -> should still reject"""
+    class CallableBox(Ators):
+        callback: Callable[[Animal], Animal] = member()
+
+    def good_param_bad_return(x: object) -> object:
+        return object()
+
+    obj = CallableBox()
+    with pytest.raises(TypeError, match="covariance"):
+        obj.callback = good_param_bad_return
+
+
+def test_callable_both_variances_fail():
+    """Test both contravariance and covariance fail"""
+    class CallableBox(Ators):
+        callback: Callable[[Animal], Animal] = member()
+
+    def both_wrong(x: Dog) -> object:
+        return object()
+
+    obj = CallableBox()
+    with pytest.raises(TypeError):  # Should match one of the errors
+        obj.callback = both_wrong
+
+
+# =========================================================================
+# Edge Cases
+# =========================================================================
+
+def test_callable_variance_with_object_param():
+    """Test that object as parameter type follows contravariance"""
+    class ObjectParamHandler(Ators):
+        handler: Callable[[object], str] = member()
+
+    def handler_returns_str(x: object) -> str:
+        return "ok"
+
+    obj = ObjectParamHandler()
+    obj.handler = handler_returns_str
+
+
+def test_callable_variance_with_object_return():
+    """Test that object as return type follows covariance"""
+    class ObjectReturnProvider(Ators):
+        provider: Callable[[int], object] = member()
+
+    def provider_returns_str(x: int) -> str:
+        return "ok"
+
+    obj = ObjectReturnProvider()
+    obj.provider = provider_returns_str
+
+
+def test_callable_variance_empty_params_ignores_contravariance():
+    """Callable[..., X] should not check parameter contravariance"""
+    class VariadicHandler(Ators):
+        handler: Callable[..., Animal] = member()
+
+    def any_params_to_animal(*args, **kwargs) -> Animal:
+        return Animal()
+
+    obj = VariadicHandler()
+    obj.handler = any_params_to_animal
+
+
+def test_callable_variance_none_type():
+    """Test variance with None type in hierarchy"""
+    class NoneProvider(Ators):
+        provider: Callable[[int], object] = member()
+
+    def provider_returns_none(x: int) -> None:
+        return None
+
+    obj = NoneProvider()
+    # None is a subtype of object, should be accepted
+    obj.provider = provider_returns_none
+
+
+def test_callable_variance_builtin_types():
+    """Test variance with builtin types (bool is subclass of int)"""
+    class NumberHandler(Ators):
+        handler: Callable[[int], int] = member()
+
+    def handler_bool_to_int(x: int) -> bool:
+        return True
+
+    obj = NumberHandler()
+    obj.handler = handler_bool_to_int
+
+
+# =========================================================================
+# Regression Tests (Phase 1 Still Works)
+# =========================================================================
+
+def test_callable_variance_exact_match_single_param():
+    """Exact matching for single parameter should still work"""
+    class SingleParamBox(Ators):
+        callback: Callable[[int], str] = member()
+
+    def exact_match(x: int) -> str:
+        return "ok"
+
+    obj = SingleParamBox()
+    obj.callback = exact_match
+
+
+def test_callable_variance_strict_unannotated_still_rejected():
+    """Unannotated callables should still be rejected"""
+    class AnnotatedCallableBox(Ators):
+        callback: Callable[[int], str] = member()
+
+    def unannotated(x):  # No annotation!
+        return "ok"
+
+    obj = AnnotatedCallableBox()
+    with pytest.raises(TypeError, match="annotated"):
+        obj.callback = unannotated
+
+
+def test_callable_variance_arity_still_checked():
+    """Wrong arity should still be rejected"""
+    class TwoParamBox(Ators):
+        callback: Callable[[int, str], int] = member()
+
+    def wrong_arity(x: int) -> int:
+        return 42
+
+    obj = TwoParamBox()
+    with pytest.raises(TypeError, match="parameter"):
+        obj.callback = wrong_arity
+
+
+def test_callable_variance_non_callable_still_rejected():
+    """Non-callable values should still be rejected"""
+    class CallableBox(Ators):
+        callback: Callable[[int], str] = member()
+
+    obj = CallableBox()
+    with pytest.raises(TypeError, match="Callable"):
+        obj.callback = 42

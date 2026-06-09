@@ -327,6 +327,58 @@ pub enum Mutability {
     Undecidable,
 }
 
+/// Check if `candidate` is a subtype of (or equal to) `expected` in the type hierarchy.
+///
+/// Returns `true` if candidate ≤ expected (i.e., candidate is a subclass of expected
+/// or they are the same type). This is used for **covariance** validation
+/// (return types must be subtypes of what was expected).
+///
+/// # Arguments
+///
+/// * `candidate` - The type being checked
+/// * `expected` - The expected type (or supertype)
+///
+/// # Returns
+///
+/// `true` if candidate is a subtype of expected, `false` otherwise
+pub(crate) fn is_subtype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = candidate.py();
+
+    // Try casting both to PyType for class-based comparison
+    if let (Ok(cand_type), Ok(exp_type)) = (candidate.cast::<PyType>(), expected.cast::<PyType>()) {
+        return cand_type.is_subclass(exp_type);
+    }
+
+    // Fallback: use Python's issubclass() for edge cases
+    // This handles non-type objects that still participate in subclass relationships
+    let builtins = py.import("builtins")?;
+    let issubclass = builtins.getattr("issubclass")?;
+    match issubclass.call1((candidate, expected)) {
+        Ok(result) => result.is_truthy(),
+        Err(_) => Ok(false), // Not a class, not comparable
+    }
+}
+
+/// Check if `candidate` is a supertype of (or equal to) `expected` in the type hierarchy.
+///
+/// Returns `true` if candidate ≥ expected (i.e., expected is a subclass of candidate
+/// or they are the same type). This is used for **contravariance** validation
+/// (parameter types must be supertypes of what was expected).
+///
+/// # Arguments
+///
+/// * `candidate` - The type being checked
+/// * `expected` - The expected type (or subtype)
+///
+/// # Returns
+///
+/// `true` if candidate is a supertype of expected, `false` otherwise
+pub(crate) fn is_supertype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
+    // Supertype check is: is_subtype(expected, candidate)
+    // i.e., expected must be a subtype of candidate
+    is_subtype(expected, candidate)
+}
+
 /// Enum representing the mutability specification for a type
 enum MutabilitySpec {
     /// Type is always mutable
