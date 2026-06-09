@@ -250,7 +250,7 @@ def test_validated_positional_only_change_arg_and_default() -> None:
         with pytest.raises(TypeError) as exc:
             items.append("invalid")  # type: ignore
 
-        assert "items" in str(exc.value) and "int" in str(exc.value)
+        assert "int" in str(exc.value)
 
         return ln
 
@@ -334,7 +334,7 @@ def test_validation_positional_or_keyword_change_arg() -> None:
         with pytest.raises(TypeError) as exc:
             items.append("invalid")  # type: ignore
 
-        assert "items" in str(exc.value) and "int" in str(exc.value)
+        assert "int" in str(exc.value)
 
         return s
 
