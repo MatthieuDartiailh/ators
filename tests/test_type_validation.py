@@ -1035,3 +1035,181 @@ def test_callable_variance_non_callable_still_rejected():
     obj = CallableBox()
     with pytest.raises(TypeError, match="Callable"):
         obj.callback = 42
+
+
+# =========================================================================
+# Phase 3: Bare Callable and Callable[..., T] Edge Cases
+# =========================================================================
+# These tests verify two important edge cases:
+# 1. Bare Callable (no type params) accepts any callable (like Any)
+# 2. Callable[..., ReturnType] accepts any parameters but validates return type
+
+
+def test_callable_bare_accepts_any_callable():
+    """Bare Callable (no type parameters) should accept any callable"""
+    class CallableBox(Ators):
+        callback: Callable = member()
+
+    def any_func(x: int) -> str:
+        return "ok"
+
+    obj = CallableBox()
+    obj.callback = any_func  # Should work with bare Callable
+
+
+def test_callable_bare_accepts_unannotated_callable():
+    """Bare Callable should accept even unannotated callables"""
+    class CallableBox(Ators):
+        callback: Callable = member()
+
+    def unannotated(x):
+        return x
+
+    obj = CallableBox()
+    obj.callback = unannotated  # Should work - bare Callable is permissive
+
+
+def test_callable_bare_accepts_different_signatures():
+    """Bare Callable should accept callables with any signature"""
+    class CallableBox(Ators):
+        callback: Callable = member()
+
+    def no_params() -> None:
+        pass
+
+    def many_params(a: int, b: str, c: float) -> dict:
+        return {}
+
+    obj = CallableBox()
+    obj.callback = no_params  # Should work
+    obj.callback = many_params  # Should work
+
+
+def test_callable_bare_rejects_non_callable():
+    """Bare Callable should still reject non-callable values"""
+    class CallableBox(Ators):
+        callback: Callable = member()
+
+    obj = CallableBox()
+    with pytest.raises(TypeError, match="Callable"):
+        obj.callback = 42
+    with pytest.raises(TypeError, match="Callable"):
+        obj.callback = "not a function"
+    with pytest.raises(TypeError, match="Callable"):
+        obj.callback = []
+
+
+def test_callable_bare_with_lambda():
+    """Bare Callable should accept lambda functions"""
+    class CallableBox(Ators):
+        callback: Callable = member()
+
+    obj = CallableBox()
+    obj.callback = lambda x: x + 1  # Should work with bare Callable
+
+
+# =========================================================================
+# Callable[..., ReturnType] Regression Tests
+# =========================================================================
+
+
+def test_callable_variadic_accepts_any_params_different_types():
+    """Callable[..., T] should accept callables with any parameter types"""
+    class Provider(Ators):
+        provider: Callable[..., str] = member()
+
+    def provider_no_params() -> str:
+        return "ok"
+
+    def provider_int(x: int) -> str:
+        return str(x)
+
+    def provider_multiple(a: int, b: str, c: float) -> str:
+        return f"{a}{b}{c}"
+
+    obj = Provider()
+    obj.provider = provider_no_params  # Should work
+    obj.provider = provider_int  # Should work
+    obj.provider = provider_multiple  # Should work
+
+
+def test_callable_variadic_return_type_covariance():
+    """Callable[..., Base] should accept Callable[..., Derived]"""
+    class Provider(Ators):
+        provider: Callable[..., Animal] = member()
+
+    def provider_dog() -> Dog:
+        return Dog()
+
+    obj = Provider()
+    obj.provider = provider_dog  # Should work (Dog < Animal)
+
+
+def test_callable_variadic_return_type_rejects_supertype():
+    """Callable[..., Base] should reject Callable[..., Supertype]"""
+    class Provider(Ators):
+        provider: Callable[..., Animal] = member()
+
+    def provider_object() -> object:
+        return object()
+
+    obj = Provider()
+    with pytest.raises(TypeError, match="covariance"):
+        obj.provider = provider_object
+
+
+def test_callable_variadic_return_annotation_still_required():
+    """Callable[..., T] should still require return type annotation"""
+    class Provider(Ators):
+        provider: Callable[..., str] = member()
+
+    def provider_no_return_annotation(x: int):
+        return "ok"
+
+    obj = Provider()
+    with pytest.raises(TypeError, match="return|annotated"):
+        obj.provider = provider_no_return_annotation
+
+
+def test_callable_variadic_with_unannotated_params():
+    """Callable[..., T] should accept callables with unannotated params"""
+    class Provider(Ators):
+        provider: Callable[..., str] = member()
+
+    def provider_unannotated_params(x, y, z) -> str:
+        return "ok"
+
+    obj = Provider()
+    obj.provider = provider_unannotated_params  # Should work
+
+
+def test_callable_variadic_accepts_any_return():
+    """Callable[..., Any] should accept any return type"""
+    class Provider(Ators):
+        provider: Callable[..., Any] = member()
+
+    def provider_int() -> int:
+        return 42
+
+    def provider_str() -> str:
+        return "ok"
+
+    def provider_object() -> object:
+        return object()
+
+    obj = Provider()
+    obj.provider = provider_int  # Should work
+    obj.provider = provider_str  # Should work
+    obj.provider = provider_object  # Should work
+
+
+def test_callable_variadic_with_none_return():
+    """Callable[..., object] should accept Callable[..., None]"""
+    class Provider(Ators):
+        provider: Callable[..., object] = member()
+
+    def provider_none() -> None:
+        pass
+
+    obj = Provider()
+    obj.provider = provider_none  # Should work (None < object)
