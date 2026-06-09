@@ -413,7 +413,7 @@ pub fn build_validator_from_annotation<'py>(
             }
 
             let return_type = args.get_item(args.len() - 1)?;
-            
+
             // Check if this is Callable[..., ReturnType] format
             let params = if args.len() == 2 {
                 let first_arg = args.get_item(0)?;
@@ -585,6 +585,14 @@ pub fn build_validator_from_annotation<'py>(
             typevar_bindings,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
+        Ok((
+            Validator::default(),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
+    } else if ann.is(&tools.types.callable) {
+        // Bare Callable without type parameters - accept any callable (like Any)
         Ok((
             Validator::default(),
             ValidatorBuildInfo {
