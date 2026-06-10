@@ -773,3 +773,266 @@ def test_validated_return_error_preserves_original_context() -> None:
     # The original error explains what was expected vs received
     original_error = str(exc.value.__cause__)
     assert "Expected a" in original_error or "list" in original_error
+
+
+# ============================================================================
+# Tests for Missing Required Arguments
+# ============================================================================
+
+
+def test_validated_missing_required_positional_argument() -> None:
+    """Test that omitting a required positional argument raises TypeError."""
+
+    @validated
+    def f(x: int) -> int:
+        return x + 1
+
+    # Without the decorator, this would raise:
+    # TypeError: f() missing 1 required positional argument: 'x'
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "required" in error_msg.lower()
+    assert "argument" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_positional_or_keyword_argument() -> None:
+    """Test missing required positional-or-keyword parameter."""
+
+    @validated
+    def f(x: int, y: int) -> int:
+        return x + y
+
+    # Missing y when called with only x
+    with pytest.raises(TypeError) as exc:
+        f(1)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "y" in error_msg
+
+
+def test_validated_missing_multiple_required_positional_arguments() -> None:
+    """Test missing multiple required positional arguments."""
+
+    @validated
+    def f(x: int, y: int, z: int) -> int:
+        return x + y + z
+
+    with pytest.raises(TypeError) as exc:
+        f(1)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    # At least y should be mentioned as missing
+    assert any(ch in error_msg for ch in ["y", "z"])
+
+
+def test_validated_missing_required_keyword_only_argument() -> None:
+    """Test missing required keyword-only argument."""
+
+    @validated
+    def f(*, x: int, y: int) -> int:
+        return x + y
+
+    with pytest.raises(TypeError) as exc:
+        f(x=1)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "y" in error_msg
+
+
+def test_validated_missing_all_keyword_only_arguments() -> None:
+    """Test missing all required keyword-only arguments."""
+
+    @validated
+    def f(*, x: int, y: int) -> int:
+        return x + y
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    # At least one of x or y should be mentioned
+    assert any(ch in error_msg for ch in ["x", "y"])
+
+
+def test_validated_missing_positional_only_argument() -> None:
+    """Test missing required positional-only argument."""
+
+    @validated
+    def f(x: int, /) -> int:
+        return x + 1
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "required" in error_msg.lower()
+
+
+def test_validated_missing_required_arg_with_optional_arg() -> None:
+    """Test missing required argument when optional arguments exist."""
+
+    @validated
+    def f(x: int, y: int = 10) -> int:
+        return x + y
+
+    # x is required, y is optional
+    with pytest.raises(TypeError) as exc:
+        f(y=20)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_before_optional() -> None:
+    """Test omitting required argument that comes before optional ones."""
+
+    @validated
+    def f(x: int, y: int = 2, z: int = 3) -> int:
+        return x + y + z
+
+    # Missing x but providing y and z
+    with pytest.raises(TypeError) as exc:
+        f(y=20, z=30)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_keyword_only_with_default() -> None:
+    """Test missing required keyword-only argument among optional ones."""
+
+    @validated
+    def f(*, x: int, y: int = 2, z: int = 3) -> int:
+        return x + y + z
+
+    with pytest.raises(TypeError) as exc:
+        f(y=20, z=30)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_undecorated_vs_decorated_missing_arg_error_type() -> None:
+    """Verify decorated and undecorated functions raise same error type for missing args."""
+
+    def undecorated(x: int) -> int:
+        return x + 1
+
+    @validated
+    def decorated(x: int) -> int:
+        return x + 1
+
+    # Both should raise TypeError
+    with pytest.raises(TypeError):
+        undecorated()  # type: ignore[call-arg]
+
+    with pytest.raises(TypeError):
+        decorated()  # type: ignore[call-arg]
+
+
+def test_validated_method_missing_required_argument() -> None:
+    """Test that missing required arguments in methods also raise TypeError."""
+
+    class C:
+        @validated
+        def method(self, x: int) -> int:
+            return x + 1
+
+    c = C()
+
+    with pytest.raises(TypeError) as exc:
+        c.method()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_async_method_missing_required_argument() -> None:
+    """Test that missing required arguments in async methods raise TypeError."""
+
+    class C:
+        @validated
+        async def amethod(self, x: int) -> int:
+            return x + 1
+
+    c = C()
+
+    with pytest.raises(TypeError) as exc:
+        asyncio.run(c.amethod())  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_with_varargs() -> None:
+    """Test missing required positional argument with *args in signature."""
+
+    @validated
+    def f(x: int, *args: int) -> int:
+        return x + sum(args)
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_with_kwargs() -> None:
+    """Test missing required positional argument with **kwargs in signature."""
+
+    @validated
+    def f(x: int, **kwargs: int) -> int:
+        return x + sum(kwargs.values())
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_positional_with_following_optional() -> None:
+    """Test missing required argument when later arguments have defaults."""
+
+    @validated
+    def f(x: int, y: int = 2, z: int = 3) -> int:
+        return x + y + z
+
+    with pytest.raises(TypeError) as exc:
+        f(b=20)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "x" in error_msg
+
+
+def test_validated_missing_required_keyword_only_primary() -> None:
+    """Test missing primary required keyword-only argument."""
+
+    @validated
+    def f(*, required: int, optional: int = 10) -> int:
+        return required + optional
+
+    with pytest.raises(TypeError) as exc:
+        f(optional=20)  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "required" in error_msg
