@@ -102,6 +102,16 @@ type MyInt = int
             [1, object()],
             True,
         ),
+        # type[X] - subclass validators
+        (type[int], [int, bool], [int(), 1, str, object()], False),
+        (type[OB], [OB], [OB(), int, object()], False),
+        (
+            type[CustomBase],
+            [CustomBase, CustomObj],
+            [CustomObj(), int, object()],
+            False,
+        ),
+        (type, [int, str, object, type], [1, "a", object()], False),
     ],
 )
 def test_type_validators(ann, goods, bads, warn):
