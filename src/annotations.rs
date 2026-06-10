@@ -55,6 +55,7 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
+    callable: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
@@ -102,6 +103,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
+            callable: typing_mod.getattr(intern!(py, "Callable"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
@@ -372,6 +374,51 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(TypeValidator::Union { members }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(&tools.types.callable) {
+            // Handle Callable[[int, str], bool] or Callable[..., ReturnType]
+            // Args format: (param_types..., return_type) or (..., return_type)
+            if args.len() < 2 {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "Callable requires at least a return type",
+                ));
+            }
+
+            let return_type = args.get_item(args.len() - 1)?;
+
+            // Check if this is Callable[..., ReturnType] format
+            let params = if args.len() == 2 {
+                let first_arg = args.get_item(0)?;
+                if first_arg.is(py.Ellipsis()) {
+                    // Callable[..., ReturnType] - store empty vec to indicate any params
+                    Vec::new()
+                } else {
+                    // Single parameter: Callable[[ParamType], ReturnType]
+                    vec![first_arg.clone()]
+                }
+            } else {
+                // Multiple parameters: Callable[[Type1, Type2, ...], ReturnType]
+                // args is (Type1, Type2, ..., ReturnType), need to extract all but last
+                let mut params_list = Vec::new();
+                for i in 0..(args.len() - 1) {
+                    params_list.push(args.get_item(i)?);
+                }
+                params_list
+            };
+
+            Ok((
+                Validator::new(
+                    TypeValidator::Callable {
+                        params: params.into_iter().map(|p| p.unbind()).collect(),
+                        return_type: return_type.unbind(),
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: false,
+                },
+            ))
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {
@@ -509,6 +556,14 @@ pub fn build_validator_from_annotation<'py>(
             typevar_bindings,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
+        Ok((
+            Validator::default(),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
+    } else if ann.is(&tools.types.callable) {
+        // Bare Callable without type parameters - accept any callable (like Any)
         Ok((
             Validator::default(),
             ValidatorBuildInfo {
