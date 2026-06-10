@@ -111,6 +111,27 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     })
 }
 
+/// Check if a TypeValidator represents a mutable built-in container (list, dict, or set).
+/// These cannot be used as item types in abstract collections.
+/// This includes both explicit List/Dict/Set validators and Typed validators where the type
+/// is one of the mutable built-in container types.
+fn is_mutable_container<'py>(tv: &TypeValidator, py: Python<'py>) -> bool {
+    match tv {
+        TypeValidator::List { .. } | TypeValidator::Dict { .. } | TypeValidator::Set { .. } => true,
+        TypeValidator::Typed { type_ } => {
+            // Check if the type is one of the mutable built-in container types
+            // by comparing against the Python type objects
+            let type_bound = type_.bind(py);
+            
+            // Check if it's the list, dict, or set type
+            py.get_type::<PyList>().is(&type_bound)
+                || py.get_type::<PyDict>().is(&type_bound)
+                || py.get_type::<PySet>().is(&type_bound)
+        }
+        _ => false,
+    }
+}
+
 /// Build a validator from a type annotation, extracting as much information as
 /// possible to optimize validation and behavior definition. The returned
 /// ValidatorBuildInfo contains information about the built validator that may
@@ -364,6 +385,14 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                 )?;
+                if is_mutable_container(&item_validator.type_validator, py) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Cannot use mutable container {} as item type for Sequence. \
+                         Mutable containers (list, dict, set) cannot be used in abstract collections \
+                         because ators cannot insert wrapped versions inside them.",
+                        item_arg.repr()?
+                    )));
+                }
                 (
                     Some(BoxedValidator::from(item_validator)),
                     item_info.requires_owner,
@@ -390,6 +419,14 @@ pub fn build_validator_from_annotation<'py>(
                     ctx_provider,
                     typevar_bindings,
                 )?;
+                if is_mutable_container(&item_validator.type_validator, py) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Cannot use mutable container {} as item type for Collection. \
+                         Mutable containers (list, dict, set) cannot be used in abstract collections \
+                         because ators cannot insert wrapped versions inside them.",
+                        item_arg.repr()?
+                    )));
+                }
                 (
                     Some(BoxedValidator::from(item_validator)),
                     item_info.requires_owner,
@@ -417,6 +454,14 @@ pub fn build_validator_from_annotation<'py>(
                         ctx_provider,
                         typevar_bindings,
                     )?;
+                    if is_mutable_container(&key_validator.type_validator, py) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Cannot use mutable container {} as key type for Mapping. \
+                             Mutable containers (list, dict, set) cannot be used in abstract collections \
+                             because ators cannot insert wrapped versions inside them.",
+                            key_arg.repr()?
+                        )));
+                    }
                     let (val_validator, val_info) = build_validator_from_annotation(
                         PyString::new(py, &format!("{name}-value")).cast()?,
                         &val_arg,
@@ -425,6 +470,14 @@ pub fn build_validator_from_annotation<'py>(
                         ctx_provider,
                         typevar_bindings,
                     )?;
+                    if is_mutable_container(&val_validator.type_validator, py) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Cannot use mutable container {} as value type for Mapping. \
+                             Mutable containers (list, dict, set) cannot be used in abstract collections \
+                             because ators cannot insert wrapped versions inside them.",
+                            val_arg.repr()?
+                        )));
+                    }
                     (
                         Some((
                             BoxedValidator::from(key_validator),
@@ -523,6 +576,14 @@ pub fn build_validator_from_annotation<'py>(
                                 ctx_provider,
                                 typevar_bindings,
                             )?;
+                            if is_mutable_container(&key_validator.type_validator, py) {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Cannot use mutable container {} as key type for Mapping. \
+                                     Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                     because ators cannot insert wrapped versions inside them.",
+                                    key_arg.repr()?
+                                )));
+                            }
                             let (val_validator, val_info) = build_validator_from_annotation(
                                 PyString::new(py, &format!("{name}-value")).cast()?,
                                 &val_arg,
@@ -531,6 +592,14 @@ pub fn build_validator_from_annotation<'py>(
                                 ctx_provider,
                                 typevar_bindings,
                             )?;
+                            if is_mutable_container(&val_validator.type_validator, py) {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Cannot use mutable container {} as value type for Mapping. \
+                                     Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                     because ators cannot insert wrapped versions inside them.",
+                                    val_arg.repr()?
+                                )));
+                            }
                             (
                                 Some((
                                     BoxedValidator::from(key_validator),
@@ -560,6 +629,14 @@ pub fn build_validator_from_annotation<'py>(
                             ctx_provider,
                             typevar_bindings,
                         )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Sequence. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
                         (Some(BoxedValidator::from(item_validator)), item_info.requires_owner)
                     } else {
                         (None, false)
@@ -583,6 +660,14 @@ pub fn build_validator_from_annotation<'py>(
                             ctx_provider,
                             typevar_bindings,
                         )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Collection. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
                         (Some(BoxedValidator::from(item_validator)), item_info.requires_owner)
                     } else {
                         (None, false)
