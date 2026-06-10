@@ -218,23 +218,9 @@ pub fn build_validator_from_annotation<'py>(
                         requires_owner: false,
                     },
                 ))
-            } else if args.is_empty() {
-                // Bare type with no args: type or type[Any]
-                // Accept any type object
-                Ok((
-                    Validator::new(
-                        TypeValidator::Subclass {
-                            type_: py.get_type::<PyAny>().unbind(),
-                        },
-                        None,
-                        None,
-                        None,
-                    ),
-                    ValidatorBuildInfo {
-                        requires_owner: false,
-                    },
-                ))
             } else {
+                // Args cannot be empty as otherwise we do not go through the
+                // generic path.
                 // Multiple type arguments not yet supported
                 Err(pyo3::exceptions::PyTypeError::new_err(
                     "Union type arguments in type[] are not yet supported",

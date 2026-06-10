@@ -560,3 +560,18 @@ def test_var_tuple_validation_preserves_unchanged_items_after_transformation():
     assert len(a.a) == 2
     assert a.a[0] == [1]
     assert a.a[1] == 2
+
+
+# ============================================================================
+# Tests for Subclass Validators (type[X] annotations)
+# ============================================================================
+
+
+def test_faulty_multiple_subscript_type_annotation():
+    """Test that faulty type annotation with multiple subscripts raises error."""
+
+    # type[int, str] should raise an error during class creation
+    with pytest.raises(TypeError):
+
+        class A(Ators):
+            a: type[int, str] = member()  # type: ignore[misc]
