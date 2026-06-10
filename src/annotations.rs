@@ -20,6 +20,7 @@ use std::ffi::CString;
 
 use crate::{
     containers::NotifyingList,
+    event::EventBuilder,
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
     utils::err_with_cause,
@@ -872,13 +873,15 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
 
     let tools = get_type_tools(py)?;
 
-    // `Member` type object used for annotation-coerce pairing checks.
+    // Type objects used for annotation dispatch.
     let member_type = py.get_type::<Member>();
+    let event_type = py.get_type::<crate::event::Event>();
 
-    let mut builders = HashMap::new();
+    let mut member_builders = HashMap::new();
+    let mut event_builders = HashMap::new();
     for item in annotations.items()?.iter() {
-        let (name, ann) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
-        // Get the origin of the type annotation
+        let (attr_key, ann) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+        // Get the origin of the type annotation — computed once, used by both branches.
         let origin = tools.get_origin.call1((&ann,))?;
 
         // Check we are not dealing with a ClassVar (parameterized ClassVar[T] or
@@ -974,11 +977,18 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
 
         // Retrieve the user provided builder, or build one with or without
         // a default value
-        let mut builder = if dct.contains(&name)? {
-            let value = dct.as_any().get_item(&name)?;
+        let mut builder = if dct.contains(&attr_key)? {
+            let value = dct.as_any().get_item(&attr_key)?;
             // Remove the builder from the dict so that we can extract builder
             // without annotations at a later stage.
-            dct.del_item(&name)?;
+            dct.del_item(&attr_key)?;
+            // Reject accidental use of an event() builder on a non-Event annotation.
+            if value.is_instance_of::<EventBuilder>() {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Attribute '{attr_name}': event() builder used as RHS for a \
+                     non-Event annotation. Use Event[T] as the annotation instead."
+                )));
+            }
             if let Ok(mb) = value.cast::<MemberBuilder>() {
                 mb.clone().extract()?
             } else {
@@ -1001,7 +1011,6 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         //
         // The `effective_ann` resolved here replaces the outer `Member[T1, T2]`
         // with its first type argument (T1) for subsequent validator inference.
-        let attr_name: String = name.extract()?;
         let has_coerce = builder.coercer().is_some();
 
         // Track whether `effective_ann` differs from the original `ann`
@@ -1052,7 +1061,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             // Analyze the annotation to configure the builder
             configure_member_builder_from_annotation(
                 &mut builder,
-                name.cast()?,
+                attr_key.cast()?,
                 &effective_ann,
                 type_containers,
                 &tools,
@@ -1064,7 +1073,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                 err_with_cause(
                     py,
                     pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Failed to configure Member {name} from annotation {ann:?}"
+                        "Failed to configure Member {attr_key} from annotation {ann:?}"
                     )),
                     err,
                 )
@@ -1095,8 +1104,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         // Set the member name
         builder.name = Some(attr_name.clone());
 
-        builders.insert(attr_name, builder);
+        member_builders.insert(attr_name, builder);
     }
 
-    Ok((builders, event_builders))
+    Ok((member_builders, event_builders))
 }

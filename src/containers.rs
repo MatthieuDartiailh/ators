@@ -18,7 +18,7 @@ use pyo3::{
 use std::cell::UnsafeCell;
 
 use crate::{
-    core::AtorsBase, observers::AtorsChange, utils::error_on_minusone, validators::Validator,
+    class::AtorsBase, observers::AtorsChange, utils::error_on_minusone, validators::Validator,
 };
 
 // ============================================================================
@@ -649,12 +649,7 @@ impl NotifyingList {
                     item: Some(nested_bv),
                 } => {
                     if let Ok(nested) = list_item.cast::<NotifyingList>() {
-                        NotifyingList::restore(
-                            nested,
-                            (*nested_bv.0).clone(),
-                            member_name,
-                            object,
-                        );
+                        NotifyingList::restore(nested, (*nested_bv.0).clone(), member_name, object);
                     }
                 }
                 TypeValidator::Set {
@@ -723,7 +718,7 @@ impl NotifyingList {
 
         // Check if parent has disabled notifications (parent always wins)
         let obj_bound = object.bind(py);
-        if !crate::core::notifications_enabled(obj_bound) {
+        if !crate::class::base::notifications_enabled(obj_bound) {
             return Ok(());
         }
 
@@ -750,7 +745,7 @@ impl NotifyingList {
         )?;
 
         // Get the observer pool and fire
-        let pool = crate::core::get_observer_pool(obj_bound);
+        let pool = crate::class::base::get_observer_pool(obj_bound);
         let errors = crate::observers::ObserverPool::fire(pool, &member_name, change.as_super())?;
 
         if !errors.is_empty() {
