@@ -1035,7 +1035,7 @@ impl NotifyingList {
             let items: Vec<_> = py_list.iter().collect();
             let indices: Vec<_> = (0..items.len()).collect();
             // Delete from the end backwards to maintain correct indices
-            for (idx, item) in indices.into_iter().zip(items.into_iter()).rev() {
+            for (idx, item) in indices.into_iter().zip(items).rev() {
                 Self::del_item_base(py_list, idx)?;
                 let operation = Operation::Removed {
                     item: item.unbind(),
