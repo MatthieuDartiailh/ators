@@ -203,6 +203,21 @@ def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
         assert "Failed to validate" in str(inner_exc)
 
 
+def test_validated_keyword_only_and_varkw_aggregate_errors_false() -> None:
+    """Test aggregate_errors=False with keyword-only and **rest (early return)."""
+
+    @validated(aggregate_errors=False)
+    def f(*, x: int, **rest: int) -> int:
+        return x + sum(rest.values())
+
+    # Test success case
+    assert f(x=1, y=2) == 3
+
+    # Test failure case: should fail fast on first error, not collect both
+    with pytest.raises(TypeError):
+        f(x="1", y="2")  # type: ignore[arg-type]
+
+
 def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
     @validated(aggregate_errors=True)
     def f(*values: int, **mapping: int) -> int:
@@ -221,6 +236,21 @@ def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
         assert "Failed to validate" in str(inner_exc)
 
 
+def test_validated_varargs_and_kwargs_aggregate_errors_false() -> None:
+    """Test aggregate_errors=False with *values and **mapping (early return)."""
+
+    @validated(aggregate_errors=False)
+    def f(*values: int, **mapping: int) -> int:
+        return sum(values) + sum(mapping.values())
+
+    # Test success case
+    assert f(1, 2, ok=3, ko=4) == 10
+
+    # Test failure case: should fail fast on first error, not collect both
+    with pytest.raises(TypeError):
+        f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
+
+
 # ============================================================================
 # Positional only arguments
 # ============================================================================
@@ -228,7 +258,7 @@ def test_validated_varargs_and_kwargs_aggregate_errors() -> None:
 
 def test_validated_positional_only_argument() -> None:
     @validated
-    def f(x: int, /, y: int) -> int:
+    def f(x: int, /, y) -> int:
         return x + y
 
     assert f(1, 2) == 3
@@ -278,6 +308,15 @@ def test_validated_positional_only_change_arg_second() -> None:
     assert f(1, [100]) == 2
 
 
+def test_validated_positional_only_change_default_arg() -> None:
+
+    @validated
+    def f(x: list[int] = [], /) -> int:
+        return len(x)
+
+    assert f() == 0
+
+
 def test_validated_positional_only_bad_default() -> None:
     """Test positional-only param with invalid default."""
 
@@ -292,6 +331,21 @@ def test_validated_positional_only_bad_default() -> None:
     assert len(exc.value.exceptions) == 1
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
+
+def test_validated_positional_only_aggregate_errors_false() -> None:
+    """Test aggregate_errors=False with multiple positional-only args (early return)."""
+
+    @validated(aggregate_errors=False)
+    def f(x: int, y: int, /) -> int:
+        return x + y
+
+    # Test success case
+    assert f(1, 2) == 3
+
+    # Test failure case: should fail fast on first error, not collect both
+    with pytest.raises(TypeError):
+        f("a", "b")  # type: ignore[arg-type]
 
 
 def test_validated_var_or_keyword_with_default() -> None:
@@ -374,6 +428,33 @@ def test_validation_positional_or_keyword_change_arg_second() -> None:
     assert f(x=2, items=[10, 20]) == 32
 
 
+def test_validated_positional_or_keyword_change_default_arg() -> None:
+
+    @validated
+    def f(x: list[int] = []) -> int:
+        return len(x)
+
+    assert f() == 0
+
+
+def test_validated_positional_or_keyword_change__followed_by_pos() -> None:
+
+    @validated
+    def f(x: list[int], y: int) -> int:
+        return len(x) + y
+
+    assert f([1, 2, 3], 1) == 4
+
+
+def test_validated_positional_or_keyword_change__followed_by_var() -> None:
+
+    @validated
+    def f(x: list[int], *y: int) -> int:
+        return len(x) + sum(y)
+
+    assert f([1, 2, 3], 1) == 4
+
+
 def test_validated_keyword_only_with_default() -> None:
     """Test keyword-only param with annotated default."""
 
@@ -425,6 +506,15 @@ def test_validated_keyword_only_change_arg_second() -> None:
     # Must pass as keyword argument
     assert f(y=1, x=[1, 2, 3]) == 4
     assert f(y=2, x=[10, 20]) == 4
+
+
+def test_validated_keyword_only_change_default_arg() -> None:
+
+    @validated
+    def f(*, x: list[int] = []) -> int:
+        return len(x)
+
+    assert f() == 0
 
 
 def test_validated_varargs_change_arg() -> None:
@@ -877,6 +967,21 @@ def test_validated_missing_positional_only_argument() -> None:
     assert "required" in error_msg.lower()
 
 
+def test_validated_missing_positional_only_argument_unvalidated() -> None:
+    """Test missing required positional-only argument."""
+
+    @validated
+    def f(x, /) -> int:
+        return x + 1
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    assert "required" in error_msg.lower()
+
+
 def test_validated_missing_required_arg_with_optional_arg() -> None:
     """Test missing required argument when optional arguments exist."""
 
@@ -936,7 +1041,7 @@ def test_validated_undecorated_vs_decorated_missing_arg_error_type() -> None:
 
     # Both should raise TypeError
     with pytest.raises(TypeError):
-        undecorated()  # type: ignore[call-arg]
+        undecorated()  # type: ignore
 
     with pytest.raises(TypeError):
         decorated()  # type: ignore[call-arg]
