@@ -298,6 +298,16 @@ def test_validated_positional_only_change_arg_and_default() -> None:
         assert isinstance(inner_exc, TypeError)
 
 
+def test_validated_positional_only_change_followed_by_unannotated() -> None:
+
+    @validated
+    def f(x: list[int], y, /) -> int:
+        return len(x) + y
+
+    assert f([1, 2, 3], 1) == 4
+    assert f([1, 2, 3], 2) == 5
+
+
 def test_validated_positional_only_change_arg_second() -> None:
 
     @validated
@@ -446,10 +456,28 @@ def test_validated_positional_or_keyword_change__followed_by_pos() -> None:
     assert f([1, 2, 3], 1) == 4
 
 
+def test_validated_positional_or_keyword_change__followed_by_unannotated_pos() -> None:
+
+    @validated
+    def f(x: list[int], y) -> int:
+        return len(x) + y
+
+    assert f([1, 2, 3], 1) == 4
+
+
 def test_validated_positional_or_keyword_change__followed_by_var() -> None:
 
     @validated
     def f(x: list[int], *y: int) -> int:
+        return len(x) + sum(y)
+
+    assert f([1, 2, 3], 1) == 4
+
+
+def test_validated_positional_or_keyword_change__followed_by_unannotated_var() -> None:
+
+    @validated
+    def f(x: list[int], *y) -> int:
         return len(x) + sum(y)
 
     assert f([1, 2, 3], 1) == 4
@@ -921,11 +949,11 @@ def test_validated_missing_multiple_required_positional_arguments() -> None:
     assert any(ch in error_msg for ch in ["y", "z"])
 
 
-def test_validated_missing_required_keyword_only_argument() -> None:
+def test_validated_missing_required_unannotated_keyword_only_argument() -> None:
     """Test missing required keyword-only argument."""
 
     @validated
-    def f(*, x: int, y: int) -> int:
+    def f(*, x: int, y) -> int:
         return x + y
 
     with pytest.raises(TypeError) as exc:
@@ -941,6 +969,22 @@ def test_validated_missing_all_keyword_only_arguments() -> None:
 
     @validated
     def f(*, x: int, y: int) -> int:
+        return x + y
+
+    with pytest.raises(TypeError) as exc:
+        f()  # type: ignore[call-arg]
+
+    error_msg = str(exc.value)
+    assert "missing" in error_msg.lower()
+    # At least one of x or y should be mentioned
+    assert any(ch in error_msg for ch in ["x", "y"])
+
+
+def test_validated_missing_all_unannotated_keyword_only_arguments() -> None:
+    """Test missing all required keyword-only arguments."""
+
+    @validated
+    def f(*, x, y) -> int:
         return x + y
 
     with pytest.raises(TypeError) as exc:
