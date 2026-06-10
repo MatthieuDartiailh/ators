@@ -14,7 +14,7 @@ use std::{cell::UnsafeCell, collections::HashMap};
 
 use crate::class::base::AtorsBase;
 
-#[pyclass(module = "ators._ators", frozen, get_all)]
+#[pyclass(module = "ators._ators", subclass, frozen, get_all)]
 #[derive(Debug)]
 pub struct AtorsChange {
     object: Py<AtorsBase>,

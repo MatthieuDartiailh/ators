@@ -14,6 +14,7 @@ use pyo3::{
 use std::cell::UnsafeCell;
 
 use crate::class::info::{ClassMutability, get_class_info};
+use crate::containers::NotifyingList;
 use crate::event::{Event, EventCustomizationTool};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
@@ -306,6 +307,18 @@ impl AtorsBase {
                 } => {
                     if let Ok(alist) = value.cast::<AtorsList>() {
                         AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
+                    }
+                }
+                TypeValidator::NotifyingList {
+                    item: Some(item_bv),
+                } => {
+                    if let Ok(alist) = value.cast::<NotifyingList>() {
+                        NotifyingList::restore(
+                            alist,
+                            (*item_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
                     }
                 }
                 TypeValidator::Set {
