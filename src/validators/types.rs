@@ -118,7 +118,7 @@ impl FromPyObject<'_, '_> for TypesTuple {
             Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
         } else if let Ok(s) = ob.cast::<PyTuple>()
             && s.len() > 0
-            && s.iter().all(|item| item.is_instance_of::<PyType>())
+            && s.iter().all(|item| item.cast::<PyType>().is_ok())
         {
             Ok(TypesTuple(s.to_owned().unbind()))
         } else {
@@ -921,8 +921,8 @@ impl TypeValidator {
             Self::Subclass { type_ } => {
                 let py = value.py();
                 let t = type_.bind(py);
-                // Check if the value is a type object
-                if !value.is_instance_of::<PyType>() {
+                // Check if the value is a type object (including metaclasses like ABCMeta)
+                if value.cast::<PyType>().is_err() {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                         "Expected a type/class object, got {} ({})",
                         value.repr()?,
@@ -930,7 +930,7 @@ impl TypeValidator {
                     )));
                 }
                 // Check if the value is a subclass of type_
-                let value_type = value.cast_exact::<PyType>()?;
+                let value_type = value.cast::<PyType>()?;
                 if value_type.is_subclass(t)? {
                     Ok(value.clone())
                 } else {
