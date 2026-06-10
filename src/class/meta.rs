@@ -586,9 +586,7 @@ pub fn create_ators_subclass<'py>(
         if let Some(DefaultBehavior::ObjectMethod { meth_name }) = mb.default_behavior()
             && !methods.contains(meth_name.bind(py))?
         {
-            return Err(make_unknown_method_error(
-                k, "default", meth_name, &methods,
-            ));
+            return Err(make_unknown_method_error(k, "default", meth_name, &methods));
         }
         if let Some(Coercer::ObjectMethod { meth_name }) = mb.coercer()
             && !methods.contains(meth_name.bind(py))?
