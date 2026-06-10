@@ -55,8 +55,9 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
-    // sequence: Bound<'py, PyAny>,
-    // mapping: Bound<'py, PyAny>,
+    abc_sequence: Bound<'py, PyAny>,
+    abc_collection: Bound<'py, PyAny>,
+    abc_mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
 }
 
@@ -73,6 +74,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
 
     let builtins_mod = py.import(intern!(py, "builtins"))?;
+    let abc_mod = py.import(intern!(py, "collections.abc"))?;
     let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
 
@@ -102,10 +104,32 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
-            // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
-            // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
+            abc_sequence: abc_mod.getattr(intern!(py, "Sequence"))?,
+            abc_collection: abc_mod.getattr(intern!(py, "Collection"))?,
+            abc_mapping: abc_mod.getattr(intern!(py, "Mapping"))?,
         },
     })
+}
+
+/// Check if a TypeValidator represents a mutable built-in container (list, dict, or set).
+/// These cannot be used as item types in abstract collections.
+/// This includes both explicit List/Dict/Set validators and Typed validators where the type
+/// is one of the mutable built-in container types.
+fn is_mutable_container<'py>(tv: &TypeValidator, py: Python<'py>) -> bool {
+    match tv {
+        TypeValidator::List { .. } | TypeValidator::Dict { .. } | TypeValidator::Set { .. } => true,
+        TypeValidator::Typed { type_ } => {
+            // Check if the type is one of the mutable built-in container types
+            // by comparing against the Python type objects
+            let type_bound = type_.bind(py);
+            
+            // Check if it's the list, dict, or set type
+            py.get_type::<PyList>().is(&type_bound)
+                || py.get_type::<PyDict>().is(&type_bound)
+                || py.get_type::<PySet>().is(&type_bound)
+        }
+        _ => false,
+    }
 }
 
 /// Build a validator from a type annotation, extracting as much information as
@@ -351,6 +375,130 @@ pub fn build_validator_from_annotation<'py>(
                 ),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(&tools.types.abc_sequence) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                if is_mutable_container(&item_validator.type_validator, py) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Cannot use mutable container {} as item type for Sequence. \
+                         Mutable containers (list, dict, set) cannot be used in abstract collections \
+                         because ators cannot insert wrapped versions inside them.",
+                        item_arg.repr()?
+                    )));
+                }
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::Sequence { item: item_val },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(&tools.types.abc_collection) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                if is_mutable_container(&item_validator.type_validator, py) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Cannot use mutable container {} as item type for Collection. \
+                         Mutable containers (list, dict, set) cannot be used in abstract collections \
+                         because ators cannot insert wrapped versions inside them.",
+                        item_arg.repr()?
+                    )));
+                }
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::Collection { item: item_val },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(&tools.types.abc_mapping) {
+            let (items_validator, requires_owner) =
+                if let Ok((key_arg, val_arg)) = args.extract() {
+                    let (key_validator, key_info) = build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-key")).cast()?,
+                        &key_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    )?;
+                    if is_mutable_container(&key_validator.type_validator, py) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Cannot use mutable container {} as key type for Mapping. \
+                             Mutable containers (list, dict, set) cannot be used in abstract collections \
+                             because ators cannot insert wrapped versions inside them.",
+                            key_arg.repr()?
+                        )));
+                    }
+                    let (val_validator, val_info) = build_validator_from_annotation(
+                        PyString::new(py, &format!("{name}-value")).cast()?,
+                        &val_arg,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    )?;
+                    if is_mutable_container(&val_validator.type_validator, py) {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Cannot use mutable container {} as value type for Mapping. \
+                             Mutable containers (list, dict, set) cannot be used in abstract collections \
+                             because ators cannot insert wrapped versions inside them.",
+                            val_arg.repr()?
+                        )));
+                    }
+                    (
+                        Some((
+                            BoxedValidator::from(key_validator),
+                            BoxedValidator::from(val_validator),
+                        )),
+                        key_info.requires_owner || val_info.requires_owner,
+                    )
+                } else {
+                    (None, false)
+                };
+            Ok((
+                Validator::new(
+                    TypeValidator::Mapping {
+                        items: items_validator,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant
@@ -415,30 +563,148 @@ pub fn build_validator_from_annotation<'py>(
                     ValidatorBuildInfo { requires_owner },
                 ))
             } else {
-                let origin_name = origin.get_type().name()?;
-                PyErr::warn(
-                    py,
-                    &py.get_type::<pyo3::exceptions::PyUserWarning>(),
-                    CString::new(format!(
-                        "No specific validation strategy recorded for generic type {origin_name}.\
-                         Falling back to Typed validator."
-                    ))?
-                    .as_c_str(),
-                    0,
-                )?;
-                Ok((
-                    Validator::new(
-                        TypeValidator::Typed {
-                            type_: origin.cast_into::<PyType>()?.unbind(),
-                        },
-                        None,
-                        None,
-                        None,
-                    ),
-                    ValidatorBuildInfo {
-                        requires_owner: false,
-                    },
-                ))
+                // Block G: check if the origin is a subclass of a handled ABC.
+                let origin_type = origin.cast::<PyType>()?;
+                if origin_type.is_subclass(&tools.types.abc_mapping)? {
+                    let (items_validator, requires_owner) =
+                        if let Ok((key_arg, val_arg)) = args.extract() {
+                            let (key_validator, key_info) = build_validator_from_annotation(
+                                PyString::new(py, &format!("{name}-key")).cast()?,
+                                &key_arg,
+                                type_containers,
+                                tools,
+                                ctx_provider,
+                                typevar_bindings,
+                            )?;
+                            if is_mutable_container(&key_validator.type_validator, py) {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Cannot use mutable container {} as key type for Mapping. \
+                                     Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                     because ators cannot insert wrapped versions inside them.",
+                                    key_arg.repr()?
+                                )));
+                            }
+                            let (val_validator, val_info) = build_validator_from_annotation(
+                                PyString::new(py, &format!("{name}-value")).cast()?,
+                                &val_arg,
+                                type_containers,
+                                tools,
+                                ctx_provider,
+                                typevar_bindings,
+                            )?;
+                            if is_mutable_container(&val_validator.type_validator, py) {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Cannot use mutable container {} as value type for Mapping. \
+                                     Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                     because ators cannot insert wrapped versions inside them.",
+                                    val_arg.repr()?
+                                )));
+                            }
+                            (
+                                Some((
+                                    BoxedValidator::from(key_validator),
+                                    BoxedValidator::from(val_validator),
+                                )),
+                                key_info.requires_owner || val_info.requires_owner,
+                            )
+                        } else {
+                            (None, false)
+                        };
+                    Ok((
+                        Validator::new(
+                            TypeValidator::Mapping { items: items_validator },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner },
+                    ))
+                } else if origin_type.is_subclass(&tools.types.abc_sequence)? {
+                    let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                        let (item_validator, item_info) = build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-item")).cast()?,
+                            &item_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                            typevar_bindings,
+                        )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Sequence. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
+                        (Some(BoxedValidator::from(item_validator)), item_info.requires_owner)
+                    } else {
+                        (None, false)
+                    };
+                    Ok((
+                        Validator::new(
+                            TypeValidator::Sequence { item: item_val },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner },
+                    ))
+                } else if origin_type.is_subclass(&tools.types.abc_collection)? {
+                    let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                        let (item_validator, item_info) = build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-item")).cast()?,
+                            &item_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                            typevar_bindings,
+                        )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Collection. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
+                        (Some(BoxedValidator::from(item_validator)), item_info.requires_owner)
+                    } else {
+                        (None, false)
+                    };
+                    Ok((
+                        Validator::new(
+                            TypeValidator::Collection { item: item_val },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner },
+                    ))
+                } else {
+                    // No ABC subclass recognized: warn and fall back to Typed.
+                    let origin_name = origin.get_type().name()?;
+                    PyErr::warn(
+                        py,
+                        &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                        CString::new(format!(
+                            "No specific validation strategy recorded for generic type                              {origin_name}. Falling back to Typed validator."
+                        ))?
+                        .as_c_str(),
+                        0,
+                    )?;
+                    Ok((
+                        Validator::new(
+                            TypeValidator::Typed {
+                                type_: origin_type.clone().unbind(),
+                            },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner: false },
+                    ))
+                }
             }
         }
     } else if ann.is_instance(&tools.types.type_var)? {
@@ -564,8 +830,46 @@ pub fn build_validator_from_annotation<'py>(
                 requires_owner: false,
             },
         ))
+    } else if ann.is(&tools.types.abc_sequence) {
+        Ok((
+            Validator::new(TypeValidator::Sequence { item: None }, None, None, None),
+            ValidatorBuildInfo { requires_owner: false },
+        ))
+    } else if ann.is(&tools.types.abc_collection) {
+        Ok((
+            Validator::new(TypeValidator::Collection { item: None }, None, None, None),
+            ValidatorBuildInfo { requires_owner: false },
+        ))
+    } else if ann.is(&tools.types.abc_mapping) {
+        Ok((
+            Validator::new(TypeValidator::Mapping { items: None }, None, None, None),
+            ValidatorBuildInfo { requires_owner: false },
+        ))
     } else {
         let ty = ann.clone().cast_into::<PyType>()?;
+        // Block G: detect subclasses of handled ABCs before falling back to Typed.
+        let is_concrete_container = ty.is(py.get_type::<PyList>())
+            || ty.is(py.get_type::<PySet>())
+            || ty.is(py.get_type::<PyDict>())
+            || ty.is(py.get_type::<PyFrozenSet>());
+        if !is_concrete_container {
+            if ty.is_subclass(&tools.types.abc_mapping)? {
+                return Ok((
+                    Validator::new(TypeValidator::Mapping { items: None }, None, None, None),
+                    ValidatorBuildInfo { requires_owner: false },
+                ));
+            } else if ty.is_subclass(&tools.types.abc_sequence)? {
+                return Ok((
+                    Validator::new(TypeValidator::Sequence { item: None }, None, None, None),
+                    ValidatorBuildInfo { requires_owner: false },
+                ));
+            } else if ty.is_subclass(&tools.types.abc_collection)? {
+                return Ok((
+                    Validator::new(TypeValidator::Collection { item: None }, None, None, None),
+                    ValidatorBuildInfo { requires_owner: false },
+                ));
+            }
+        }
         Ok((
             Validator::new(
                 TypeValidator::Typed { type_: ty.unbind() },
@@ -573,9 +877,7 @@ pub fn build_validator_from_annotation<'py>(
                 None,
                 None,
             ),
-            ValidatorBuildInfo {
-                requires_owner: false,
-            },
+            ValidatorBuildInfo { requires_owner: false },
         ))
     }
 }
