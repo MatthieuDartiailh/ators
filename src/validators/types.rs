@@ -213,17 +213,7 @@ impl LateResolvedValidator {
                 resolved = evaluate_forward_ref.call1((forward_ref,));
             }
 
-            let is_observable = self
-                .owner
-                .as_ref()
-                .and_then(|owner| {
-                    owner
-                        .bind(py)
-                        .getattr(crate::core::ATORS_OBSERVABLE)
-                        .ok()
-                        .and_then(|v| v.extract::<bool>().ok())
-                })
-                .unwrap_or(false);
+            let is_observable = false; // TODO: implement checking ATORS_OBSERVABLE attribute
 
             Py::new(
                 py,
