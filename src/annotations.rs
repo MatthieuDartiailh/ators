@@ -11,8 +11,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
-        PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString,
+        PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -47,6 +47,7 @@ impl ValidatorBuildInfo {
 pub(crate) struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
+    class_var: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
     union_: Bound<'py, PyAny>,
     type_var: Bound<'py, PyAny>,
@@ -67,6 +68,37 @@ pub(crate) struct TypeTools<'py> {
     call_evaluate_function: Bound<'py, PyAny>,
     forwardref_format: Bound<'py, PyAny>,
     types: PyTypes<'py>,
+}
+
+impl<'py> TypeTools<'py> {
+    pub(crate) fn get_origin(&self, ann: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.get_origin.call1((ann,))
+    }
+}
+
+pub fn build_function_argument_validator<'py>(
+    name: &Bound<'py, PyString>,
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+) -> PyResult<Validator> {
+    let class_var = &tools.types.class_var;
+    let origin = tools.get_origin(ann)?;
+    if origin.is(class_var) || ann.is(class_var) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': ClassVar is not allowed in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    if origin.is(name.py().get_type::<Member>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
+    Ok(validator)
 }
 
 pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyErr> {
@@ -94,6 +126,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
         types: PyTypes {
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
+            class_var: typing_mod.getattr(intern!(py, "ClassVar"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
             union_: types_mod.getattr(intern!(py, "UnionType"))?,
             type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
