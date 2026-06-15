@@ -548,9 +548,11 @@ impl Member {
         // found during attribute lookup, and explicit `Member.__get__/__set__/__delete__`
         // calls go through the slot wrapper which rejects non-`Member` receivers
         // before invoking this function. That makes the unchecked cast sound here.
-        ::std::convert::TryFrom::try_from(unsafe {
-            ::pyo3::impl_::pymethods::BoundRef::ref_from_ptr(py, slf).cast_unchecked::<Member>()
-        })
+        unsafe {
+            ::std::convert::TryFrom::try_from(
+                ::pyo3::Bound::ref_from_ptr(py, slf).cast_unchecked::<Member>(),
+            )
+        }
         .map_err(::std::convert::Into::into)
     }
 }
