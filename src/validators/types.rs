@@ -919,8 +919,7 @@ impl TypeValidator {
                 }
             }
             Self::Subclass { type_ } => {
-                let py = value.py();
-                let t = type_.bind(py);
+                let t = type_.bind(value.py());
                 // Check if the value is a type object (including metaclasses like ABCMeta)
                 if value.cast::<PyType>().is_err() {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
