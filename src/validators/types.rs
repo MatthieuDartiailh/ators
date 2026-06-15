@@ -118,7 +118,7 @@ impl FromPyObject<'_, '_> for TypesTuple {
             Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
         } else if let Ok(s) = ob.cast::<PyTuple>()
             && s.len() > 0
-            && s.iter().all(|item| item.cast::<PyType>().is_ok())
+            && s.iter().all(|item| item.is_instance_of::<PyType>())
         {
             Ok(TypesTuple(s.to_owned().unbind()))
         } else {
