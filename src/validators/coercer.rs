@@ -221,6 +221,11 @@ impl Coercer {
                     Ok(coerced.as_any().clone())
                 },
                 TypeValidator::Typed { type_ } => type_.bind(py).call1((value,)),
+                TypeValidator::Subclass { type_: _ } => Err(
+                    pyo3::exceptions::PyTypeError::new_err(
+                        "Cannot coerce a value to a subclass validator - expected a type object"
+                    )
+                ),
                 TypeValidator::Instance { types } => types.coerce(value),
                 TypeValidator::ForwardValidator { late_validator } => self.coerce_value(
                     is_init_coercion,

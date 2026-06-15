@@ -232,6 +232,33 @@ pub fn build_validator_from_annotation<'py>(
                     requires_owner: false,
                 },
             ))
+        } else if origin.is(py.get_type::<PyType>()) {
+            // Handle type[X] annotations for subclass validation
+            if args.len() == 1 {
+                // Single type argument: type[X]
+                let arg = args.get_item(0)?;
+                let arg_type = arg.clone().cast_into::<PyType>()?;
+                Ok((
+                    Validator::new(
+                        TypeValidator::Subclass {
+                            type_: arg_type.unbind(),
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ))
+            } else {
+                // Args cannot be empty as otherwise we do not go through the
+                // generic path.
+                // Multiple type arguments not yet supported
+                Err(pyo3::exceptions::PyTypeError::new_err(
+                    "Union type arguments in type[] are not yet supported",
+                ))
+            }
         } else if origin.is(py.get_type::<PyTuple>()) {
             if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
                 // VarTuple
@@ -593,6 +620,22 @@ pub fn build_validator_from_annotation<'py>(
     } else if ann.is(py.get_type::<PyTuple>()) {
         Ok((
             Validator::new(TypeValidator::VarTuple { item: None }, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
+    } else if ann.is(py.get_type::<PyType>()) {
+        // Bare type annotation (not type[X]) - accept any type object (subclass of object)
+        let object_type = tools.types.object.clone().cast_into::<PyType>()?;
+        Ok((
+            Validator::new(
+                TypeValidator::Subclass {
+                    type_: object_type.unbind(),
+                },
+                None,
+                None,
+                None,
+            ),
             ValidatorBuildInfo {
                 requires_owner: false,
             },

@@ -311,6 +311,8 @@ pub enum TypeValidator {
     VarTuple { item: Option<BoxedValidator> },
     #[pyo3(constructor = (type_))]
     Typed { type_: Py<PyType> },
+    #[pyo3(constructor = (type_))]
+    Subclass { type_: Py<PyType> },
     #[pyo3(constructor = (types))]
     // TypesTuple is build from a Python object and we do not need to expose
     // it directly since it is not needed to build an Instance variant from the
@@ -916,6 +918,28 @@ impl TypeValidator {
                     validation_error!(t.repr()?, name, object, value)
                 }
             }
+            Self::Subclass { type_ } => {
+                let t = type_.bind(value.py());
+                // Check if the value is a type object (including metaclasses like ABCMeta)
+                if value.cast::<PyType>().is_err() {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Expected a type/class object, got {} ({})",
+                        value.repr()?,
+                        value.get_type().name()?
+                    )));
+                }
+                // Check if the value is a subclass of type_
+                let value_type = value.cast::<PyType>()?;
+                if value_type.is_subclass(t)? {
+                    Ok(value.clone())
+                } else {
+                    Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Expected a subclass of {}, got {}",
+                        t.repr()?,
+                        value.repr()?
+                    )))
+                }
+            }
             Self::Instance { types } => {
                 let t = types.0.bind(value.py());
                 if value.is_instance(t)? {
@@ -1059,6 +1083,12 @@ impl TypeValidator {
                     mm.borrow().get_type_mutability(type_.bind(py))
                 })
             }
+            Self::Subclass { type_: _ } => {
+                // Type objects (classes) are generally considered mutable as they
+                // can be modified after creation. Subclass validators accept type
+                // objects, so we return Undecidable.
+                Mutability::Undecidable
+            }
             Self::Instance { types } => {
                 types
                     .iter(py)
@@ -1145,6 +1175,9 @@ impl Clone for TypeValidator {
                 items: items.clone(),
             },
             Self::Typed { type_ } => Self::Typed {
+                type_: type_.clone_ref(py),
+            },
+            Self::Subclass { type_ } => Self::Subclass {
                 type_: type_.clone_ref(py),
             },
             Self::Instance { types } => Self::Instance {
