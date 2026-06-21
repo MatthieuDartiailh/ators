@@ -55,7 +55,7 @@ def _simple_validated() -> Callable[[], None]:
 
 def _simple_manual() -> Callable[[], None]:
     def f(x: int) -> int:
-        if not isinstance(x, int) or isinstance(x, bool):
+        if not isinstance(x, int):
             raise TypeError(f"expected int, got {type(x).__name__}")
         return x + 1
 
@@ -93,9 +93,9 @@ def _positional_only_validated() -> Callable[[], None]:
 
 def _positional_only_manual() -> Callable[[], None]:
     def f(x: int, /, y: int) -> int:
-        if not isinstance(x, int) or isinstance(x, bool):
+        if not isinstance(x, int):
             raise TypeError(f"expected int for x, got {type(x).__name__}")
-        if not isinstance(y, int) or isinstance(y, bool):
+        if not isinstance(y, int):
             raise TypeError(f"expected int for y, got {type(y).__name__}")
         return x + y
 
@@ -133,9 +133,9 @@ def _keyword_only_validated() -> Callable[[], None]:
 
 def _keyword_only_manual() -> Callable[[], None]:
     def f(x: int, *, y: int) -> int:
-        if not isinstance(x, int) or isinstance(x, bool):
+        if not isinstance(x, int):
             raise TypeError(f"expected int for x, got {type(x).__name__}")
-        if not isinstance(y, int) or isinstance(y, bool):
+        if not isinstance(y, int):
             raise TypeError(f"expected int for y, got {type(y).__name__}")
         return x + y
 
@@ -174,7 +174,7 @@ def _varargs_validated() -> Callable[[], None]:
 def _varargs_manual() -> Callable[[], None]:
     def f(*values: int) -> int:
         for v in values:
-            if not isinstance(v, int) or isinstance(v, bool):
+            if not isinstance(v, int):
                 raise TypeError(f"expected int, got {type(v).__name__}")
         return sum(values)
 
@@ -213,7 +213,7 @@ def _kwargs_validated() -> Callable[[], None]:
 def _kwargs_manual() -> Callable[[], None]:
     def f(**mapping: int) -> int:
         for v in mapping.values():
-            if not isinstance(v, int) or isinstance(v, bool):
+            if not isinstance(v, int):
                 raise TypeError(f"expected int, got {type(v).__name__}")
         return sum(mapping.values())
 
@@ -251,11 +251,11 @@ def _mixed_validated() -> Callable[[], None]:
 
 def _mixed_manual() -> Callable[[], None]:
     def f(x: int, /, y: int, *, z: int) -> int:
-        if not isinstance(x, int) or isinstance(x, bool):
+        if not isinstance(x, int):
             raise TypeError(f"expected int for x, got {type(x).__name__}")
-        if not isinstance(y, int) or isinstance(y, bool):
+        if not isinstance(y, int):
             raise TypeError(f"expected int for y, got {type(y).__name__}")
-        if not isinstance(z, int) or isinstance(z, bool):
+        if not isinstance(z, int):
             raise TypeError(f"expected int for z, got {type(z).__name__}")
         return x + y + z
 

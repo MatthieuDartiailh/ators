@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Callable validation decorators implemented in Rust.
 use crate::{
-    annotations::{build_function_argument_validator, get_type_tools},
+    annotations::{build_function_argument_or_return_validator, get_type_tools},
     utils::err_with_cause,
     validators::Validator,
 };
@@ -30,7 +30,7 @@ enum ParamKind {
 }
 
 #[derive(Debug)]
-struct ParamPlan {
+struct ParamValidator {
     name: String,
     py_name: Py<PyString>,
     kind: ParamKind,
@@ -39,21 +39,15 @@ struct ParamPlan {
 }
 
 #[derive(Debug)]
-struct SyncValidationPlan {
-    params: Vec<ParamPlan>,
-    return_validator: Option<Validator>,
-}
-
-#[derive(Debug)]
-struct AsyncValidationPlan {
-    params: Vec<ParamPlan>,
-    return_validator: Option<Validator>,
-}
-
-#[derive(Debug)]
-enum CompiledCallablePlan {
-    Sync(SyncValidationPlan),
-    Async(AsyncValidationPlan),
+enum CompileResult {
+    Sync {
+        params: Vec<ParamValidator>,
+        return_validator: Option<Validator>,
+    },
+    Async {
+        params: Vec<ParamValidator>,
+        return_validator: Option<Validator>,
+    },
 }
 
 fn ensure_positional_storage<'py, 'a>(
@@ -95,7 +89,7 @@ fn validate_call_arguments<'py>(
     name: &str,
     args: &Bound<'py, PyTuple>,
     kwargs: Option<&Bound<'py, PyDict>>,
-    params: &[ParamPlan],
+    params: &[ParamValidator],
     aggregate_errors: bool,
 ) -> PyResult<(Bound<'py, PyTuple>, Option<Bound<'py, PyDict>>)> {
     let mut issues: Option<Vec<(String, pyo3::PyErr)>> = None;
@@ -404,7 +398,8 @@ fn get_method_type<'py>(py: Python<'py>) -> &'py Bound<'py, PyAny> {
 pub struct SyncCallableValidator {
     target_name: String,
     target: Py<PyAny>,
-    plan: SyncValidationPlan,
+    params: Vec<ParamValidator>,
+    return_validator: Option<Validator>,
     aggregate_errors: bool,
 }
 
@@ -423,13 +418,13 @@ impl SyncCallableValidator {
             self.target_name.as_str(),
             args,
             kwargs,
-            &self.plan.params,
+            &self.params,
             self.aggregate_errors,
         )?;
 
         let result = target.call(&call_args, call_kwargs.as_ref())?;
 
-        if let Some(return_validator) = &self.plan.return_validator {
+        if let Some(return_validator) = &self.return_validator {
             // Validate the return value. If validation fails, wrap the error with
             // context explaining that it's the return value that didn't match expectations.
             return return_validator
@@ -458,7 +453,12 @@ impl SyncCallableValidator {
 }
 
 impl SyncCallableValidator {
-    fn new(target: Bound<'_, PyAny>, plan: SyncValidationPlan, aggregate_errors: bool) -> Self {
+    fn new(
+        target: Bound<'_, PyAny>,
+        params: Vec<ParamValidator>,
+        return_validator: Option<Validator>,
+        aggregate_errors: bool,
+    ) -> Self {
         let target_name = target
             .getattr(intern!(target.py(), "__name__"))
             .ok()
@@ -468,7 +468,8 @@ impl SyncCallableValidator {
         Self {
             target_name,
             target: target.unbind(),
-            plan,
+            params,
+            return_validator,
             aggregate_errors,
         }
     }
@@ -595,7 +596,8 @@ impl AsyncValidatedResult {
 pub struct AsyncCallableValidator {
     target: Py<PyAny>,
     target_name: String,
-    plan: AsyncValidationPlan,
+    params: Vec<ParamValidator>,
+    return_validator: Option<Validator>,
     aggregate_errors: bool,
 }
 
@@ -614,13 +616,13 @@ impl AsyncCallableValidator {
             self.target_name.as_str(),
             args,
             kwargs,
-            &self.plan.params,
+            &self.params,
             self.aggregate_errors,
         )?;
 
         let result = target.call(&call_args, call_kwargs.as_ref())?;
 
-        if let Some(return_validator) = &self.plan.return_validator {
+        if let Some(return_validator) = &self.return_validator {
             return Ok(Bound::new(
                 py,
                 AsyncValidatedResult {
@@ -647,7 +649,12 @@ impl AsyncCallableValidator {
 }
 
 impl AsyncCallableValidator {
-    fn new(target: Bound<'_, PyAny>, plan: AsyncValidationPlan, aggregate_errors: bool) -> Self {
+    fn new(
+        target: Bound<'_, PyAny>,
+        params: Vec<ParamValidator>,
+        return_validator: Option<Validator>,
+        aggregate_errors: bool,
+    ) -> Self {
         let target_name = target
             .getattr(intern!(target.py(), "__name__"))
             .ok()
@@ -657,7 +664,8 @@ impl AsyncCallableValidator {
         Self {
             target: target.unbind(),
             target_name,
-            plan,
+            params,
+            return_validator,
             aggregate_errors,
         }
     }
@@ -667,7 +675,7 @@ fn compile_plan<'py>(
     py: Python<'py>,
     target: &Bound<'py, PyAny>,
     validate_return: bool,
-) -> PyResult<CompiledCallablePlan> {
+) -> PyResult<CompileResult> {
     let inspect = py.import("inspect")?;
     let typing = py.import("typing")?;
     let tools = get_type_tools(py)?;
@@ -711,7 +719,7 @@ fn compile_plan<'py>(
         let validator = if annotation.is(&empty_ann) {
             None
         } else {
-            Some(build_function_argument_validator(
+            Some(build_function_argument_or_return_validator(
                 &name_obj,
                 &annotation,
                 &tools,
@@ -741,7 +749,7 @@ fn compile_plan<'py>(
             }
         };
 
-        params.push(ParamPlan {
+        params.push(ParamValidator {
             name: name.clone(),
             py_name: name_obj.clone().unbind(),
             kind,
@@ -759,7 +767,7 @@ fn compile_plan<'py>(
             None
         } else {
             let return_name = PyString::new(py, "return");
-            Some(build_function_argument_validator(
+            Some(build_function_argument_or_return_validator(
                 &return_name,
                 &return_annotation,
                 &tools,
@@ -775,15 +783,15 @@ fn compile_plan<'py>(
         .extract()?;
 
     if is_async {
-        Ok(CompiledCallablePlan::Async(AsyncValidationPlan {
+        Ok(CompileResult::Async {
             params,
             return_validator,
-        }))
+        })
     } else {
-        Ok(CompiledCallablePlan::Sync(SyncValidationPlan {
+        Ok(CompileResult::Sync {
             params,
             return_validator,
-        }))
+        })
     }
 }
 
@@ -834,14 +842,20 @@ fn decorate_target<'py>(
     }
 
     let wrapped = match compile_plan(py, target, validate_return)? {
-        CompiledCallablePlan::Sync(plan) => Bound::new(
+        CompileResult::Sync {
+            params,
+            return_validator,
+        } => Bound::new(
             py,
-            SyncCallableValidator::new(target.clone(), plan, aggregate_errors),
+            SyncCallableValidator::new(target.clone(), params, return_validator, aggregate_errors),
         )?
         .into_any(),
-        CompiledCallablePlan::Async(plan) => Bound::new(
+        CompileResult::Async {
+            params,
+            return_validator,
+        } => Bound::new(
             py,
-            AsyncCallableValidator::new(target.clone(), plan, aggregate_errors),
+            AsyncCallableValidator::new(target.clone(), params, return_validator, aggregate_errors),
         )?
         .into_any(),
     };

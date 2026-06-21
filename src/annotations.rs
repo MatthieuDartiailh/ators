@@ -70,37 +70,6 @@ pub(crate) struct TypeTools<'py> {
     types: PyTypes<'py>,
 }
 
-impl<'py> TypeTools<'py> {
-    pub(crate) fn get_origin(&self, ann: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        self.get_origin.call1((ann,))
-    }
-}
-
-pub fn build_function_argument_validator<'py>(
-    name: &Bound<'py, PyString>,
-    ann: &Bound<'py, PyAny>,
-    tools: &TypeTools<'py>,
-) -> PyResult<Validator> {
-    let class_var = &tools.types.class_var;
-    let origin = tools.get_origin(ann)?;
-    if origin.is(class_var) || ann.is(class_var) {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Invalid annotation for '{}': ClassVar is not allowed in function annotations.",
-            name.to_cow()?
-        )));
-    }
-
-    if origin.is(name.py().get_type::<Member>()) {
-        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
-            name.to_cow()?
-        )));
-    }
-
-    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
-    Ok(validator)
-}
-
 pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyErr> {
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
 
@@ -654,6 +623,31 @@ pub fn build_validator_from_annotation<'py>(
             },
         ))
     }
+}
+
+pub fn build_function_argument_or_return_validator<'py>(
+    name: &Bound<'py, PyString>,
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+) -> PyResult<Validator> {
+    let class_var = &tools.types.class_var;
+    let origin = tools.get_origin.call1((ann,))?;
+    if origin.is(class_var) || ann.is(class_var) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': ClassVar is not allowed in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    if origin.is(name.py().get_type::<Member>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
+    Ok(validator)
 }
 
 fn configure_member_builder_from_annotation<'py>(
