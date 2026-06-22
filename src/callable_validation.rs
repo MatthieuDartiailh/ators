@@ -103,6 +103,9 @@ fn validate_call_arguments<'py>(
         match param.kind {
             ParamKind::PositionalOnly => {
                 let from_positional = pos_index < args.len();
+
+                // Retrieve parameter value from positional arguments or use
+                // default value if it exists.
                 let current = if from_positional {
                     let value = args.get_item(pos_index)?;
                     pos_index += 1;
@@ -115,17 +118,33 @@ fn validate_call_arguments<'py>(
                 } else {
                     None
                 };
+
+                // If the parameter is required and not provided, current will
+                // be None. In that case, we skip validation
                 let Some(current) = current else {
                     continue;
                 };
+
+                // Validate the parameter if a validator is present. If validation fails,
+                // wrap the error with context about which parameter failed.
                 if let Some(validator) = &param.validator {
                     match validator.validate(Some(&param.name), None, &current) {
                         Ok(v) => {
                             let validated = v.into_any();
                             if from_positional {
                                 let arg_index = pos_index - 1;
+
+                                // If we've already started storing validated
+                                // positional arguments, we need to store the
+                                // validated value there to ensure the final order
+                                //is correct.
                                 if let Some(ref mut out) = out_positional {
                                     out.push(validated.unbind());
+                                // If we haven't started storing validated positional
+                                // arguments and the validated value is different from
+                                // the original, we need to start storing validated
+                                // positional arguments to ensure the final order
+                                // is correct.
                                 } else if !validated.is(&args.get_item(arg_index)?) {
                                     ensure_positional_storage(
                                         args,
@@ -134,8 +153,15 @@ fn validate_call_arguments<'py>(
                                     )?
                                     .push(validated.unbind());
                                 }
+                            // If the value is actually the default (i.e. not provided
+                            // positionally) and we've already started storing validated
+                            // positional arguments, we need to store the default in the
+                            // correct position to ensure the final order is correct.
                             } else if let Some(ref mut out) = out_positional {
                                 out.push(validated.unbind());
+                            // If the validated value is different from the original,
+                            // we need to start storing validated positional arguments
+                            // to ensure the final order is correct.
                             } else if !validated.is(&current) {
                                 let out = ensure_positional_storage(
                                     args,
@@ -144,6 +170,9 @@ fn validate_call_arguments<'py>(
                                 )?;
                                 out.append(&mut pending_positional_defaults);
                                 out.push(validated.unbind());
+                            // If we got a default value that was validated, we need to
+                            // keep track of it in case we need to insert it before
+                            // validated values from later parameters.
                             } else {
                                 pending_positional_defaults.push(validated.unbind());
                             }
@@ -159,6 +188,9 @@ fn validate_call_arguments<'py>(
                             issues.as_mut().unwrap().push((param.name.clone(), err));
                         }
                     }
+                // If there is no validator but we started storing validated positional
+                // arguments, we need to store the original value to ensure the final
+                // order is correct.
                 } else if let Some(ref mut out) = out_positional {
                     out.push(current.unbind());
                 }
@@ -166,6 +198,8 @@ fn validate_call_arguments<'py>(
             ParamKind::PositionalOrKeyword => {
                 let mut from_positional = false;
                 let mut from_keyword = false;
+                // Retrieve parameter value from positional arguments, keyword
+                // arguments, or use default value if it exists.
                 let current = if pos_index < args.len() {
                     let value = args.get_item(pos_index)?;
                     pos_index += 1;
@@ -188,17 +222,29 @@ fn validate_call_arguments<'py>(
                         .as_ref()
                         .map(|default| default.bind(py).clone())
                 };
+
+                // If the parameter is required and not provided, current will be None.
+                // In that case, we skip validation.
                 let Some(current) = current else {
                     continue;
                 };
+
                 if let Some(validator) = &param.validator {
                     match validator.validate(Some(&param.name), None, &current) {
                         Ok(v) => {
+                            // If the value came from a keyword argument and the
+                            // validated value is different from the original, we need
+                            // to store the validated value in the keyword arguments to
+                            //ensure the final state is correct.
                             if from_keyword {
                                 if !v.is(&current) {
                                     ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
                                         .set_item(param.py_name.bind(py), &v)?;
                                 }
+                            // If the value came from a positional argument and we've
+                            // already started storing validated positional arguments,
+                            //we need to store the validated value there to ensure the
+                            // final order is correct.
                             } else if from_positional {
                                 let arg_index = pos_index - 1;
                                 if let Some(ref mut out) = out_positional {
@@ -211,6 +257,9 @@ fn validate_call_arguments<'py>(
                                     )?
                                     .push(v.into_any().unbind());
                                 }
+                            // If the validated value is different from the original and
+                            // was passed by keyword, we need to start storing validated
+                            // keyword arguments.
                             } else if !v.is(&current) {
                                 ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
                                     .set_item(param.py_name.bind(py), &v)?;
@@ -226,11 +275,16 @@ fn validate_call_arguments<'py>(
                             issues.as_mut().unwrap().push((param.name.clone(), err));
                         }
                     }
+                // If there is no validator but we started storing validated positional
+                // arguments, we need to store the original value to ensure the final
+                // order is correct.
                 } else if from_positional && let Some(ref mut out) = out_positional {
                     out.push(current.unbind());
                 }
             }
             ParamKind::KeywordOnly => {
+                // Retrieve parameter value from keyword arguments or use default value
+                // if it exists.
                 let current = if let Some(kw) = kwargs {
                     if let Some(value) = kw.get_item(param.py_name.bind(py))? {
                         consumed_kwargs.insert(param.name.clone());
@@ -251,12 +305,21 @@ fn validate_call_arguments<'py>(
                 } else {
                     None
                 };
+
+                // If the parameter is required and not provided, current will be None.
+                //In that case, we skip validation.
                 let Some(current) = current else {
                     continue;
                 };
+
+                // Validate the parameter if a validator is present. If validation fails,
+                // we handle the error based on the aggregate_errors flag.
                 if let Some(validator) = &param.validator {
                     match validator.validate(Some(&param.name), None, &current) {
                         Ok(v) => {
+                            // If the validated value is different from the original,
+                            // we need to store the validated value in the keyword
+                            // arguments to ensure the final state is correct.
                             if !v.is(&current) {
                                 ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
                                     .set_item(param.py_name.bind(py), &v)?;
@@ -284,8 +347,16 @@ fn validate_call_arguments<'py>(
                     if let Some(validator) = &param.validator {
                         match validator.validate(Some(&param.name), None, &item) {
                             Ok(v) => {
+                                // If we've already started storing validated positional
+                                // arguments, we need to store the validated value there
+                                // to ensure the final order is correct.
                                 if let Some(ref mut out) = out_positional {
                                     out.push(v.into_any().unbind());
+                                // If we haven't started storing validated positional
+                                // arguments and the validated value is different from
+                                // the original, we need to start storing validated
+                                // positional arguments to ensure the final order is
+                                // correct.
                                 } else if !v.is(&args.get_item(arg_index)?) {
                                     ensure_positional_storage(
                                         args,
@@ -308,6 +379,9 @@ fn validate_call_arguments<'py>(
                                     .push((format!("{}[{idx}]", param.name), err));
                             }
                         }
+                    // If there is no validator but we started storing validated
+                    // positional arguments, we need to store the original value to
+                    // ensure the final order is correct.
                     } else if let Some(ref mut out) = out_positional {
                         out.push(item.unbind());
                     }
@@ -322,12 +396,20 @@ fn validate_call_arguments<'py>(
                     let key_str = key
                         .extract::<String>()
                         .unwrap_or_else(|_| "<non-string-key>".to_string());
+
+                    // Skip any keyword arguments that were consumed by previous
+                    // parameters.
                     if consumed_kwargs.contains(&key_str) {
                         continue;
                     }
+
                     if let Some(validator) = &param.validator {
                         match validator.validate(Some(&param.name), None, &item) {
                             Ok(v) => {
+                                // If the validated value is different from the
+                                // original, we need to store the validated value in the
+                                // keyword arguments to ensure the final state is
+                                // correct.
                                 if !v.is(&item) {
                                     ensure_kwargs_storage(py, kwargs, &mut out_kwargs)?
                                         .set_item(key, v)?;
@@ -376,11 +458,13 @@ fn validate_call_arguments<'py>(
     } else {
         args.clone()
     };
+
     let final_kwargs = if let Some(out) = out_kwargs {
         Some(out)
     } else {
         kwargs.cloned()
     };
+
     Ok((final_args, final_kwargs))
 }
 
