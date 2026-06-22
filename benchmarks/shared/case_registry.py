@@ -10,6 +10,9 @@
 from collections.abc import Callable, Sequence
 
 from benchmarks.shared.assignment_registry import select_assignment_cases
+from benchmarks.shared.callable_validation_registry import (
+    select_callable_validation_cases,
+)
 from benchmarks.shared.container_registry import select_container_cases
 from benchmarks.shared.descriptor_registry import select_descriptor_cases
 from benchmarks.shared.init_registry import select_init_cases
@@ -53,6 +56,11 @@ def _registered_selectors() -> list[CaseSelector]:
             implementations=implementations,
         ),
         lambda families, groups, implementations: select_validation_cases(
+            families=families,
+            groups=groups,
+            implementations=implementations,
+        ),
+        lambda families, groups, implementations: select_callable_validation_cases(
             families=families,
             groups=groups,
             implementations=implementations,

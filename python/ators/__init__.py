@@ -39,6 +39,7 @@ from ._ators import (
     observe,
     register_type_mutability_info,
     unobserve,
+    validated,
 )
 from ._meta import AtorsMeta as _Meta
 
@@ -124,4 +125,5 @@ __all__ = [
     "observe",
     "register_type_mutability_info",
     "unobserve",
+    "validated",
 ]
