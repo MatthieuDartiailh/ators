@@ -13,4 +13,5 @@ pub mod set;
 
 pub use dict::*;
 pub use list::*;
+pub use notifying_list::{ListChange, NotifyingList, NotifyingListBatchNotificationsContext};
 pub use set::*;
