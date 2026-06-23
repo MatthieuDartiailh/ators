@@ -513,6 +513,7 @@ impl SyncCallableValidator {
             // context explaining that it's the return value that didn't match expectations.
             return return_validator
                 .validate(Some("return"), None, &result)
+                .map(|_| result)
                 .map_err(|original_err| {
                     let wrapped_msg = format!("Failed to validate return value: {}", original_err);
                     let wrapped_err =
@@ -592,7 +593,7 @@ fn handle_iterator_error<'py>(
         // context explaining that it's the return value that didn't match expectations.
         return match return_validator.validate(Some("return"), None, &value) {
             Ok(validated) => Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
-                validated.unbind(),
+                value,
             ))),
             Err(original_err) => {
                 let wrapped_msg = format!("Failed to validate return value: {}", original_err);
