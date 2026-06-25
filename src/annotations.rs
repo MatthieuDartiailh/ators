@@ -56,9 +56,10 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
+    collections_defaultdict: Bound<'py, PyAny>,
+    typing_defaultdict: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
-    // FIXME defaultdict
 }
 
 /// Tools to manipulate and extract information from type annotations.
@@ -74,6 +75,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
 
     let builtins_mod = py.import(intern!(py, "builtins"))?;
+    let collections_mod = py.import(intern!(py, "collections"))?;
     let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
 
@@ -104,6 +106,8 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
+            collections_defaultdict: collections_mod.getattr(intern!(py, "defaultdict"))?,
+            typing_defaultdict: typing_mod.getattr(intern!(py, "DefaultDict"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
@@ -380,6 +384,46 @@ pub fn build_validator_from_annotation<'py>(
                 ),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(&tools.types.collections_defaultdict)
+            || origin.is(&tools.types.typing_defaultdict)
+        {
+            let Ok((key_arg, val_arg)) = args.extract() else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "The member {name} annotation uses bare defaultdict. Use defaultdict[K, V]."
+                )));
+            };
+            let (key_validator, key_info) = build_validator_from_annotation(
+                PyString::new(py, &format!("{name}-key")).cast()?,
+                &key_arg,
+                type_containers,
+                tools,
+                ctx_provider,
+                typevar_bindings,
+            )?;
+            let (val_validator, val_info) = build_validator_from_annotation(
+                PyString::new(py, &format!("{name}-value")).cast()?,
+                &val_arg,
+                type_containers,
+                tools,
+                ctx_provider,
+                typevar_bindings,
+            )?;
+            Ok((
+                Validator::new(
+                    TypeValidator::DefaultDict {
+                        items: (
+                            BoxedValidator::from(key_validator),
+                            BoxedValidator::from(val_validator),
+                        ),
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: key_info.requires_owner || val_info.requires_owner,
+                },
+            ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
             // merge Typed/Instance together if relevant
@@ -470,6 +514,12 @@ pub fn build_validator_from_annotation<'py>(
                 ))
             }
         }
+    } else if ann.is(&tools.types.collections_defaultdict)
+        || ann.is(&tools.types.typing_defaultdict)
+    {
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "The member {name} annotation uses bare defaultdict. Use defaultdict[K, V]."
+        )))
     } else if ann.is_instance(&tools.types.type_var)? {
         if let Some(bindings) = typevar_bindings
             && let Some(bound_ann) = bindings.get_item(&ann)?
