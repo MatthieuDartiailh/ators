@@ -592,9 +592,13 @@ fn handle_iterator_error<'py>(
         // Validate the return value. If validation fails, wrap the error with
         // context explaining that it's the return value that didn't match expectations.
         return match return_validator.validate(Some("return"), None, &value) {
-            Ok(validated) => Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
-                value,
-            ))),
+            Ok(_validated) => {
+                // Convert to Py for Send + Sync compliance
+                let py_value = value.unbind();
+                Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
+                    py_value,
+                )))
+            },
             Err(original_err) => {
                 let wrapped_msg = format!("Failed to validate return value: {}", original_err);
                 let wrapped_err = pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(wrapped_msg);

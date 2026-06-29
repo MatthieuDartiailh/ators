@@ -272,24 +272,21 @@ def test_validated_positional_only_argument() -> None:
 
 
 def test_validated_positional_only_change_arg_and_default() -> None:
-    """Test list[int] validation in positional-only parameter."""
+    """Test list[int] validation in positional-only parameter with CheckOnly mode."""
 
     @validated
     def f(items: list[int], x: int = 1, /) -> int:
         ln = len(items) + x
-        with pytest.raises(TypeError) as exc:
-            items.append("invalid")  # type: ignore
-
-        assert "int" in str(exc.value)
-
+        # With CheckOnly mode, items is a plain list, not validated on mutations
+        items.append("invalid")  # This is allowed, no wrapper enforces validation
         return ln
 
-    # Test success cases
+    # Test success cases - input validation is enforced
     assert f([1, 2, 3]) == 4
     assert f([]) == 1
     assert f([], 2) == 2
 
-    # Test failure case
+    # Test failure case - invalid input is caught during validation
     with pytest.raises(ExceptionGroup) as exc:
         f([1, "2", 3])  # type: ignore[list-item]
 
@@ -389,20 +386,16 @@ def test_validated_var_or_keyword_bad_default() -> None:
 
 
 def test_validation_positional_or_keyword_change_arg() -> None:
-    """Test list[int] validation in positional-or-keyword parameter."""
+    """Test list[int] validation in positional-or-keyword parameter with CheckOnly mode."""
 
     @validated
     def f(items: list[int], x: int = 1) -> int:
         s = sum(items) + x
-
-        with pytest.raises(TypeError) as exc:
-            items.append("invalid")  # type: ignore
-
-        assert "int" in str(exc.value)
-
+        # With CheckOnly mode, items is a plain list, not validated on mutations
+        items.append("invalid")  # This is allowed, no wrapper enforces validation
         return s
 
-    # Test success cases
+    # Test success cases - input validation is enforced
     assert f([1, 2, 3]) == 7
     assert f(items=[10, 20]) == 31
     assert f([1, 2, 3], 2) == 8
@@ -1185,3 +1178,165 @@ def test_validated_missing_required_keyword_only_primary() -> None:
     error_msg = str(exc.value)
     assert "missing" in error_msg.lower()
     assert "required" in error_msg
+
+
+def test_validated_list_mutation() -> None:
+    """Test that input list can be mutated within @validated function."""
+
+    @validated
+    def append_to_list(items: list[int]) -> list[int]:
+        items.append(999)
+        items.extend([888, 777])
+        return items
+
+    original_list = [1, 2, 3]
+    result = append_to_list(original_list)
+
+    # Verify mutations are visible and result is the same object
+    assert result is original_list
+    assert original_list == [1, 2, 3, 999, 888, 777]
+
+
+def test_validated_list_mutation_with_assignment() -> None:
+    """Test list mutation with index assignment within @validated function."""
+
+    @validated
+    def modify_list(items: list[int]) -> list[int]:
+        items[0] = 100
+        items[1] = 200
+        return items
+
+    original_list = [1, 2, 3]
+    result = modify_list(original_list)
+
+    assert result is original_list
+    assert original_list == [100, 200, 3]
+
+
+def test_validated_set_mutation() -> None:
+    """Test that input set can be mutated within @validated function."""
+
+    @validated
+    def add_to_set(items: set[int]) -> set[int]:
+        items.add(999)
+        items.update([888, 777])
+        return items
+
+    original_set = {1, 2, 3}
+    result = add_to_set(original_set)
+
+    # Verify mutations are visible and result is the same object
+    assert result is original_set
+    assert original_set == {1, 2, 3, 999, 888, 777}
+
+
+def test_validated_set_mutation_removal() -> None:
+    """Test set mutation with removal within @validated function."""
+
+    @validated
+    def modify_set(items: set[int]) -> set[int]:
+        items.discard(1)
+        items.pop()  # Remove one element
+        items.add(999)
+        return items
+
+    original_set = {1, 2, 3}
+    result = modify_set(original_set)
+
+    assert result is original_set
+    assert 1 not in original_set
+    assert 999 in original_set
+
+
+def test_validated_frozenset_no_mutation() -> None:
+    """Test that frozenset is returned as-is and cannot be mutated (immutable)."""
+
+    @validated
+    def process_frozenset(items: frozenset[int]) -> frozenset[int]:
+        # frozenset is immutable, so we can only return it
+        return items
+
+    original_frozenset = frozenset({1, 2, 3})
+    result = process_frozenset(original_frozenset)
+
+    # frozenset is immutable, so it should be the same object
+    assert result is original_frozenset
+    assert result == frozenset({1, 2, 3})
+
+
+def test_validated_dict_mutation() -> None:
+    """Test that input dict can be mutated within @validated function."""
+
+    @validated
+    def modify_dict(data: dict[str, int]) -> dict[str, int]:
+        data["new_key"] = 999
+        data.update({"another": 888})
+        data["existing"] = 100  # Modify existing
+        return data
+
+    original_dict = {"existing": 1, "key": 2}
+    result = modify_dict(original_dict)
+
+    # Verify mutations are visible and result is the same object
+    assert result is original_dict
+    assert original_dict == {"existing": 100, "key": 2, "new_key": 999, "another": 888}
+
+
+def test_validated_dict_mutation_removal() -> None:
+    """Test dict mutation with key removal within @validated function."""
+
+    @validated
+    def modify_dict_removal(data: dict[str, int]) -> dict[str, int]:
+        data.pop("to_remove")
+        del data["also_remove"]
+        data["added"] = 999
+        return data
+
+    original_dict = {"to_remove": 1, "also_remove": 2, "keep": 3}
+    result = modify_dict_removal(original_dict)
+
+    assert result is original_dict
+    assert "to_remove" not in original_dict
+    assert "also_remove" not in original_dict
+    assert original_dict == {"keep": 3, "added": 999}
+
+
+def test_validated_list_mutation_validation_error() -> None:
+    """Test that list validation still occurs even though container is mutable."""
+
+    @validated
+    def append_invalid(items: list[int]) -> list[int]:
+        items.append(999)  # Valid append
+        return items
+
+    original_list = [1, 2, 3]
+    result = append_invalid(original_list)
+    assert result == [1, 2, 3, 999]
+
+    # Now test with invalid input
+    invalid_list = [1, "invalid", 3]  # type: ignore
+
+    with pytest.raises(ExceptionGroup) as exc:
+        append_invalid(invalid_list)
+
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+
+
+def test_validated_nested_container_mutation() -> None:
+    """Test mutation of nested container structure within @validated function."""
+
+    @validated
+    def modify_nested(data: dict[str, list[int]]) -> dict[str, list[int]]:
+        # Mutate nested list
+        data["numbers"].append(999)
+        # Add new entry
+        data["new"] = [888]
+        return data
+
+    original_dict = {"numbers": [1, 2, 3]}
+    result = modify_nested(original_dict)
+
+    assert result is original_dict
+    assert original_dict["numbers"] == [1, 2, 3, 999]
+    assert original_dict["new"] == [888]

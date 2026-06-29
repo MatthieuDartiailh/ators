@@ -233,6 +233,7 @@ impl LateResolvedValidator {
                     &get_type_tools(py)?,
                     None,
                     self.typevar_bindings.as_ref().map(|tb| tb.bind(py)),
+                    ValidationMode::CheckAndWrap,
                 )?
                 .0
                 .type_validator,
@@ -285,6 +286,21 @@ impl Clone for LateResolvedValidator {
     }
 }
 
+/// Determines how container validators handle their results.
+/// CheckOnly: Validate item types only, return the original container if all items pass.
+/// CheckAndWrap: Validate item types and wrap the result in an Ators container type.
+#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ValidationMode {
+    /// Type-check items only; return original container if validation passes.
+    /// Guarantees that all nested validators have preserve_value() = true.
+    CheckOnly = 0,
+    /// Type-check items and wrap result in Ators container class.
+    /// Current behavior for member validators.
+    CheckAndWrap = 1,
+}
+
 /// Type validation struct managing type validation
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
@@ -329,15 +345,25 @@ pub enum TypeValidator {
     ForwardValidator {
         late_validator: LateResolvedValidator,
     },
-    #[pyo3(constructor = (item))]
-    FrozenSet { item: Option<BoxedValidator> },
-    #[pyo3(constructor = (item))]
-    Set { item: Option<BoxedValidator> },
-    #[pyo3(constructor = (item))]
-    List { item: Option<BoxedValidator> },
-    #[pyo3(constructor = (items))]
+    #[pyo3(constructor = (item, validation_mode))]
+    FrozenSet {
+        item: Option<BoxedValidator>,
+        validation_mode: ValidationMode,
+    },
+    #[pyo3(constructor = (item, validation_mode))]
+    Set {
+        item: Option<BoxedValidator>,
+        validation_mode: ValidationMode,
+    },
+    #[pyo3(constructor = (item, validation_mode))]
+    List {
+        item: Option<BoxedValidator>,
+        validation_mode: ValidationMode,
+    },
+    #[pyo3(constructor = (items, validation_mode))]
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
+        validation_mode: ValidationMode,
     },
     // Sequence,
     // List,
@@ -372,6 +398,24 @@ macro_rules! validation_error {
 }
 
 impl TypeValidator {
+    /// Returns true if this validator preserves the input value unmodified.
+    /// Returns false if the validator can modify the value (e.g., containers with CheckAndWrap mode).
+    pub fn preserve_value(&self, coercer_present: bool) -> bool {
+        if coercer_present {
+            // If a Coercer is present, value will be modified
+            return false;
+        }
+        match self {
+            // Containers with CheckAndWrap mode always modify (wrap)
+            Self::List { validation_mode, .. }
+            | Self::Set { validation_mode, .. }
+            | Self::FrozenSet { validation_mode, .. }
+            | Self::Dict { validation_mode, .. } => *validation_mode == ValidationMode::CheckOnly,
+            // All other validators don't modify the value
+            _ => true,
+        }
+    }
+
     pub(crate) fn with_owner(&self, py: Python<'_>, owner: &Bound<'_, PyAny>) -> Self {
         match self {
             Self::Tuple { items } => Self::Tuple {
@@ -395,28 +439,32 @@ impl TypeValidator {
             Self::ForwardValidator { late_validator } => Self::ForwardValidator {
                 late_validator: late_validator.with_owner(py, owner),
             },
-            Self::FrozenSet { item } => Self::FrozenSet {
+            Self::FrozenSet { item, validation_mode } => Self::FrozenSet {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+                validation_mode: *validation_mode,
             },
-            Self::Set { item } => Self::Set {
+            Self::Set { item, validation_mode } => Self::Set {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+                validation_mode: *validation_mode,
             },
-            Self::List { item } => Self::List {
+            Self::List { item, validation_mode } => Self::List {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+                validation_mode: *validation_mode,
             },
-            Self::Dict { items } => Self::Dict {
+            Self::Dict { items, validation_mode } => Self::Dict {
                 items: items.as_ref().map(|(k, v)| {
                     (
                         BoxedValidator::from(k.with_owner(py, owner)),
                         BoxedValidator::from(v.with_owner(py, owner)),
                     )
                 }),
+                validation_mode: *validation_mode,
             },
             _ => self.clone(),
         }
@@ -627,73 +675,123 @@ impl TypeValidator {
                     validation_error!("tuple", name, object, value)
                 }
             }
-            Self::FrozenSet { item: Some(item) } => {
+            Self::FrozenSet {
+                item: Some(item),
+                validation_mode,
+            } => {
                 if let Ok(fset) = value.cast_exact::<pyo3::types::PyFrozenSet>() {
-                    let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
-                    for (index, titem) in fset.iter().enumerate() {
-                        match item.validate(name, object, &titem) {
-                            Ok(v) => {
-                                if !v.is(&titem) {
-                                    match &mut validated_items {
-                                        Some(vec) => vec.push(v),
-                                        None => {
-                                            let mut vec = Vec::with_capacity(fset.len());
-                                            for i in 0..index {
-                                                vec.push(
-                                                    fset.get_item(i).expect(
-                                                        "All indexes are known to be valid.",
-                                                    ),
-                                                );
-                                            }
-                                            vec.push(v);
-                                            validated_items = Some(vec);
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, validate items and return original frozenset if all pass
+                            for (index, titem) in fset.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(_) => {
+                                        // Item passed validation, continue
+                                    }
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(crate::utils::err_with_cause(
+                                                value.py(),
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(crate::utils::err_with_cause(
+                                                value.py(),
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
                                         }
                                     }
                                 }
                             }
-                            Err(cause) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(crate::utils::err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {} for the member {} of {}.",
-                                            index,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        cause,
-                                    ));
-                                } else {
-                                    return Err(crate::utils::err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {index}.",
-                                        )),
-                                        cause,
-                                    ));
+                            // All items passed validation, return original frozenset
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, validate items and rebuild if any changed
+                            let mut validated_items: Option<Vec<Bound<'_, PyAny>>> = None;
+                            for (index, titem) in fset.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(v) => {
+                                        if !v.is(&titem) {
+                                            match &mut validated_items {
+                                                Some(vec) => vec.push(v),
+                                                None => {
+                                                    let mut vec = Vec::with_capacity(fset.len());
+                                                    for i in 0..index {
+                                                        vec.push(
+                                                            fset.get_item(i).expect(
+                                                                "All indexes are known to be valid.",
+                                                            ),
+                                                        );
+                                                    }
+                                                    vec.push(v);
+                                                    validated_items = Some(vec);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(crate::utils::err_with_cause(
+                                                value.py(),
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(crate::utils::err_with_cause(
+                                                value.py(),
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
+                                        }
+                                    }
                                 }
                             }
+                            Ok(if let Some(vi) = validated_items {
+                                pyo3::types::PyFrozenSet::new(value.py(), vi)?.into_any()
+                            } else {
+                                value.clone()
+                            })
                         }
                     }
-                    Ok(if let Some(vi) = validated_items {
-                        pyo3::types::PyFrozenSet::new(value.py(), vi)?.into_any()
-                    } else {
-                        value.clone()
-                    })
                 } else {
                     validation_error!("frozenset", name, object, value)
                 }
             }
-            Self::FrozenSet { item: None } => {
+            Self::FrozenSet {
+                item: None,
+                validation_mode: _,
+            } => {
                 if value.cast_exact::<pyo3::types::PyFrozenSet>().is_ok() {
                     Ok(value.clone())
                 } else {
                     validation_error!("frozenset", name, object, value)
                 }
             }
-            Self::Set { item: Some(item) } => {
+            Self::Set {
+                item: Some(item),
+                validation_mode,
+            } => {
                 if let Ok(ators_set) = value.cast::<crate::containers::AtorsSet>()
                     && ators_set.get().matches_assignment_context(name, object)
                 {
@@ -703,58 +801,111 @@ impl TypeValidator {
                 }
                 if let Ok(set) = value.cast::<pyo3::types::PySet>() {
                     let py = value.py();
-                    // Build the output container directly without an intermediate Vec.
-                    // If validation fails the partially-built container is abandoned.
-                    let aset = crate::containers::AtorsSet::new_empty(
-                        py,
-                        (*item.0).clone(),
-                        name,
-                        object.map(|m| m.clone().unbind()),
-                    )?;
-                    let set_bound = aset.cast::<PySet>()?;
-                    for (index, titem) in set.iter().enumerate() {
-                        match item.validate(name, object, &titem) {
-                            Ok(v) => set_bound.add(&v)?,
-                            Err(cause) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {} for the member {} of {}.",
-                                            index,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        cause,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {index}.",
-                                        )),
-                                        cause,
-                                    ));
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, validate items and return original set if all pass
+                            for (index, titem) in set.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(_) => {
+                                        // Item passed validation, continue
+                                    }
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
+                                        }
+                                    }
                                 }
                             }
+                            // All items passed validation, return original set
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, validate items and wrap in AtorsSet
+                            let aset = crate::containers::AtorsSet::new_empty(
+                                py,
+                                (*item.0).clone(),
+                                name,
+                                object.map(|m| m.clone().unbind()),
+                            )?;
+                            let set_bound = aset.cast::<PySet>()?;
+                            for (index, titem) in set.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(v) => set_bound.add(&v)?,
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(aset.into_any())
                         }
                     }
-                    Ok(aset.into_any())
                 } else {
                     validation_error!("set", name, object, value)
                 }
             }
-            Self::Set { item: None } => {
+            Self::Set {
+                item: None,
+                validation_mode,
+            } => {
                 if let Ok(v) = value.cast::<pyo3::types::PySet>() {
-                    // Preserve the copy on assignment semantic
-                    PySet::new(v.py(), v.iter()).map(|s| s.into_any())
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, just validate it's a set and return it
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, create a copy
+                            PySet::new(v.py(), v.iter()).map(|s| s.into_any())
+                        }
+                    }
                 } else {
                     validation_error!("set", name, object, value)
                 }
             }
-            Self::List { item: Some(item) } => {
+            Self::List {
+                item: Some(item),
+                validation_mode,
+            } => {
                 if let Ok(ators_list) = value.cast::<crate::containers::AtorsList>()
                     && ators_list.get().matches_assignment_context(name, object)
                 {
@@ -764,59 +915,110 @@ impl TypeValidator {
                 }
                 if let Ok(list) = value.cast::<pyo3::types::PyList>() {
                     let py = value.py();
-                    // Build the output container directly without an intermediate Vec.
-                    // If validation fails the partially-built container is abandoned.
-                    let alist = crate::containers::AtorsList::new_empty(
-                        py,
-                        (*item.0).clone(),
-                        name,
-                        object.map(|m| m.clone().unbind()),
-                    )?;
-                    let list_bound = alist.cast::<PyList>()?;
-                    for (index, titem) in list.iter().enumerate() {
-                        match item.validate(name, object, &titem) {
-                            Ok(v) => list_bound.append(&v)?,
-                            Err(cause) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {} for the member {} of {}.",
-                                            index,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        cause,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate item {index}.",
-                                        )),
-                                        cause,
-                                    ));
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, validate items and return original list if all pass
+                            for (index, titem) in list.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(_) => {
+                                        // Item passed validation, continue
+                                    }
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
+                                        }
+                                    }
                                 }
                             }
+                            // All items passed validation, return original list
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, validate items and wrap in AtorsList
+                            let alist = crate::containers::AtorsList::new_empty(
+                                py,
+                                (*item.0).clone(),
+                                name,
+                                object.map(|m| m.clone().unbind()),
+                            )?;
+                            let list_bound = alist.cast::<PyList>()?;
+                            for (index, titem) in list.iter().enumerate() {
+                                match item.validate(name, object, &titem) {
+                                    Ok(v) => list_bound.append(&v)?,
+                                    Err(cause) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {} for the member {} of {}.",
+                                                    index,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                cause,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate item {index}.",
+                                                )),
+                                                cause,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(alist.into_any())
                         }
                     }
-                    Ok(alist.into_any())
                 } else {
                     validation_error!("list", name, object, value)
                 }
             }
-            Self::List { item: None } => {
+            Self::List {
+                item: None,
+                validation_mode,
+            } => {
                 if let Ok(v) = value.cast::<pyo3::types::PyList>() {
-                    // Preserve the copy on assignment semantic
-                    PyList::new(v.py(), v.iter()).map(|l| l.into_any())
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, just validate it's a list and return it
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, create a copy
+                            PyList::new(v.py(), v.iter()).map(|l| l.into_any())
+                        }
+                    }
                 } else {
                     validation_error!("list", name, object, value)
                 }
             }
             Self::Dict {
                 items: Some((key_v, val_v)),
+                validation_mode,
             } => {
                 if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDict>()
                     && ators_dict.get().matches_assignment_context(name, object)
@@ -827,85 +1029,166 @@ impl TypeValidator {
                 }
                 if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
                     let py = value.py();
-                    // Build the output container directly without an intermediate Vec.
-                    // If validation fails the partially-built container is abandoned.
-                    let adict = crate::containers::AtorsDict::new_empty(
-                        py,
-                        (*key_v.0).clone(),
-                        (*val_v.0).clone(),
-                        name,
-                        object.map(|m| m.clone().unbind()),
-                    )?;
-                    let dict_bound = adict.cast::<PyDict>()?;
-                    for (tk, tv) in dict.iter() {
-                        match (
-                            key_v.validate(name, object, &tk),
-                            val_v.validate(name, object, &tv),
-                        ) {
-                            (Ok(k), Ok(v)) => dict_bound.set_item(&k, &v)?,
-                            (Err(err), _) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate key '{}' for the member {} of {}.",
-                                            tk.repr()?,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        err,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate key '{}'.",
-                                            tk.repr()?,
-                                        )),
-                                        err,
-                                    ));
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, validate keys and values and return original dict if all pass
+                            for (tk, tv) in dict.iter() {
+                                match (
+                                    key_v.validate(name, object, &tk),
+                                    val_v.validate(name, object, &tv),
+                                ) {
+                                    (Ok(_), Ok(_)) => {
+                                        // Both passed validation, continue
+                                    }
+                                    (Err(err), _) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate key '{}' for the member {} of {}.",
+                                                    tk.repr()?,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                err,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate key '{}'.",
+                                                    tk.repr()?,
+                                                )),
+                                                err,
+                                            ));
+                                        }
+                                    }
+                                    (Ok(_), Err(err)) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                                    tv.repr()?,
+                                                    tk.repr()?,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                err,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate value '{}' with key '{}'.",
+                                                    tv.repr()?,
+                                                    tk.repr()?,
+                                                )),
+                                                err,
+                                            ));
+                                        }
+                                    }
                                 }
                             }
-                            (Ok(_), Err(err)) => {
-                                if let Some(m) = name
-                                    && let Some(o) = object
-                                {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
-                                            tv.repr()?,
-                                            tk.repr()?,
-                                            m,
-                                            o.repr()?
-                                        )),
-                                        err,
-                                    ));
-                                } else {
-                                    return Err(err_with_cause(
-                                        value.py(),
-                                        pyo3::exceptions::PyTypeError::new_err(format!(
-                                            "Failed to validate value '{}' with key '{}'.",
-                                            tk.repr()?,
-                                            tv.repr()?
-                                        )),
-                                        err,
-                                    ));
+                            // All keys and values passed validation, return original dict
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, validate keys/values and wrap in AtorsDict
+                            let adict = crate::containers::AtorsDict::new_empty(
+                                py,
+                                (*key_v.0).clone(),
+                                (*val_v.0).clone(),
+                                name,
+                                object.map(|m| m.clone().unbind()),
+                            )?;
+                            let dict_bound = adict.cast::<PyDict>()?;
+                            for (tk, tv) in dict.iter() {
+                                match (
+                                    key_v.validate(name, object, &tk),
+                                    val_v.validate(name, object, &tv),
+                                ) {
+                                    (Ok(k), Ok(v)) => dict_bound.set_item(&k, &v)?,
+                                    (Err(err), _) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate key '{}' for the member {} of {}.",
+                                                    tk.repr()?,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                err,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate key '{}'.",
+                                                    tk.repr()?,
+                                                )),
+                                                err,
+                                            ));
+                                        }
+                                    }
+                                    (Ok(_), Err(err)) => {
+                                        if let Some(m) = name
+                                            && let Some(o) = object
+                                        {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                                    tv.repr()?,
+                                                    tk.repr()?,
+                                                    m,
+                                                    o.repr()?
+                                                )),
+                                                err,
+                                            ));
+                                        } else {
+                                            return Err(err_with_cause(
+                                                py,
+                                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                                    "Failed to validate value '{}' with key '{}'.",
+                                                    tv.repr()?,
+                                                    tk.repr()?,
+                                                )),
+                                                err,
+                                            ));
+                                        }
+                                    }
                                 }
                             }
+                            Ok(adict.into_any())
                         }
                     }
-                    Ok(adict.into_any())
                 } else {
                     validation_error!("dict", name, object, value)
                 }
             }
-            Self::Dict { items: None } => {
+            Self::Dict {
+                items: None,
+                validation_mode,
+            } => {
                 if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
-                    // Preserve the copy on assignment semantic
-                    PyDict::from_sequence(v).map(|d| d.into_any())
+                    match validation_mode {
+                        ValidationMode::CheckOnly => {
+                            // For CheckOnly mode, just validate it's a dict and return it
+                            Ok(value.clone())
+                        }
+                        ValidationMode::CheckAndWrap => {
+                            // For CheckAndWrap mode, create a copy
+                            PyDict::from_sequence(v).map(|d| d.into_any())
+                        }
+                    }
                 } else {
                     validation_error!("dict", name, object, value)
                 }
@@ -1047,7 +1330,7 @@ impl TypeValidator {
             | Self::Bytes {}
             | Self::Str {} => Mutability::Immutable,
             Self::Any {} => Mutability::Undecidable,
-            Self::FrozenSet { item } | Self::VarTuple { item } => match item {
+            Self::FrozenSet { item, validation_mode: _ } | Self::VarTuple { item } => match item {
                 None => Mutability::Immutable,
                 Some(iv) => iv.type_validator.is_type_mutable(py),
             },
@@ -1074,9 +1357,9 @@ impl TypeValidator {
                         }
                     })
             }
-            Self::Set { item: _ } => Mutability::Mutable,
-            Self::List { item: _ } => Mutability::Mutable,
-            Self::Dict { items: _ } => Mutability::Mutable,
+            Self::Set { item: _, validation_mode: _ } => Mutability::Mutable,
+            Self::List { item: _, validation_mode: _ } => Mutability::Mutable,
+            Self::Dict { items: _, validation_mode: _ } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1168,11 +1451,12 @@ impl Clone for TypeValidator {
                 items: items.to_vec(),
             },
             Self::VarTuple { item } => Self::VarTuple { item: item.clone() },
-            Self::FrozenSet { item } => Self::FrozenSet { item: item.clone() },
-            Self::Set { item } => Self::Set { item: item.clone() },
-            Self::List { item } => Self::List { item: item.clone() },
-            Self::Dict { items } => Self::Dict {
+            Self::FrozenSet { item, validation_mode } => Self::FrozenSet { item: item.clone(), validation_mode: *validation_mode },
+            Self::Set { item, validation_mode } => Self::Set { item: item.clone(), validation_mode: *validation_mode },
+            Self::List { item, validation_mode } => Self::List { item: item.clone(), validation_mode: *validation_mode },
+            Self::Dict { items, validation_mode } => Self::Dict {
                 items: items.clone(),
+                validation_mode: *validation_mode,
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),
