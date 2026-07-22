@@ -258,7 +258,20 @@ def test_subclass_no_userwarning_emitted():
 
 
 class MySeq[T](Sequence):
-    """Minimal concrete Sequence subclass."""
+    """Minimal concrete Sequence subclass with bare Sequence (no type param)."""
+
+    def __init__(self, data: list[T]):
+        self._data = list(data)
+
+    def __getitem__(self, index):
+        return self._data[index]
+
+    def __len__(self):
+        return len(self._data)
+
+
+class MySeqParametrized[T](Sequence[T]):
+    """Sequence subclass with explicit type parameter binding."""
 
     def __init__(self, data: list[T]):
         self._data = list(data)
@@ -271,7 +284,7 @@ class MySeq[T](Sequence):
 
 
 class MyMap[K, V](Mapping):
-    """Minimal concrete Mapping subclass."""
+    """Minimal concrete Mapping subclass with bare Mapping (no type params)."""
 
     def __init__(self, data: dict[K, V]):
         self._data = dict(data)
@@ -286,49 +299,123 @@ class MyMap[K, V](Mapping):
         return len(self._data)
 
 
-class GenericSubclassHolder(Ators):
-    # MySeq[int] — origin is MySeq which is a Sequence subclass
+class MyMapParametrized[K, V](Mapping[K, V]):
+    """Mapping subclass with explicit type parameter binding."""
+
+    def __init__(self, data: dict[K, V]):
+        self._data = dict(data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+
+class BareSubclassHolder(Ators):
+    # MySeq[int] but base is bare Sequence → no item validation
     seq: MySeq[int] = member()
-    # MyMap[str, int] — origin is MyMap which is a Mapping subclass
+    # MyMap[str, int] but base is bare Mapping → no key/value validation
     mp: MyMap[str, int] = member()
 
 
+class ParametrizedSubclassHolder(Ators):
+    # MySeqParametrized[int] with Sequence[T] binding → item validation enabled
+    seq: MySeqParametrized[int] = member()
+    # MyMapParametrized[str, int] with Mapping[K, V] binding → key/value validation enabled
+    mp: MyMapParametrized[str, int] = member()
+
+
 @pytest.fixture()
-def generic_subclass_holder():
-    return GenericSubclassHolder(
+def bare_subclass_holder():
+    return BareSubclassHolder(
         seq=MySeq([1, 2, 3]),
         mp=MyMap({"a": 1}),
     )
 
 
-def test_generic_subclass_sequence_ok(generic_subclass_holder):
-    generic_subclass_holder.seq = MySeq([4, 5, 6])
+@pytest.fixture()
+def parametrized_subclass_holder():
+    return ParametrizedSubclassHolder(
+        seq=MySeqParametrized([1, 2, 3]),
+        mp=MyMapParametrized({"a": 1}),
+    )
 
 
-def test_generic_subclass_sequence_item_validation(generic_subclass_holder):
-    with pytest.raises(TypeError):
-        generic_subclass_holder.seq = MySeq([1, "x"])
+def test_bare_subclass_sequence_ok(bare_subclass_holder):
+    """Bare Sequence subclass accepts any items (no validation)."""
+    bare_subclass_holder.seq = MySeq([4, 5, 6])
 
 
-def test_generic_subclass_mapping_ok(generic_subclass_holder):
-    generic_subclass_holder.mp = MyMap({"b": 2})
+def test_bare_subclass_sequence_no_validation(bare_subclass_holder):
+    """Bare Sequence subclass does not validate items."""
+    # Should NOT raise - bare Sequence has no item validation
+    bare_subclass_holder.seq = MySeq([1, "x", 3.14])
 
 
-def test_generic_subclass_mapping_item_validation_key(generic_subclass_holder):
-    with pytest.raises(TypeError):
-        generic_subclass_holder.mp = MyMap({1: 2})  # key should be str
+def test_bare_subclass_mapping_ok(bare_subclass_holder):
+    """Bare Mapping subclass accepts any keys and values (no validation)."""
+    bare_subclass_holder.mp = MyMap({"b": 2})
 
 
-def test_generic_subclass_mapping_item_validation_value(generic_subclass_holder):
-    with pytest.raises(TypeError):
-        generic_subclass_holder.mp = MyMap({"a": "x"})  # value should be int
+def test_bare_subclass_mapping_no_validation_keys(bare_subclass_holder):
+    """Bare Mapping subclass does not validate keys."""
+    # Should NOT raise - bare Mapping has no key validation
+    bare_subclass_holder.mp = MyMap({1: 2, 3.14: 4})
 
 
-def test_generic_subclass_no_userwarning_emitted():
-    """Parameterized generic ABC subclasses should not emit UserWarning."""
+def test_bare_subclass_mapping_no_validation_values(bare_subclass_holder):
+    """Bare Mapping subclass does not validate values."""
+    # Should NOT raise - bare Mapping has no value validation
+    bare_subclass_holder.mp = MyMap({"a": "x", "b": 3.14})
+
+
+def test_bare_subclass_no_userwarning_emitted():
+    """Bare generic ABC subclasses should not emit UserWarning."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
 
         class A(Ators):
             seq: MySeq[int] = member()
             mp: MyMap[str, int] = member()
+
+
+def test_parametrized_subclass_sequence_ok(parametrized_subclass_holder):
+    """Explicit Sequence[T] binding validates items."""
+    parametrized_subclass_holder.seq = MySeqParametrized([4, 5, 6])
+
+
+def test_parametrized_subclass_sequence_item_validation(parametrized_subclass_holder):
+    """Explicit Sequence[T] binding validates items match type parameter."""
+    with pytest.raises(TypeError):
+        parametrized_subclass_holder.seq = MySeqParametrized([1, "x"])
+
+
+def test_parametrized_subclass_mapping_ok(parametrized_subclass_holder):
+    """Explicit Mapping[K, V] binding validates keys and values."""
+    parametrized_subclass_holder.mp = MyMapParametrized({"b": 2})
+
+
+def test_parametrized_subclass_mapping_item_validation_key(parametrized_subclass_holder):
+    """Explicit Mapping[K, V] binding validates keys match type parameter."""
+    with pytest.raises(TypeError):
+        parametrized_subclass_holder.mp = MyMapParametrized({1: 2})  # key should be str
+
+
+def test_parametrized_subclass_mapping_item_validation_value(parametrized_subclass_holder):
+    """Explicit Mapping[K, V] binding validates values match type parameter."""
+    with pytest.raises(TypeError):
+        parametrized_subclass_holder.mp = MyMapParametrized({"a": "x"})  # value should be int
+
+
+def test_parametrized_subclass_no_userwarning_emitted():
+    """Parametrized generic ABC subclasses should not emit UserWarning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+
+        class A(Ators):
+            seq: MySeqParametrized[int] = member()
+            mp: MyMapParametrized[str, int] = member()
