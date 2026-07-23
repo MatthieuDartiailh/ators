@@ -14,6 +14,8 @@ import pytest
 
 from ators import (
     Ators,
+    AtorsRef,
+    atorsref,
     get_member,
     get_member_customization_tool,
     get_members,
@@ -76,7 +78,7 @@ def test_ators_init_missing_required_value():
         b: int = 1
 
     with pytest.raises(TypeError, match="Missing required init value"):
-        A(b=2)
+        A(b=2)  # type: ignore
 
 
 def test_member_access_fucntions():
@@ -155,6 +157,31 @@ def test_members_mapping_is_immutable():
 
     members = get_members(A)
     assert members["a"] is A.a
+
+
+def test_atorsref_wraps_ators_instances_until_gc_clear():
+    class A(Ators):
+        a: int
+        self_ref: object
+
+    obj = A(a=1, self_ref=None)
+    obj.self_ref = obj
+    ref = atorsref(obj)
+
+    assert isinstance(ref, AtorsRef)
+    assert bool(ref) is True
+    assert ref() is obj
+
+    obj = None
+    gc.collect()
+
+    assert bool(ref) is False
+    assert ref() is None
+
+
+def test_atorsref_rejects_non_ators_inputs():
+    with pytest.raises(TypeError, match="Expected an Ators instance"):
+        atorsref(1)
 
 
 def test_class_info_is_removed_when_class_is_collected():
