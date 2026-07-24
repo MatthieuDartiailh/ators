@@ -508,7 +508,7 @@ impl Member {
 
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
         if let Some(m) = &self.metadata {
-            for (_k, v) in m.iter() {
+            for v in m.values() {
                 visit.call(v)?
             }
         }
@@ -976,15 +976,13 @@ impl MemberBuilder {
         value_validator: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
-        match value_validator.cast::<ValueValidator>() {
-            Ok(b) => {
-                if let Some(vv) = &mut mself.value_validators {
-                    vv.push(b.as_any().extract()?);
-                } else {
-                    mself.value_validators.replace(vec![b.as_any().extract()?]);
-                }
+        {
+            let b = value_validator.cast::<ValueValidator>()?;
+            if let Some(vv) = &mut mself.value_validators {
+                vv.push(b.as_any().extract()?);
+            } else {
+                mself.value_validators.replace(vec![b.as_any().extract()?]);
             }
-            Err(err) => return Err(err.into()),
         };
         Ok(self_)
     }
@@ -1007,9 +1005,9 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        match pre_getattr.cast::<PreGetattrBehavior>() {
-            Ok(b) => mself.pre_getattr = Some(b.as_any().extract()?),
-            Err(err) => return Err(err.into()),
+        {
+            let b = pre_getattr.cast::<PreGetattrBehavior>()?;
+            mself.pre_getattr = Some(b.as_any().extract()?)
         }
         self_.into_bound_py_any(py)
     }
@@ -1032,9 +1030,9 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        match post_getattr.cast::<PostGetattrBehavior>() {
-            Ok(b) => mself.post_getattr = Some(b.as_any().extract()?),
-            Err(err) => return Err(err.into()),
+        {
+            let b = post_getattr.cast::<PostGetattrBehavior>()?;
+            mself.post_getattr = Some(b.as_any().extract()?)
         }
         self_.into_bound_py_any(py)
     }
@@ -1056,9 +1054,9 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        match pre_setattr.cast::<PreSetattrBehavior>() {
-            Ok(b) => mself.pre_setattr = Some(b.as_any().extract()?),
-            Err(err) => return Err(err.into()),
+        {
+            let b = pre_setattr.cast::<PreSetattrBehavior>()?;
+            mself.pre_setattr = Some(b.as_any().extract()?)
         }
         self_.into_bound_py_any(py)
     }
@@ -1094,9 +1092,9 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        match post_setattr.cast::<PostSetattrBehavior>() {
-            Ok(b) => mself.post_setattr = Some(b.as_any().extract()?),
-            Err(err) => return Err(err.into()),
+        {
+            let b = post_setattr.cast::<PostSetattrBehavior>()?;
+            mself.post_setattr = Some(b.as_any().extract()?)
         }
         self_.into_bound_py_any(py)
     }
@@ -1387,7 +1385,7 @@ impl MemberBuilder {
             get_warnings_warn()?.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
                 "The followng behaviors of member {} of {type_name} were \
                         set multiple times: {:#?}",
-                &name, &self.multiple_settings
+                name, self.multiple_settings
             )),))?;
         }
 
@@ -1401,7 +1399,7 @@ impl MemberBuilder {
             get_warnings_warn()?.call1((pyo3::exceptions::PyUserWarning::new_err(format!(
                 "Member {} of {} specify a coercion behavior but no type nor value validation.\
              As a consequence, the coercer will never be invoked.",
-                &name, &type_name
+                name, type_name
             )),))?;
         }
 
