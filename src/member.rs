@@ -18,7 +18,7 @@ use pyo3::{
     intern, pyclass, pymethods,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
-        PyString, PyTuple, PyTupleMethods,
+        PyString, PyTuple, PyType,
     },
 };
 use std::{clone::Clone, collections::HashMap};
@@ -423,10 +423,12 @@ fn run_post_set<'py>(
     }
 }
 
+#[pymethods]
 impl Member {
     pub fn __get__<'py>(
         self_: PyRef<'py, Self>,
         object: &Bound<'py, PyAny>,
+        _t: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let object = match object.cast::<AtorsBase>() {
             Ok(obj) => obj,
@@ -515,8 +517,13 @@ impl Member {
         Ok(())
     }
 
+    // The class is frozen so another mutable object must be involved to
+    // create a cycle and as a consequence it is not necessary to implement
+    // __clear__
+
+    #[classmethod]
     pub fn __class_getitem__<'py>(
-        cls: &Bound<'py, PyAny>,
+        cls: &Bound<'py, PyType>,
         item: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = cls.py();
@@ -529,250 +536,7 @@ impl Member {
             Ok(t) => t.to_owned(),
             Err(_) => PyTuple::new(py, [item])?,
         };
-        Ok(PyGenericAlias::new(py, cls, alias_args.as_any())?.into_any())
-    }
-
-    // The class is frozen so another mutable object must be involved to
-    // create a cycle and as a consequence it is not necessary to implement
-    // __clear__
-}
-
-impl Member {
-    #[inline]
-    unsafe fn slot_self<'py>(
-        py: ::pyo3::Python<'py>,
-        slf: &*mut ::pyo3::ffi::PyObject,
-    ) -> ::pyo3::PyResult<::pyo3::PyRef<'py, Self>> {
-        // Safety: these wrappers are only installed in `Member`'s descriptor slots.
-        // CPython dispatches those slots with `self` bound to the descriptor object
-        // found during attribute lookup, and explicit `Member.__get__/__set__/__delete__`
-        // calls go through the slot wrapper which rejects non-`Member` receivers
-        // before invoking this function. That makes the unchecked cast sound here.
-        unsafe {
-            ::std::convert::TryFrom::try_from(
-                ::pyo3::Bound::ref_from_ptr(py, slf).cast_unchecked::<Member>(),
-            )
-        }
-        .map_err(::std::convert::Into::into)
-    }
-}
-
-impl Member {
-    #[allow(non_snake_case)]
-    unsafe fn __pymethod___set____(
-        py: ::pyo3::Python,
-        _slf: *mut ::pyo3::ffi::PyObject,
-        arg0: *mut ::pyo3::ffi::PyObject,
-        arg1: ::std::ptr::NonNull<::pyo3::ffi::PyObject>,
-    ) -> ::pyo3::PyResult<()> {
-        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
-        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
-        let mut holder_1 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
-        let result = Member::__set__(
-            unsafe { Member::slot_self(py, &_slf) }?,
-            {
-                #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
-                use ::pyo3::impl_::pyclass::Probe as _;
-                ::pyo3::impl_::extract_argument::extract_argument(
-                    unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
-                    &mut holder_0,
-                    "object",
-                )
-            }?,
-            {
-                #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
-                use ::pyo3::impl_::pyclass::Probe as _;
-                ::pyo3::impl_::extract_argument::extract_argument(
-                    unsafe {
-                        ::pyo3::impl_::extract_argument::cast_non_null_function_argument(py, arg1)
-                    },
-                    &mut holder_1,
-                    "value",
-                )
-            }?,
-        );
-        ::pyo3::impl_::callback::convert(py, result)
-    }
-}
-
-impl Member {
-    #[allow(non_snake_case)]
-    unsafe fn __pymethod___delete____(
-        py: ::pyo3::Python,
-        _slf: *mut ::pyo3::ffi::PyObject,
-        arg0: *mut ::pyo3::ffi::PyObject,
-    ) -> ::pyo3::PyResult<()> {
-        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
-        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
-        let result = Member::__delete__(unsafe { Member::slot_self(py, &_slf) }?, {
-            #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
-            use ::pyo3::impl_::pyclass::Probe as _;
-            ::pyo3::impl_::extract_argument::extract_argument(
-                unsafe { ::pyo3::impl_::extract_argument::cast_function_argument(py, arg0) },
-                &mut holder_0,
-                "object",
-            )
-        }?);
-        ::pyo3::impl_::callback::convert(py, result)
-    }
-}
-
-impl Member {
-    #[allow(non_snake_case)]
-    unsafe fn __pymethod___class_getitem__(
-        py: ::pyo3::Python<'_>,
-        cls: *mut ::pyo3::ffi::PyObject,
-        args: *mut ::pyo3::ffi::PyObject,
-        _kwargs: *mut ::pyo3::ffi::PyObject,
-    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
-        // With METH_VARARGS | METH_CLASS, `args` is a 1-tuple containing the
-        // subscription item passed to __class_getitem__.  For Member[T1, T2],
-        // that item is the tuple (T1, T2); for Member[T1] it is just T1.
-        let args_any = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, args) };
-        let args_tuple = args_any
-            .cast_into::<PyTuple>()
-            .expect("CPython always provides a PyTuple for METH_VARARGS");
-        let item = args_tuple.get_item(0).map_err(|_| {
-            pyo3::exceptions::PyTypeError::new_err(
-                "Member.__class_getitem__() takes exactly 1 argument",
-            )
-        })?;
-        let cls_bound = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, cls) };
-        Member::__class_getitem__(&cls_bound, &item).map(|alias| alias.into_ptr())
-    }
-}
-
-#[allow(unknown_lints, non_local_definitions)]
-impl ::pyo3::impl_::pyclass::PyMethods<Member>
-    for ::pyo3::impl_::pyclass::PyClassImplCollector<Member>
-{
-    fn py_methods(self) -> &'static ::pyo3::impl_::pyclass::PyClassItems {
-        static ITEMS: ::pyo3::impl_::pyclass::PyClassItems = ::pyo3::impl_::pyclass::PyClassItems {
-            methods: &[::pyo3::impl_::pymethods::PyMethodDefType::Method(
-                ::pyo3::impl_::pymethods::PyMethodDef::cfunction_with_keywords(
-                    c"__class_getitem__",
-                    {
-                        struct ClassGetItemDef;
-                        impl
-                            ::pyo3::impl_::trampoline::MethodDef<
-                                ::pyo3::impl_::trampoline::cfunction_with_keywords::Func,
-                            > for ClassGetItemDef
-                        {
-                            const METH: ::pyo3::impl_::trampoline::cfunction_with_keywords::Func =
-                                Member::__pymethod___class_getitem__;
-                        }
-                        ::pyo3::impl_::trampoline::cfunction_with_keywords::<ClassGetItemDef>
-                    },
-                    c"",
-                )
-                .flags(::pyo3::ffi::METH_CLASS),
-            )],
-            slots: &[
-                ::pyo3::ffi::PyType_Slot {
-                    slot: ::pyo3::ffi::Py_tp_descr_get,
-                    pfunc: {
-                        struct Def;
-
-                        impl
-                            pyo3::impl_::trampoline::MethodDef<
-                                pyo3::impl_::trampoline::descrgetfunc::Func,
-                            > for Def
-                        {
-                            const METH: pyo3::impl_::trampoline::descrgetfunc::Func =
-                                Member::__pymethod___get____;
-                        }
-                        pyo3::impl_::trampoline::descrgetfunc::<Def>
-                    } as ::pyo3::ffi::descrgetfunc as _,
-                },
-                ::pyo3::ffi::PyType_Slot {
-                    slot: ::pyo3::ffi::Py_tp_traverse,
-                    pfunc: Member::__pymethod_traverse__ as ::pyo3::ffi::traverseproc as _,
-                },
-                {
-                    unsafe fn slot_impl(
-                        py: pyo3::Python<'_>,
-                        _slf: *mut pyo3::ffi::PyObject,
-                        attr: *mut pyo3::ffi::PyObject,
-                        value: *mut pyo3::ffi::PyObject,
-                    ) -> pyo3::PyResult<::std::ffi::c_int> {
-                        use ::std::option::Option::*;
-                        use pyo3::impl_::callback::IntoPyCallbackOutput;
-                        if let Some(value) = ::std::ptr::NonNull::new(value) {
-                            unsafe {
-                                Member::__pymethod___set____(py, _slf, attr, value).convert(py)
-                            }
-                        } else {
-                            unsafe { Member::__pymethod___delete____(py, _slf, attr).convert(py) }
-                        }
-                    }
-                    pyo3::ffi::PyType_Slot {
-                        slot: pyo3::ffi::Py_tp_descr_set,
-                        pfunc: {
-                            struct Def;
-
-                            impl
-                                pyo3::impl_::trampoline::MethodDef<
-                                    pyo3::impl_::trampoline::setattrofunc::Func,
-                                > for Def
-                            {
-                                const METH: pyo3::impl_::trampoline::setattrofunc::Func = slot_impl;
-                            }
-                            pyo3::impl_::trampoline::setattrofunc::<Def>
-                        } as pyo3::ffi::descrsetfunc as _,
-                    }
-                },
-            ],
-        };
-        &ITEMS
-    }
-}
-
-#[doc(hidden)]
-#[allow(non_snake_case)]
-impl Member {
-    #[allow(non_snake_case)]
-    unsafe fn __pymethod___get____(
-        py: ::pyo3::Python<'_>,
-        _slf: *mut ::pyo3::ffi::PyObject,
-        arg0: *mut ::pyo3::ffi::PyObject,
-        _arg1: *mut ::pyo3::ffi::PyObject,
-    ) -> ::pyo3::PyResult<*mut ::pyo3::ffi::PyObject> {
-        #[allow(clippy::let_unit_value, reason = "many holders are just `()`")]
-        let mut holder_0 = ::pyo3::impl_::extract_argument::FunctionArgumentHolder::INIT;
-        let result = Member::__get__(unsafe { Member::slot_self(py, &_slf) }?, {
-            #[allow(unused_imports, reason = "`Probe` trait used on negative case only")]
-            use ::pyo3::impl_::pyclass::Probe as _;
-            ::pyo3::impl_::extract_argument::extract_argument(
-                unsafe {
-                    ::pyo3::impl_::extract_argument::cast_function_argument(
-                        py,
-                        if arg0.is_null() {
-                            ::pyo3::ffi::Py_None()
-                        } else {
-                            arg0
-                        },
-                    )
-                },
-                &mut holder_0,
-                "object",
-            )
-        }?);
-        ::pyo3::impl_::callback::convert(py, result)
-    }
-    pub unsafe extern "C" fn __pymethod_traverse__(
-        slf: *mut ::pyo3::ffi::PyObject,
-        visit: ::pyo3::ffi::visitproc,
-        arg: *mut ::std::ffi::c_void,
-    ) -> ::std::ffi::c_int {
-        unsafe {
-            ::pyo3::impl_::pymethods::_call_traverse::<Member>(
-                slf,
-                Member::__traverse__,
-                visit,
-                arg,
-                Member::__pymethod_traverse__,
-            )
-        }
+        Ok(PyGenericAlias::new(py, cls.as_any(), alias_args.as_any())?.into_any())
     }
 }
 
