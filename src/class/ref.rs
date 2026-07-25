@@ -44,7 +44,7 @@ pub(crate) fn instance_ref_active_for_ptr(target_ptr: usize) -> bool {
 pub struct AtorsRef {
     /// Raw pointer to the target AtorsBase object, stored as usize.
     /// Validity is determined by presence in the registry; if absent, the ref is inert.
-    target: Option<usize>,
+    target: usize,
 }
 
 #[pymethods]
@@ -57,19 +57,14 @@ impl AtorsRef {
             .map_err(|_| PyTypeError::new_err("Expected an Ators instance"))?;
         register_ators_instance(instance)?;
         let target = instance.as_ptr().cast::<()>() as usize;
-        Ok(Self {
-            target: Some(target),
-        })
+        Ok(Self { target })
     }
 
     #[pyo3(signature = ())]
     fn __call__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let Some(target_ptr) = self.target else {
-            return Ok(py.None());
-        };
+        let target_ptr = self.target;
         // Check registry: if not marked as valid, return None
         if !instance_ref_active_for_ptr(target_ptr) {
-            self.target = None; // Invalidate the ref since the target is no longer valid
             return Ok(py.None());
         }
         // Registry says it's valid, safe to construct borrowed reference and return
@@ -80,17 +75,13 @@ impl AtorsRef {
     }
 
     fn __bool__(&self, _py: Python<'_>) -> bool {
-        let Some(target_ptr) = self.target else {
-            return false;
-        };
+        let target_ptr = self.target;
         // Check if registry marks this pointer as valid
         instance_ref_active_for_ptr(target_ptr)
     }
 
     fn __repr__(&self, py: Python<'_>) -> String {
-        let Some(target_ptr) = self.target else {
-            return "AtorsRef(target=None)".to_string();
-        };
+        let target_ptr = self.target;
 
         // Check registry: if not marked as valid, return None
         if !instance_ref_active_for_ptr(target_ptr) {
