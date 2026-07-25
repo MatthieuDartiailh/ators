@@ -10,6 +10,7 @@ pub mod base;
 pub mod generic;
 pub mod info;
 pub mod meta;
+pub mod r#ref;
 
 pub use self::base::{
     AtorsBase, disable_notifications, enable_notifications, freeze, get_event,
@@ -26,3 +27,4 @@ pub use self::info::{
     get_ators_type_params, get_tracked_class_info_size,
 };
 pub use self::meta::create_ators_subclass;
+pub use self::r#ref::{AtorsRef, atorsref};
