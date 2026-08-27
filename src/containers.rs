@@ -9,9 +9,12 @@
 mod common;
 pub mod dict;
 pub mod list;
+pub mod notifying_list;
 pub mod set;
 
 pub use dict::*;
 pub use list::*;
-pub use notifying_list::{ListChange, NotifyingList, NotifyingListBatchNotificationsContext};
+pub use notifying_list::{
+    ListChange, NotifyingList, NotifyingListBatchNotificationsContext, Operation,
+};
 pub use set::*;
