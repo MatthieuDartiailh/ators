@@ -16,8 +16,8 @@ use pyo3::types::PyStringMethods;
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
-        PyBool_Check, PyBytes_Check, PyCallable_Check, PyComplex_Check, PyFloat_Check,
-        PyLong_Check, PyUnicode_Check,
+        PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check,
+        PyUnicode_Check,
     },
     pyclass, pymethods,
     sync::OnceLockExt,
@@ -341,7 +341,7 @@ pub enum TypeValidator {
     #[pyo3(constructor = (params, return_type))]
     Callable {
         params: Vec<Py<PyAny>>,
-        return_type: Py<PyAny>,
+        return_type: Option<Py<PyAny>>,
     },
     // Sequence,
     // List,
@@ -1008,7 +1008,9 @@ impl TypeValidator {
                 let sig = match signature_fn.call1((value,)) {
                     Ok(s) => s,
                     Err(_) => {
-                        // If we can't get signature, reject as unannotated
+                        if return_type.is_none() {
+                            return Ok(value.clone());
+                        }
                         if let Some(m) = name
                             && let Some(o) = object
                         {
@@ -1025,12 +1027,10 @@ impl TypeValidator {
                     }
                 };
 
-                // Get parameters from the signature
                 let sig_params = sig.getattr(pyo3::intern!(py, "parameters"))?;
                 let param_values = sig_params.call_method0(pyo3::intern!(py, "values"))?;
-                let param_list: Vec<_> = param_values.iter()?.collect::<PyResult<_>>()?;
+                let param_list: Vec<_> = param_values.try_iter()?.collect::<PyResult<_>>()?;
 
-                // Check arity if not Callable[..., ReturnType] (empty params means any params)
                 if !params.is_empty() && param_list.len() != params.len() {
                     if let Some(m) = name
                         && let Some(o) = object
@@ -1051,12 +1051,10 @@ impl TypeValidator {
                     }
                 }
 
-                // Validate each parameter has required annotation (strict validation)
                 if !params.is_empty() {
                     for (idx, (param_obj, expected_type)) in
                         param_list.iter().zip(params.iter()).enumerate()
                     {
-                        // Get annotation from parameter
                         let annotation = match param_obj.getattr(pyo3::intern!(py, "annotation")) {
                             Ok(ann) => ann,
                             Err(_) => {
@@ -1078,7 +1076,6 @@ impl TypeValidator {
                             }
                         };
 
-                        // Check if annotation is not POSITIONAL_ONLY or KEYWORD_ONLY parameter marker
                         let empty_annotation = py
                             .import(pyo3::intern!(py, "inspect"))?
                             .getattr(pyo3::intern!(py, "Parameter"))?
@@ -1101,8 +1098,6 @@ impl TypeValidator {
                             }
                         }
 
-                        // Contravariance check: actual parameter type must be supertype of expected
-                        // (callable accepting more types can substitute for one accepting fewer)
                         let is_valid = is_supertype(&annotation, &expected_type.bind(py))?;
                         if !is_valid {
                             if let Some(m) = name
@@ -1128,10 +1123,31 @@ impl TypeValidator {
                     }
                 }
 
-                // Validate return type annotation (strict validation)
-                let return_annotation = match sig.getattr(pyo3::intern!(py, "return_annotation")) {
-                    Ok(ann) => ann,
-                    Err(_) => {
+                if let Some(return_type) = return_type {
+                    let return_annotation = match sig.getattr(pyo3::intern!(py, "return_annotation")) {
+                        Ok(ann) => ann,
+                        Err(_) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "The member {} from {} expects the callable to have a return type annotation",
+                                    m,
+                                    o.repr()?
+                                )));
+                            } else {
+                                return Err(pyo3::exceptions::PyTypeError::new_err(
+                                    "Expected the callable to have a return type annotation",
+                                ));
+                            }
+                        }
+                    };
+
+                    let empty_annotation = py
+                        .import(pyo3::intern!(py, "inspect"))?
+                        .getattr(pyo3::intern!(py, "Parameter"))?
+                        .getattr(pyo3::intern!(py, "empty"))?;
+                    if return_annotation.is(&empty_annotation) {
                         if let Some(m) = name
                             && let Some(o) = object
                         {
@@ -1146,48 +1162,26 @@ impl TypeValidator {
                             ));
                         }
                     }
-                };
 
-                let empty_annotation = py
-                    .import(pyo3::intern!(py, "inspect"))?
-                    .getattr(pyo3::intern!(py, "Parameter"))?
-                    .getattr(pyo3::intern!(py, "empty"))?;
-                if return_annotation.is(&empty_annotation) {
-                    if let Some(m) = name
-                        && let Some(o) = object
-                    {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                            "The member {} from {} expects the callable to have a return type annotation",
-                            m,
-                            o.repr()?
-                        )));
-                    } else {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(
-                            "Expected the callable to have a return type annotation",
-                        ));
-                    }
-                }
-
-                // Covariance check: actual return type must be subtype of expected
-                // (callable returning more specific types can substitute for one returning more general)
-                let is_valid = is_subtype(&return_annotation, &return_type.bind(py))?;
-                if !is_valid {
-                    if let Some(m) = name
-                        && let Some(o) = object
-                    {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                            "The member {} from {} expects callable to return {} (or subtypes), but actual callable returns {} (covariance violation)",
-                            m,
-                            o.repr()?,
-                            return_type.bind(py).repr()?,
-                            return_annotation.repr()?
-                        )));
-                    } else {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                            "Expected callable to return {} (or subtypes), but actual callable returns {} (covariance violation)",
-                            return_type.bind(py).repr()?,
-                            return_annotation.repr()?
-                        )));
+                    let is_valid = is_subtype(&return_annotation, &return_type.bind(py))?;
+                    if !is_valid {
+                        if let Some(m) = name
+                            && let Some(o) = object
+                        {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "The member {} from {} expects callable to return {} (or subtypes), but actual callable returns {} (covariance violation)",
+                                m,
+                                o.repr()?,
+                                return_type.bind(py).repr()?,
+                                return_annotation.repr()?
+                            )));
+                        } else {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Expected callable to return {} (or subtypes), but actual callable returns {} (covariance violation)",
+                                return_type.bind(py).repr()?,
+                                return_annotation.repr()?
+                            )));
+                        }
                     }
                 }
 
@@ -1377,7 +1371,9 @@ impl Clone for TypeValidator {
                 return_type,
             } => Self::Callable {
                 params: params.iter().map(|p| p.clone_ref(py)).collect(),
-                return_type: return_type.clone_ref(py),
+                return_type: return_type
+                    .as_ref()
+                    .map(|rt| rt.clone_ref(py)),
             },
         })
     }

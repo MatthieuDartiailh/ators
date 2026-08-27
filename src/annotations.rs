@@ -11,8 +11,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
-        PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySet,
+        PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -375,41 +375,47 @@ pub fn build_validator_from_annotation<'py>(
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.callable) {
-            // Handle Callable[[int, str], bool] or Callable[..., ReturnType]
-            // Args format: (param_types..., return_type) or (..., return_type)
-            if args.len() < 2 {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "Callable requires at least a return type",
+            // Bare Callable is permissive while still rejecting non-callables.
+            if args.is_empty() {
+                return Ok((
+                    Validator::new(
+                        TypeValidator::Callable {
+                            params: Vec::new(),
+                            return_type: None,
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
                 ));
             }
 
             let return_type = args.get_item(args.len() - 1)?;
+            let mut params = Vec::new();
 
-            // Check if this is Callable[..., ReturnType] format
-            let params = if args.len() == 2 {
-                let first_arg = args.get_item(0)?;
-                if first_arg.is(py.Ellipsis()) {
-                    // Callable[..., ReturnType] - store empty vec to indicate any params
-                    Vec::new()
+            for i in 0..(args.len() - 1) {
+                let arg = args.get_item(i)?;
+                if arg.is(py.Ellipsis()) {
+                    continue;
+                }
+
+                if let Ok(seq) = arg.cast::<PySequence>() {
+                    for item in seq.try_iter()? {
+                        params.push(item?);
+                    }
                 } else {
-                    // Single parameter: Callable[[ParamType], ReturnType]
-                    vec![first_arg.clone()]
+                    params.push(arg);
                 }
-            } else {
-                // Multiple parameters: Callable[[Type1, Type2, ...], ReturnType]
-                // args is (Type1, Type2, ..., ReturnType), need to extract all but last
-                let mut params_list = Vec::new();
-                for i in 0..(args.len() - 1) {
-                    params_list.push(args.get_item(i)?);
-                }
-                params_list
-            };
+            }
 
             Ok((
                 Validator::new(
                     TypeValidator::Callable {
                         params: params.into_iter().map(|p| p.unbind()).collect(),
-                        return_type: return_type.unbind(),
+                        return_type: Some(return_type.unbind()),
                     },
                     None,
                     None,

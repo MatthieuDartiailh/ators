@@ -229,6 +229,7 @@ impl Coercer {
                     object,
                     value,
                 ),
+                TypeValidator::Callable { .. } => Ok(value.clone()),
                 TypeValidator::Union { members } => {
                     let mut err = Vec::with_capacity(members.len());
                     for m in members {
