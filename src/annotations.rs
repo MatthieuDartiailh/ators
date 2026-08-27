@@ -1468,6 +1468,37 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
             ann_replaced = true;
         } else {
             if has_coerce {
+                let origin_type = origin.cast::<PyType>().ok();
+                let abstract_collection_kind = if ann.is(&tools.types.abc_sequence)
+                    || origin.is(&tools.types.abc_sequence)
+                    || origin_type
+                        .as_ref()
+                        .is_some_and(|typ| typ.is_subclass(&tools.types.abc_sequence).unwrap_or(false))
+                {
+                    Some("Sequence")
+                } else if ann.is(&tools.types.abc_collection)
+                    || origin.is(&tools.types.abc_collection)
+                    || origin_type
+                        .as_ref()
+                        .is_some_and(|typ| typ.is_subclass(&tools.types.abc_collection).unwrap_or(false))
+                {
+                    Some("Collection")
+                } else if ann.is(&tools.types.abc_mapping)
+                    || origin.is(&tools.types.abc_mapping)
+                    || origin_type
+                        .as_ref()
+                        .is_some_and(|typ| typ.is_subclass(&tools.types.abc_mapping).unwrap_or(false))
+                {
+                    Some("Mapping")
+                } else {
+                    None
+                };
+                if let Some(validator_name) = abstract_collection_kind {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Attribute '{attr_name}': cannot configure coercion with abstract collection validator {}. Use a concrete container validator instead.",
+                        validator_name
+                    )));
+                }
                 return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                     "Attribute '{attr_name}': coerced RHS member requires a \
                      Member[T1, T2] annotation."
