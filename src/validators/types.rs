@@ -1076,6 +1076,10 @@ impl TypeValidator {
                 }
 
                 if !params.is_empty() {
+                    let empty_annotation = py
+                        .import(pyo3::intern!(py, "inspect"))?
+                        .getattr(pyo3::intern!(py, "Parameter"))?
+                        .getattr(pyo3::intern!(py, "empty"))?;
                     for (idx, (param_obj, expected_type)) in
                         param_list.iter().zip(params.iter()).enumerate()
                     {
@@ -1100,10 +1104,6 @@ impl TypeValidator {
                             }
                         };
 
-                        let empty_annotation = py
-                            .import(pyo3::intern!(py, "inspect"))?
-                            .getattr(pyo3::intern!(py, "Parameter"))?
-                            .getattr(pyo3::intern!(py, "empty"))?;
                         if annotation.is(&empty_annotation) {
                             if let Some(m) = name
                                 && let Some(o) = object
