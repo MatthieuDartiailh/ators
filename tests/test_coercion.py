@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test coercion behavior for ators object"""
 
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 import pytest
@@ -397,3 +398,17 @@ def test_member_annotation_coerce_init_valid():
 
     a = A(x="7")
     assert a.x == 7
+
+
+@pytest.mark.parametrize("init", [False, True])
+@pytest.mark.parametrize(
+    "annotation",
+    [Sequence, Sequence[int], Collection, Collection[int], Mapping, Mapping[str, int]],
+)
+def test_abstract_collection_type_inferred_coercion_fails_early(init, annotation):
+    with pytest.raises(TypeError) as e:
+
+        class A(Ators):
+            a: annotation = getattr(member(), "coerce_init" if init else "coerce")()
+
+    assert "cannot configure coercion with abstract collection validator" in e.exconly()
