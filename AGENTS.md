@@ -8,6 +8,9 @@ This file is the repository-level contract for coding agents working in
 1. Work from the `ators` repository root.
 2. If a `.venv/` directory is present, activate it before Python commands
    using the shell-appropriate activation command.
+   - On Windows PowerShell: use `.venv\Scripts\python.exe` directly (do not try
+     `.venv\Scripts\activate` due to execution policy restrictions).
+   - On cmd: use `.venv\Scripts\activate.bat` or `.venv\Scripts\python.exe` directly.
 3. Install or refresh the extension module with `maturin develop` before
    relying on Python-side behavior after Rust changes.
 4. If `rtk` is available, prefer `rtk <command>` for shell commands that may
@@ -54,6 +57,22 @@ Prefer targeted commands such as:
 Do not run the full benchmark suite or broad repository-wide test commands
 unless the task needs that coverage.
 
+## Test patterns and locations
+
+- **Type validators** (`tests/test_type_validation.py`): Uses a parametrized
+  `test_type_validators` test with 31+ parameter sets covering type[X]
+  annotations, bare `type`, unions, etc. Add new type validator test cases
+  as parameters instead of creating standalone tests.
+- **Member/attribute validation** (`tests/test_type_validation.py`): Core
+  validation behavior including forward references, generics, and constraints.
+- **Callable validation** (`tests/test_callable_validation.py`): Tests for
+  `@validated` decorator.
+- **Container validation** (`tests/test_containers.py`, `tests/test_coercion.py`):
+  Tests for list/dict/set/tuple type checking and coercion.
+- **Error handling for invalid annotations**: Multiple subscript annotations
+  (e.g., `type[int, str]`) raise `TypeError` during class creation, not during
+  member assignment. Test with `with pytest.raises(TypeError): class A(Ators): ...`
+
 ## Benchmark discipline
 
 Performance work in `ators` must be backed by benchmark evidence.
@@ -86,12 +105,36 @@ Performance work in `ators` must be backed by benchmark evidence.
 - Doc comments (`///`) must always appear **before** any attributes (`#[...]`).
   Placing `///` after `#[pyfunction]`, `#[inline]`, `#[allow(...)]`, or any
   other attribute is incorrect. Correct order:
+
   ```rust
   /// Doc comment.
   #[pyfunction]
   #[allow(clippy::too_many_arguments)]
   pub fn my_fn() { … }
   ```
+
+## Validator types and patterns
+
+The `TypeValidator` enum in `src/validators/types.rs` handles different
+annotation patterns:
+
+- **`Typed { type_ }`**: Basic type checking for simple annotations like `int`,
+  `str`, custom classes.
+- **`Subclass { type_ }`**: Validates `type[X]` annotations - checks that value
+  is a type object that is a subclass of the specified type. Bare `type`
+  annotation accepts any type object.
+- **`Instance { types }`**: Validates union types like `int | str`.
+- **`VarTuple { item }`**: Validates `tuple[X, ...]` with coercion.
+- **`FixedTuple { items }`**: Validates `tuple[X, Y, Z]` with coercion.
+- **Containers**: Specific validators for `list[X]`, `set[X]`, `dict[K, V]`, etc.
+- **`ForwardValidator`**: Handles forward references resolved later.
+
+When adding support for new annotation patterns:
+
+1. Add a new variant to `TypeValidator` enum.
+2. Implement the validation logic in the `validate` method.
+3. Implement coercion if needed in `Coercer` struct.
+4. Add test cases to parametrized `test_type_validators` in `tests/test_type_validation.py`.
 
 ## Scope guardrails
 
@@ -106,6 +149,8 @@ Performance work in `ators` must be backed by benchmark evidence.
 - Install/update extension locally: `maturin develop`
 - Install for benchmarking: `pip install .` or `uv pip install .`
 - Run Python tests: `pytest tests -q`
+- Run one test file: `pytest tests/test_type_validation.py -q`
+- Run one parametrized test family: `pytest "tests/test_type_validation.py::test_type_validators" -v`
 - Run one benchmark family with pytest: `pytest benchmarks/test_get_untyped.py --benchmark-only -q`
 - List pyperf cases: `python benchmarks/run_pyperf.py --list`
 - Run one pyperf family: `python benchmarks/run_pyperf.py --family get_untyped`

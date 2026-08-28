@@ -149,7 +149,7 @@ impl Event {
     /// GC traversal for metadata values.
     pub fn __traverse__(&self, visit: pyo3::PyVisit) -> Result<(), pyo3::PyTraverseError> {
         if let Some(m) = &self.metadata {
-            for (_k, v) in m.iter() {
+            for v in m.values() {
                 visit.call(v)?
             }
         }

@@ -102,6 +102,16 @@ type MyInt = int
             [1, object()],
             True,
         ),
+        # type[X] - subclass validators
+        (type[int], [int, bool], [int(), 1, str, object()], False),
+        (type[OB], [OB], [OB(), int, object()], False),
+        (
+            type[CustomBase],
+            [CustomBase, CustomObj],
+            [CustomObj(), int, object()],
+            False,
+        ),
+        (type, [int, str, object, type], [1, "a", object()], False),
     ],
 )
 def test_type_validators(ann, goods, bads, warn):
@@ -550,3 +560,18 @@ def test_var_tuple_validation_preserves_unchanged_items_after_transformation():
     assert len(a.a) == 2
     assert a.a[0] == [1]
     assert a.a[1] == 2
+
+
+# ============================================================================
+# Tests for Subclass Validators (type[X] annotations)
+# ============================================================================
+
+
+def test_faulty_multiple_subscript_type_annotation():
+    """Test that faulty type annotation with multiple subscripts raises error."""
+
+    # type[int, str] should raise an error during class creation
+    with pytest.raises(TypeError):
+
+        class A(Ators):
+            a: type[int, str] = member()  # type: ignore[misc]

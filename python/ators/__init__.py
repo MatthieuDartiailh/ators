@@ -14,11 +14,13 @@ the user-facing `Ators` base class built on top of `AtorsMeta`.
 from ._ators import (
     AtorsBase as _Base,
     AtorsChange,
+    AtorsRef,
     Event,
     EventCustomizationTool,
     Member,
     PicklePolicy,
     add_generic_type_attributes,
+    atorsref,
     disable_notifications,
     enable_notifications,
     event,
@@ -39,6 +41,7 @@ from ._ators import (
     observe,
     register_type_mutability_info,
     unobserve,
+    validated,
 )
 from ._meta import AtorsMeta as _Meta
 
@@ -99,11 +102,13 @@ class Ators(_Base, metaclass=_Meta):
 __all__ = [
     "Ators",
     "AtorsChange",
+    "AtorsRef",
     "Event",
     "EventCustomizationTool",
     "Member",
     "PicklePolicy",
     "add_generic_type_attributes",
+    "atorsref",
     "disable_notifications",
     "enable_notifications",
     "event",
@@ -124,4 +129,5 @@ __all__ = [
     "observe",
     "register_type_mutability_info",
     "unobserve",
+    "validated",
 ]

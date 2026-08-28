@@ -14,6 +14,7 @@ use pyo3::{
 use std::cell::UnsafeCell;
 
 use crate::class::info::{ClassMutability, get_class_info};
+use crate::class::r#ref::unregister_ators_instance;
 use crate::event::{Event, EventCustomizationTool};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
@@ -58,7 +59,6 @@ struct InnerAtors {
 pub struct AtorsBase {
     inner: UnsafeCell<InnerAtors>,
 }
-
 // Safety: All concurrent accesses to the UnsafeCell are protected by Python critical
 // sections, which guarantee mutual exclusion. GC methods (__traverse__, __clear__) are
 // called with Python GC guarantees that ensure exclusive access regardless of whether
@@ -241,13 +241,16 @@ impl AtorsBase {
         Ok(())
     }
 
-    pub fn __clear__(&self) {
+    pub fn __clear__(slf: &Bound<'_, AtorsBase>) {
         // Safety: Python guarantees exclusive access when calling GC methods, ensuring
         // no concurrent mutation of the inner state (holds for both GIL and free-threaded builds).
-        let inner = unsafe { &mut *self.inner.get() };
+        let inner = unsafe { &mut *slf.get().inner.get() };
         for o in inner.slots.iter_mut() {
             *o = None;
         }
+        // Invalidate any registry entries for this object. This is idempotent—if the entry
+        // is not in the registry, remove() is a no-op.
+        unregister_ators_instance(slf);
     }
 
     pub fn __getstate__<'py>(slf: &Bound<'py, AtorsBase>) -> PyResult<Bound<'py, PyDict>> {

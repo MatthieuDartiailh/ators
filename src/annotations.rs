@@ -11,8 +11,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString, PyTuple,
-        PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString,
+        PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;
@@ -47,6 +47,7 @@ impl ValidatorBuildInfo {
 pub(crate) struct PyTypes<'py> {
     object: Bound<'py, PyAny>,
     any: Bound<'py, PyAny>,
+    class_var: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
     union_: Bound<'py, PyAny>,
     type_var: Bound<'py, PyAny>,
@@ -96,6 +97,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
         types: PyTypes {
             object: builtins_mod.getattr(intern!(py, "object"))?,
             any: typing_mod.getattr(intern!(py, "Any"))?,
+            class_var: typing_mod.getattr(intern!(py, "ClassVar"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
             union_: types_mod.getattr(intern!(py, "UnionType"))?,
             type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
@@ -309,6 +311,33 @@ pub fn build_validator_from_annotation<'py>(
                     requires_owner: false,
                 },
             ))
+        } else if origin.is(py.get_type::<PyType>()) {
+            // Handle type[X] annotations for subclass validation
+            if args.len() == 1 {
+                // Single type argument: type[X]
+                let arg = args.get_item(0)?;
+                let arg_type = arg.clone().cast_into::<PyType>()?;
+                Ok((
+                    Validator::new(
+                        TypeValidator::Subclass {
+                            type_: arg_type.unbind(),
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ))
+            } else {
+                // Args cannot be empty as otherwise we do not go through the
+                // generic path.
+                // Multiple type arguments not yet supported
+                Err(pyo3::exceptions::PyTypeError::new_err(
+                    "Union type arguments in type[] are not yet supported",
+                ))
+            }
         } else if origin.is(py.get_type::<PyTuple>()) {
             if args.len() == 2 && args.get_item(1).expect("Known 2-tuple").is(py.Ellipsis()) {
                 // VarTuple
@@ -1055,6 +1084,11 @@ pub fn build_validator_from_annotation<'py>(
                 requires_owner: false,
             },
         ))
+    } else if ann.is(&tools.types.abc_mapping) {
+        Ok((
+            Validator::new(TypeValidator::Mapping { items: None }, None, None, None),
+            ValidatorBuildInfo { requires_owner: false },
+        ))
     } else if ann.is(&tools.types.abc_sequence) {
         Ok((
             Validator::new(TypeValidator::Sequence { item: None }, None, None, None),
@@ -1065,10 +1099,21 @@ pub fn build_validator_from_annotation<'py>(
             Validator::new(TypeValidator::Collection { item: None }, None, None, None),
             ValidatorBuildInfo { requires_owner: false },
         ))
-    } else if ann.is(&tools.types.abc_mapping) {
+    } else if ann.is(py.get_type::<PyType>()) {
+        // Bare type annotation (not type[X]) - accept any type object (subclass of object)
+        let object_type = tools.types.object.clone().cast_into::<PyType>()?;
         Ok((
-            Validator::new(TypeValidator::Mapping { items: None }, None, None, None),
-            ValidatorBuildInfo { requires_owner: false },
+            Validator::new(
+                TypeValidator::Subclass {
+                    type_: object_type.unbind(),
+                },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
         ))
     } else {
         let ty = ann.clone().cast_into::<PyType>()?;
@@ -1147,6 +1192,31 @@ pub fn build_validator_from_annotation<'py>(
             ValidatorBuildInfo { requires_owner: false },
         ))
     }
+}
+
+pub fn build_function_argument_or_return_validator<'py>(
+    name: &Bound<'py, PyString>,
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+) -> PyResult<Validator> {
+    let class_var = &tools.types.class_var;
+    let origin = tools.get_origin.call1((ann,))?;
+    if origin.is(class_var) || ann.is(class_var) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': ClassVar is not allowed in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    if origin.is(name.py().get_type::<Member>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Invalid annotation for '{}': subscripted Member annotations are not supported in function annotations.",
+            name.to_cow()?
+        )));
+    }
+
+    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
+    Ok(validator)
 }
 
 fn configure_member_builder_from_annotation<'py>(
