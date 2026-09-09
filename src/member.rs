@@ -911,8 +911,8 @@ impl MemberBuilder {
         factory_or_modules: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
-        let fc;
-        if factory_or_modules.is_callable() {
+        
+        let fc = if factory_or_modules.is_callable() {
             let py = factory_or_modules.py();
             let sig = py
                 .import(intern!(py, "inspect"))?
@@ -927,26 +927,26 @@ impl MemberBuilder {
                     {factory_or_modules} which takes {ob_sig_len}."
                 )));
             }
-            fc = factory_or_modules.unbind();
+            factory_or_modules.unbind()
         } else if factory_or_modules.is_exact_instance_of::<PyString>() {
-            fc = ForwardRefEnvironmentCallable {
+            ForwardRefEnvironmentCallable {
                 names: vec![factory_or_modules.clone().cast_into::<PyString>()?.unbind()],
             }
-            .into_py_any(factory_or_modules.py())?;
+            .into_py_any(factory_or_modules.py())?
         } else if factory_or_modules.cast::<pyo3::types::PySequence>().is_ok() {
-            fc = ForwardRefEnvironmentCallable {
+            ForwardRefEnvironmentCallable {
                 names: factory_or_modules
                     .try_iter()?
                     .map(|item| Ok(item?.cast_into::<PyString>()?.unbind()))
                     .collect::<PyResult<Vec<Py<PyString>>>>()?,
             }
-            .into_py_any(factory_or_modules.py())?;
+            .into_py_any(factory_or_modules.py())?
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
                 "forward_ref_environment expect a callable taking 0, \
                 a class fully qualified name or a sequence of fully qualified names.",
             ));
-        }
+        };
 
         if mself.forward_ref_environment_factory.is_some() {
             mself
