@@ -222,25 +222,6 @@ impl ContainerChange {
     }
 }
 
-/// Notification object for NotifyingList mutations.
-/// Extends `ContainerChange` with the list-specific legacy wrapper.
-#[pyclass(module = "ators._ators", extends=ContainerChange, frozen)]
-pub struct ListChange {}
-
-impl ListChange {
-    pub(crate) fn new(
-        object: Py<AtorsBase>,
-        member_name: String,
-        oldvalue: Py<PyAny>,
-        newvalue: Py<PyAny>,
-        operations: Vec<Operation>,
-    ) -> PyClassInitializer<Self> {
-        let shared_ops = operations.into_iter().map(ContainerOperation::from).collect();
-        ContainerChange::new(object, member_name, oldvalue, newvalue, shared_ops)
-            .add_subclass(Self {})
-    }
-}
-
 /// Internal state for batching notifications in NotifyingList.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NotificationState {
@@ -514,26 +495,25 @@ impl NotifyingList {
             .unwrap_or("")
             .to_string();
 
-        // Create ListChange notification
-        // Cast to PyList to get the current list state
+        // Cast to PyList to get the current list state and emit the shared
+        // ContainerChange directly; list-specific compatibility wrappers are no
+        // longer part of the notification contract on this unreleased branch.
         let py_list = unsafe { self_bound.cast_unchecked::<PyList>() };
-        // Get the list as a Py object
         let newvalue: Py<PyAny> = py_list.clone().unbind().into();
+        let shared_operations: Vec<ContainerOperation> =
+            operations.into_iter().map(ContainerOperation::from).collect();
 
         let change = Bound::new(
             py,
-            ListChange::new(
+            ContainerChange::new(
                 object.clone_ref(py),
                 member_name.clone(),
                 py.None(),
                 newvalue,
-                operations,
+                shared_operations,
             ),
         )?;
 
-        // Get the observer pool and fire. The list-specific change remains a
-        // subclass of the shared ContainerChange, but observers still accept the
-        // base AtorsChange contract.
         let pool = get_observer_pool(obj_bound);
         let base_change = change.cast::<AtorsChange>()?;
         let errors = crate::observers::ObserverPool::fire(pool, &member_name, base_change)?;

@@ -16,8 +16,7 @@ pub mod set;
 pub use dict::*;
 pub use list::*;
 pub use notifying_list::{
-    ContainerChange, ContainerOperation, ListChange, NotifyingList,
-    NotifyingListBatchNotificationsContext, Operation,
+    ContainerChange, ContainerOperation, NotifyingList, NotifyingListBatchNotificationsContext,
 };
 pub use notifying_map::NotifyingMap;
 pub use set::*;

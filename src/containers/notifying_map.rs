@@ -77,12 +77,9 @@ impl NotifyingMap {
         key: &Bound<'py, PyAny>,
         py: Python<'py>,
     ) -> Option<usize> {
-        order.iter().position(|candidate| {
-            candidate
-                .bind(py)
-                .eq(key)
-                .unwrap_or(false)
-        })
+        order
+            .iter()
+            .position(|candidate| candidate.bind(py).eq(key).unwrap_or(false))
     }
 
     pub(crate) fn new_empty<'py>(
@@ -115,7 +112,9 @@ impl NotifyingMap {
         unsafe { &*self.member_name.get() }.as_deref() == member_name
             && match (unsafe { &*self.object.get() }.as_ref(), object) {
                 (None, None) => true,
-                (Some(stored), Some(current)) => stored.bind(current.py()).as_ptr() == current.as_ptr(),
+                (Some(stored), Some(current)) => {
+                    stored.bind(current.py()).as_ptr() == current.as_ptr()
+                }
                 _ => false,
             }
     }
@@ -144,14 +143,14 @@ impl NotifyingMap {
         let copy_values = unsafe { &*copy.get().values.get() }.bind(source.py());
         for key in order {
             let key_bound = key.bind(source.py());
-            let value = values.get_item(key_bound)?.expect("stored key must still exist");
+            let value = values
+                .get_item(key_bound)?
+                .expect("stored key must still exist");
             copy_values.set_item(key_bound, &value)?;
         }
         unsafe {
-            (*copy.get().order.get()) = order
-                .iter()
-                .map(|key| key.clone_ref(source.py()))
-                .collect();
+            (*copy.get().order.get()) =
+                order.iter().map(|key| key.clone_ref(source.py())).collect();
         }
         NotifyingMap::sync_dict_from_values(&copy)?;
         Ok(copy)
@@ -171,7 +170,9 @@ impl NotifyingMap {
             let values = unsafe { &*inner.values.get() }.bind(amap.py());
             values.clear();
             for (key, value) in py_dict.iter() {
-                values.set_item(&key, &value).expect("restore must rebuild values store");
+                values
+                    .set_item(&key, &value)
+                    .expect("restore must rebuild values store");
             }
             unsafe {
                 (*inner.key_validator.get()) = key_validator;
@@ -380,8 +381,15 @@ impl NotifyingMap {
         list.call_method0("__iter__")
     }
 
-    fn __contains__<'py>(self_: &Bound<'py, NotifyingMap>, key: &Bound<'py, PyAny>) -> PyResult<bool> {
-        Ok(self_.get().values_bound(self_.py()).get_item(key)?.is_some())
+    fn __contains__<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        key: &Bound<'py, PyAny>,
+    ) -> PyResult<bool> {
+        Ok(self_
+            .get()
+            .values_bound(self_.py())
+            .get_item(key)?
+            .is_some())
     }
 
     fn __getitem__<'py>(
@@ -424,7 +432,9 @@ impl NotifyingMap {
         let mut parts = Vec::new();
         for key in unsafe { &*self_.get().order.get() } {
             let key_bound = key.bind(py);
-            let value = dict.get_item(key_bound)?.expect("stored key must still exist");
+            let value = dict
+                .get_item(key_bound)?
+                .expect("stored key must still exist");
             parts.push(format!("{}: {}", key_bound.repr()?, value.repr()?));
         }
         Ok(format!("NotifyingMap({{{}}})", parts.join(", ")))
@@ -447,7 +457,10 @@ impl NotifyingMap {
         let mut values = Vec::with_capacity(order.len());
         for key in order {
             let key_bound = key.bind(py);
-            values.push(dict.get_item(key_bound)?.expect("stored key must still exist"));
+            values.push(
+                dict.get_item(key_bound)?
+                    .expect("stored key must still exist"),
+            );
         }
         PyList::new(py, values)
     }
@@ -459,7 +472,9 @@ impl NotifyingMap {
         let mut pairs = Vec::with_capacity(order.len());
         for key in order {
             let key_bound = key.bind(py);
-            let value = dict.get_item(key_bound)?.expect("stored key must still exist");
+            let value = dict
+                .get_item(key_bound)?
+                .expect("stored key must still exist");
             pairs.push((key_bound.clone(), value));
         }
         PyList::new(py, pairs)
@@ -517,8 +532,7 @@ impl NotifyingMap {
         let valid_key = self_.get().validate_key(py, key)?;
         let current_index = NotifyingMap::order_index(order, &valid_key, py).ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                NotifyingMap::key_to_string(&valid_key)
-                    .unwrap_or_else(|_| "key".to_string()),
+                NotifyingMap::key_to_string(&valid_key).unwrap_or_else(|_| "key".to_string()),
             )
         })?;
 
@@ -531,7 +545,8 @@ impl NotifyingMap {
             if before_valid.eq(&valid_key)? {
                 return Ok(());
             }
-            let target_index = NotifyingMap::order_index(order, &before_valid, py).unwrap_or(current_index);
+            let target_index =
+                NotifyingMap::order_index(order, &before_valid, py).unwrap_or(current_index);
             let item = order.remove(current_index);
             let final_index = if current_index < target_index {
                 target_index - 1
@@ -615,7 +630,9 @@ impl NotifyingMap {
         item: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = item.py();
-        let generic_alias = py.import(intern!(py, "types"))?.getattr(intern!(py, "GenericAlias"))?;
+        let generic_alias = py
+            .import(intern!(py, "types"))?
+            .getattr(intern!(py, "GenericAlias"))?;
         generic_alias.call1((cls, item))
     }
 

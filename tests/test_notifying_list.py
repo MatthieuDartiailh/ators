@@ -15,7 +15,6 @@ from ators import (
     Ators,
     AtorsChange,
     ContainerChange,
-    ListChange,
     NotifyingList,
     disable_notifications,
     enable_notifications,
@@ -39,7 +38,7 @@ def test_notifying_list_annotation_creates_notifying_container():
         obj.items.append("bad")
 
 
-def test_notifying_list_emits_list_change_subclass():
+def test_notifying_list_emits_container_change():
     obj = _ObservableNotifyingListOwner(items=[1, 2])
     changes = []
 
@@ -48,7 +47,7 @@ def test_notifying_list_emits_list_change_subclass():
 
     assert len(changes) == 1
     assert isinstance(changes[0], AtorsChange)
-    assert isinstance(changes[0], ListChange)
+    assert type(changes[0]) is ContainerChange
     assert isinstance(changes[0], ContainerChange)
     assert changes[0].object is obj
     assert changes[0].member_name == "items"
@@ -68,7 +67,7 @@ def test_notifying_list_context_manager_batches_operations():
         obj.items.append(5)
 
     assert len(changes) == 1
-    assert isinstance(changes[0], ListChange)
+    assert type(changes[0]) is ContainerChange
     assert len(changes[0].operations) == 2
     assert list(obj.items) == [1, 2, 3, 4, 5]
 
@@ -81,7 +80,7 @@ def test_notifying_list_move_item_emits_notification():
     obj.items.move_item(0, 2)
 
     assert len(changes) == 1
-    assert isinstance(changes[0], ListChange)
+    assert type(changes[0]) is ContainerChange
     assert len(changes[0].operations) == 1
     assert "Moved(from_index=0, to_index=2)" in repr(changes[0].operations[0])
     assert list(obj.items) == [2, 3, 1]
@@ -124,7 +123,7 @@ def test_notifying_list_member_validates_after_pickle_restore():
         restored.items.append(5)
 
     assert len(changes) == 1
-    assert isinstance(changes[0], ListChange)
+    assert type(changes[0]) is ContainerChange
     assert len(changes[0].operations) == 2
 
 
