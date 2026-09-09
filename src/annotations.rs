@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 
 use crate::{
-    containers::NotifyingList,
+    containers::{NotifyingList, NotifyingMap},
     event::EventBuilder,
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
@@ -438,6 +438,67 @@ pub fn build_validator_from_annotation<'py>(
                     None,
                 ),
                 ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(py.get_type::<NotifyingMap>()) {
+            if !is_observable {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "NotifyingMap can only be used in observable classes",
+                ));
+            }
+            if is_nested {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "NotifyingMap can only be used as a top-level annotation, not inside a container",
+                ));
+            }
+            let (key_val, key_requires_owner) = if let Ok(key_arg) = args.get_item(0) {
+                let (key_validator, key_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-key")).cast()?,
+                    &key_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    is_observable,
+                    true,
+                )?;
+                (
+                    Some(BoxedValidator::from(key_validator)),
+                    key_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            let (value_val, value_requires_owner) = if let Ok(value_arg) = args.get_item(1) {
+                let (value_validator, value_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-value")).cast()?,
+                    &value_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    is_observable,
+                    true,
+                )?;
+                (
+                    Some(BoxedValidator::from(value_validator)),
+                    value_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::NotifyingMap {
+                        key: key_val,
+                        value: value_val,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: key_requires_owner || value_requires_owner,
+                },
             ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority

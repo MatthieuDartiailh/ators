@@ -346,6 +346,11 @@ pub enum TypeValidator {
     List { item: Option<BoxedValidator> },
     #[pyo3(constructor = (item))]
     NotifyingList { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (key, value))]
+    NotifyingMap {
+        key: Option<BoxedValidator>,
+        value: Option<BoxedValidator>,
+    },
     #[pyo3(constructor = (items))]
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
@@ -423,6 +428,14 @@ impl TypeValidator {
             },
             Self::NotifyingList { item } => Self::NotifyingList {
                 item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::NotifyingMap { key, value } => Self::NotifyingMap {
+                key: key
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+                value: value
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
             },
@@ -910,6 +923,195 @@ impl TypeValidator {
                     validation_error!("notifying list", name, object, value)
                 }
             }
+            Self::NotifyingMap {
+                key: Some(key_v),
+                value: Some(val_v),
+            } => {
+                if let Ok(ators_map) = value.cast::<crate::containers::NotifyingMap>()
+                    && ators_map.get().matches_assignment_context(name, object)
+                {
+                    return Ok(
+                        crate::containers::NotifyingMap::clone_for_assignment(ators_map)?.into_any(),
+                    );
+                }
+                if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
+                    let py = value.py();
+                    let nmap = crate::containers::NotifyingMap::new_empty(
+                        py,
+                        (*key_v.0).clone(),
+                        (*val_v.0).clone(),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = nmap.cast::<PyDict>()?;
+                    for (tk, tv) in dict.iter() {
+                        match (
+                            key_v.validate(name, object, &tk),
+                            val_v.validate(name, object, &tv),
+                        ) {
+                            (Ok(k), Ok(v)) => {
+                                dict_bound.set_item(&k, &v)?;
+                            }
+                            (Err(err), _) => {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}' for the member {} of {}.",
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                } else {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}'.",
+                                            tk.repr()?,
+                                        )),
+                                        err,
+                                    ));
+                                }
+                            }
+                            (Ok(_), Err(err)) => {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                } else {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}'.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                        )),
+                                        err,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap)?;
+                    crate::containers::NotifyingMap::sync_dict_from_values(&nmap)?;
+                    Ok(nmap.into_any())
+                } else {
+                    validation_error!("notifying map", name, object, value)
+                }
+            }
+            Self::NotifyingMap {
+                key: Some(_),
+                value: None,
+            } => {
+                if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
+                    let py = v.py();
+                    let nmap = crate::containers::NotifyingMap::new_empty(
+                        py,
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = nmap.cast::<PyDict>()?;
+                    for (k, v) in v.iter() {
+                        dict_bound.set_item(&k, &v)?;
+                    }
+                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap)?;
+                    crate::containers::NotifyingMap::sync_dict_from_values(&nmap)?;
+                    Ok(nmap.into_any())
+                } else {
+                    validation_error!("notifying map", name, object, value)
+                }
+            }
+            Self::NotifyingMap {
+                key: None,
+                value: Some(_),
+            } => {
+                if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
+                    let py = v.py();
+                    let nmap = crate::containers::NotifyingMap::new_empty(
+                        py,
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = nmap.cast::<PyDict>()?;
+                    for (k, v) in v.iter() {
+                        dict_bound.set_item(&k, &v)?;
+                    }
+                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap)?;
+                    crate::containers::NotifyingMap::sync_dict_from_values(&nmap)?;
+                    Ok(nmap.into_any())
+                } else {
+                    validation_error!("notifying map", name, object, value)
+                }
+            }
+            Self::NotifyingMap { key: None, value: None } => {
+                if let Ok(v) = value.cast::<pyo3::types::PyDict>() {
+                    let py = v.py();
+                    let nmap = crate::containers::NotifyingMap::new_empty(
+                        py,
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        crate::validators::Validator::new(
+                            crate::validators::TypeValidator::Any {},
+                            None,
+                            None,
+                            None,
+                        ),
+                        name,
+                        object.map(|m| m.clone().unbind()),
+                    )?;
+                    let dict_bound = nmap.cast::<PyDict>()?;
+                    for (k, v) in v.iter() {
+                        dict_bound.set_item(&k, &v)?;
+                    }
+                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap)?;
+                    crate::containers::NotifyingMap::sync_dict_from_values(&nmap)?;
+                    Ok(nmap.into_any())
+                } else {
+                    validation_error!("notifying map", name, object, value)
+                }
+            }
             Self::Dict {
                 items: Some((key_v, val_v)),
             } => {
@@ -1172,6 +1374,7 @@ impl TypeValidator {
             Self::Set { item: _ } => Mutability::Mutable,
             Self::List { item: _ } => Mutability::Mutable,
             Self::NotifyingList { item: _ } => Mutability::Mutable,
+            Self::NotifyingMap { .. } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
@@ -1268,6 +1471,10 @@ impl Clone for TypeValidator {
             Self::Set { item } => Self::Set { item: item.clone() },
             Self::List { item } => Self::List { item: item.clone() },
             Self::NotifyingList { item } => Self::NotifyingList { item: item.clone() },
+            Self::NotifyingMap { key, value } => Self::NotifyingMap {
+                key: key.clone(),
+                value: value.clone(),
+            },
             Self::Dict { items } => Self::Dict {
                 items: items.clone(),
             },

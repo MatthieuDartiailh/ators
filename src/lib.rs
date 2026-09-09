@@ -82,8 +82,8 @@ mod _ators {
     // Exported only to enable pickling
     #[pymodule_export]
     use self::containers::{
-        AtorsDict, AtorsList, AtorsSet, ListChange, NotifyingList,
-        NotifyingListBatchNotificationsContext, Operation,
+        AtorsDict, AtorsList, AtorsSet, ContainerChange, ContainerOperation, ListChange,
+        NotifyingList, NotifyingListBatchNotificationsContext, NotifyingMap, Operation,
     };
 
     #[pymodule_export]

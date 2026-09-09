@@ -14,6 +14,7 @@ import pytest
 from ators import (
     Ators,
     AtorsChange,
+    ContainerChange,
     ListChange,
     NotifyingList,
     disable_notifications,
@@ -48,6 +49,7 @@ def test_notifying_list_emits_list_change_subclass():
     assert len(changes) == 1
     assert isinstance(changes[0], AtorsChange)
     assert isinstance(changes[0], ListChange)
+    assert isinstance(changes[0], ContainerChange)
     assert changes[0].object is obj
     assert changes[0].member_name == "items"
     assert list(changes[0].newvalue) == [1, 2, 3]

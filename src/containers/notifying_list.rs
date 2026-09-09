@@ -91,13 +91,141 @@ impl Operation {
     }
 }
 
-/// Notification object for NotifyingList mutations.
-/// Extends AtorsChange with additional operations field for tracking mutations.
-#[pyclass(module = "ators._ators", extends=AtorsChange, frozen)]
-pub struct ListChange {
-    #[pyo3(get)]
-    operations: Vec<Operation>,
+/// Shared operation payload for ordered container mutations.
+#[pyclass(module = "ators._ators", frozen, skip_from_py_object)]
+#[derive(Debug)]
+pub enum ContainerOperation {
+    Added {
+        index: usize,
+        key: Option<Py<PyAny>>,
+        value: Option<Py<PyAny>>,
+        item: Option<Py<PyAny>>,
+    },
+    Removed {
+        old_index: usize,
+        key: Option<Py<PyAny>>,
+        value: Option<Py<PyAny>>,
+        item: Option<Py<PyAny>>,
+    },
+    Moved {
+        from_index: usize,
+        to_index: usize,
+        key: Option<Py<PyAny>>,
+        item: Option<Py<PyAny>>,
+    },
 }
+
+impl Clone for ContainerOperation {
+    fn clone(&self) -> Self {
+        Python::attach(|py| match self {
+            ContainerOperation::Added {
+                index,
+                key,
+                value,
+                item,
+            } => ContainerOperation::Added {
+                index: *index,
+                key: key.as_ref().map(|k| k.clone_ref(py)),
+                value: value.as_ref().map(|v| v.clone_ref(py)),
+                item: item.as_ref().map(|i| i.clone_ref(py)),
+            },
+            ContainerOperation::Removed {
+                old_index,
+                key,
+                value,
+                item,
+            } => ContainerOperation::Removed {
+                old_index: *old_index,
+                key: key.as_ref().map(|k| k.clone_ref(py)),
+                value: value.as_ref().map(|v| v.clone_ref(py)),
+                item: item.as_ref().map(|i| i.clone_ref(py)),
+            },
+            ContainerOperation::Moved {
+                from_index,
+                to_index,
+                key,
+                item,
+            } => ContainerOperation::Moved {
+                from_index: *from_index,
+                to_index: *to_index,
+                key: key.as_ref().map(|k| k.clone_ref(py)),
+                item: item.as_ref().map(|i| i.clone_ref(py)),
+            },
+        })
+    }
+}
+
+#[pymethods]
+impl ContainerOperation {
+    fn __repr__(&self) -> String {
+        match self {
+            ContainerOperation::Added { index, .. } => format!("Added(index={index})"),
+            ContainerOperation::Removed { old_index, .. } => {
+                format!("Removed(old_index={old_index})")
+            }
+            ContainerOperation::Moved {
+                from_index,
+                to_index,
+                ..
+            } => format!("Moved(from_index={from_index}, to_index={to_index})"),
+        }
+    }
+}
+
+impl From<Operation> for ContainerOperation {
+    fn from(operation: Operation) -> Self {
+        match operation {
+            Operation::Added { item, index } => ContainerOperation::Added {
+                index,
+                key: None,
+                value: None,
+                item: Some(item),
+            },
+            Operation::Removed { item, old_index } => ContainerOperation::Removed {
+                old_index,
+                key: None,
+                value: None,
+                item: Some(item),
+            },
+            Operation::Moved {
+                item,
+                from_index,
+                to_index,
+            } => ContainerOperation::Moved {
+                from_index,
+                to_index,
+                key: None,
+                item: Some(item),
+            },
+        }
+    }
+}
+
+/// Shared change object for container mutations.
+/// Extends `AtorsChange` with a uniform operation list for list/map containers.
+#[pyclass(module = "ators._ators", extends=AtorsChange, subclass, frozen)]
+pub struct ContainerChange {
+    #[pyo3(get)]
+    operations: Vec<ContainerOperation>,
+}
+
+impl ContainerChange {
+    pub(crate) fn new(
+        object: Py<AtorsBase>,
+        member_name: String,
+        oldvalue: Py<PyAny>,
+        newvalue: Py<PyAny>,
+        operations: Vec<ContainerOperation>,
+    ) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(AtorsChange::new(object, member_name, oldvalue, newvalue))
+            .add_subclass(Self { operations })
+    }
+}
+
+/// Notification object for NotifyingList mutations.
+/// Extends `ContainerChange` with the list-specific legacy wrapper.
+#[pyclass(module = "ators._ators", extends=ContainerChange, frozen)]
+pub struct ListChange {}
 
 impl ListChange {
     pub(crate) fn new(
@@ -107,8 +235,9 @@ impl ListChange {
         newvalue: Py<PyAny>,
         operations: Vec<Operation>,
     ) -> PyClassInitializer<Self> {
-        PyClassInitializer::from(AtorsChange::new(object, member_name, oldvalue, newvalue))
-            .add_subclass(Self { operations })
+        let shared_ops = operations.into_iter().map(ContainerOperation::from).collect();
+        ContainerChange::new(object, member_name, oldvalue, newvalue, shared_ops)
+            .add_subclass(Self {})
     }
 }
 
@@ -402,9 +531,12 @@ impl NotifyingList {
             ),
         )?;
 
-        // Get the observer pool and fire
+        // Get the observer pool and fire. The list-specific change remains a
+        // subclass of the shared ContainerChange, but observers still accept the
+        // base AtorsChange contract.
         let pool = get_observer_pool(obj_bound);
-        let errors = crate::observers::ObserverPool::fire(pool, &member_name, change.as_super())?;
+        let base_change = change.cast::<AtorsChange>()?;
+        let errors = crate::observers::ObserverPool::fire(pool, &member_name, base_change)?;
 
         if !errors.is_empty() {
             let exception_group = py

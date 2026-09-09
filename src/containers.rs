@@ -10,11 +10,14 @@ mod common;
 pub mod dict;
 pub mod list;
 pub mod notifying_list;
+pub mod notifying_map;
 pub mod set;
 
 pub use dict::*;
 pub use list::*;
 pub use notifying_list::{
-    ListChange, NotifyingList, NotifyingListBatchNotificationsContext, Operation,
+    ContainerChange, ContainerOperation, ListChange, NotifyingList,
+    NotifyingListBatchNotificationsContext, Operation,
 };
+pub use notifying_map::NotifyingMap;
 pub use set::*;
