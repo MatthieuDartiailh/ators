@@ -57,6 +57,7 @@ def test_notifying_map_emits_change_events_and_batches():
     assert len(changes) == 2
     assert isinstance(changes[0], ContainerChange)
     assert list(changes[0].newvalue) == ["a"]
+    assert changes[0].operations[0].payload == ("a", 1)
     assert list(changes[1].newvalue) == ["a", "b"]
 
     with obj.items.batched_notifications():

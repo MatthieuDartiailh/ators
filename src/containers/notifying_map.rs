@@ -8,23 +8,18 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyResult, Python, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyType},
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyTuple, PyType},
 };
 use std::cell::UnsafeCell;
 
 use crate::{
     class::AtorsBase,
-    class::base::{get_observer_pool, notifications_enabled},
-    containers::ContainerOperation,
-    observers::AtorsChange,
+    containers::{
+        ContainerOperation,
+        common::{NotificationBuffer, NotificationState},
+    },
     validators::Validator,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NotificationState {
-    Normal,
-    Batching,
-}
 
 #[pyclass(module = "ators._ators", frozen)]
 pub struct NotifyingMapBatchNotificationsContext {
@@ -53,7 +48,7 @@ impl NotifyingMapBatchNotificationsContext {
     }
 }
 
-#[pyclass(module = "ators._ators", extends=PyDict, frozen)]
+#[pyclass(module = "ators._ators", frozen)]
 pub struct NotifyingMap {
     pub(crate) values: UnsafeCell<Py<PyDict>>,
     order: UnsafeCell<Vec<Py<PyAny>>>,
@@ -61,10 +56,14 @@ pub struct NotifyingMap {
     value_validator: UnsafeCell<Validator>,
     member_name: UnsafeCell<Option<String>>,
     object: UnsafeCell<Option<Py<AtorsBase>>>,
-    notification_state: UnsafeCell<NotificationState>,
-    pending_operations: UnsafeCell<Vec<ContainerOperation>>,
+    notification_buffer: UnsafeCell<NotificationBuffer>,
 }
 
+// Safety: validator and member_name are written only once (at construction or during restore
+// before any other references exist), and after that are effectively immutable; object is only
+// modified during __clear__, which Python's GC calls only once all references to this object
+// have been dropped — ensuring no concurrent access (holds for both GIL and free-threaded builds).
+// notification_state and pending_operations are protected by critical sections.
 unsafe impl Sync for NotifyingMap {}
 
 impl NotifyingMap {
@@ -98,8 +97,7 @@ impl NotifyingMap {
                 value_validator: UnsafeCell::new(value_validator),
                 member_name: UnsafeCell::new(member_name.map(str::to_owned)),
                 object: UnsafeCell::new(object),
-                notification_state: UnsafeCell::new(NotificationState::Normal),
-                pending_operations: UnsafeCell::new(Vec::new()),
+                notification_buffer: UnsafeCell::new(NotificationBuffer::new()),
             },
         )
     }
@@ -138,21 +136,19 @@ impl NotifyingMap {
             member_name.as_deref(),
             object,
         )?;
-        let values = unsafe { &*map.values.get() }.bind(source.py());
+        let values = unsafe { &*copy.get().values.get() }.bind(source.py());
         let order = unsafe { &*map.order.get() };
-        let copy_values = unsafe { &*copy.get().values.get() }.bind(source.py());
         for key in order {
             let key_bound = key.bind(source.py());
             let value = values
                 .get_item(key_bound)?
                 .expect("stored key must still exist");
-            copy_values.set_item(key_bound, &value)?;
+            values.set_item(key_bound, &value)?;
         }
         unsafe {
             (*copy.get().order.get()) =
                 order.iter().map(|key| key.clone_ref(source.py())).collect();
         }
-        NotifyingMap::sync_dict_from_values(&copy)?;
         Ok(copy)
     }
 
@@ -165,21 +161,11 @@ impl NotifyingMap {
     ) {
         with_critical_section(amap.as_any(), || {
             let inner = amap.get();
-            let py_dict = unsafe { amap.cast_unchecked::<PyDict>() };
-            let order = py_dict.iter().map(|(key, _)| key.unbind()).collect();
-            let values = unsafe { &*inner.values.get() }.bind(amap.py());
-            values.clear();
-            for (key, value) in py_dict.iter() {
-                values
-                    .set_item(&key, &value)
-                    .expect("restore must rebuild values store");
-            }
             unsafe {
                 (*inner.key_validator.get()) = key_validator;
                 (*inner.value_validator.get()) = value_validator;
                 (*inner.member_name.get()) = member_name.map(str::to_owned);
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
-                (*inner.order.get()) = order;
             }
         });
     }
@@ -221,74 +207,55 @@ impl NotifyingMap {
         operation: ContainerOperation,
         self_bound: &Bound<'py, NotifyingMap>,
     ) -> PyResult<()> {
-        match unsafe { *self.notification_state.get() } {
-            NotificationState::Normal => self.emit_notification(py, vec![operation], self_bound),
-            NotificationState::Batching => {
-                with_critical_section(self_bound.as_any(), || {
-                    unsafe { (*self.pending_operations.get()).push(operation) };
-                });
-                Ok(())
-            }
-        }
-    }
-
-    fn emit_notification<'py>(
-        &self,
-        py: Python<'py>,
-        operations: Vec<ContainerOperation>,
-        self_bound: &Bound<'py, NotifyingMap>,
-    ) -> PyResult<()> {
         let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
             return Ok(());
         };
-        let obj_bound = object.bind(py);
-        if !notifications_enabled(obj_bound) {
-            return Ok(());
-        }
 
         let member_name = unsafe { &*self.member_name.get() }
             .as_deref()
             .unwrap_or("")
             .to_string();
 
-        let snapshot = PyDict::new(py);
-        let values = self_bound.get().values_bound(py);
-        for key in unsafe { &*self_bound.get().order.get() } {
-            let key_bound = key.bind(py);
-            let value = values
-                .get_item(key_bound)?
-                .expect("stored key must still exist");
-            snapshot.set_item(key_bound, &value)?;
-        }
+        let newvalue = {
+            let snapshot = PyDict::new(py);
+            let values = self_bound.get().values_bound(py);
+            for key in unsafe { &*self_bound.get().order.get() } {
+                let key_bound = key.bind(py);
+                let value = values
+                    .get_item(key_bound)?
+                    .expect("stored key must still exist");
+                snapshot.set_item(key_bound, &value)?;
+            }
+            snapshot.into_any().unbind()
+        };
 
-        let newvalue: Py<PyAny> = snapshot.into_any().unbind();
-        let change = Bound::new(
-            py,
-            crate::containers::ContainerChange::new(
-                object.clone_ref(py),
-                member_name.clone(),
-                py.None(),
+        let should_emit = with_critical_section(self_bound.as_any(), || unsafe {
+            let buffer = &mut *self.notification_buffer.get();
+            match buffer.state {
+                NotificationState::Normal => true,
+                NotificationState::Batching => {
+                    buffer.push_operation(operation.clone());
+                    false
+                }
+            }
+        });
+
+        if should_emit {
+            NotificationBuffer::emit_container_change(
+                py,
+                object.bind(py),
+                &member_name,
                 newvalue,
-                operations,
-            ),
-        )?;
-        let pool = get_observer_pool(obj_bound);
-        let base_change = change.cast::<AtorsChange>()?;
-        let errors = crate::observers::ObserverPool::fire(pool, &member_name, base_change)?;
-        if !errors.is_empty() {
-            let exception_group = py
-                .import(intern!(py, "builtins"))?
-                .getattr(intern!(py, "ExceptionGroup"))?
-                .call1(("errors in observers", errors))?;
-            return Err(pyo3::PyErr::from_value(exception_group));
+                vec![operation],
+            )
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     fn begin_batch_inner(&self, self_bound: &Bound<'_, NotifyingMap>) {
         with_critical_section(self_bound.as_any(), || unsafe {
-            *self.notification_state.get() = NotificationState::Batching;
-            (*self.pending_operations.get()).clear();
+            (*self.notification_buffer.get()).begin_batch();
         });
     }
 
@@ -298,43 +265,54 @@ impl NotifyingMap {
         self_bound: &Bound<'py, NotifyingMap>,
     ) -> PyResult<()> {
         let operations = with_critical_section(self_bound.as_any(), || unsafe {
-            *self.notification_state.get() = NotificationState::Normal;
-            std::mem::take(&mut *self.pending_operations.get())
+            (*self.notification_buffer.get()).end_batch()
         });
+
         if !operations.is_empty() {
-            self.emit_notification(py, operations, self_bound)?;
+            let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
+                return Ok(());
+            };
+            let member_name = unsafe { &*self.member_name.get() }
+                .as_deref()
+                .unwrap_or("")
+                .to_string();
+            let snapshot = PyDict::new(py);
+            let values = self_bound.get().values_bound(py);
+            for key in unsafe { &*self_bound.get().order.get() } {
+                let key_bound = key.bind(py);
+                let value = values
+                    .get_item(key_bound)?
+                    .expect("stored key must still exist");
+                snapshot.set_item(key_bound, &value)?;
+            }
+            let newvalue = snapshot.into_any().unbind();
+            NotificationBuffer::emit_container_change(
+                py,
+                object.bind(py),
+                &member_name,
+                newvalue,
+                operations,
+            )?;
         }
+
         Ok(())
     }
 
-    fn values_bound<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
+    pub(crate) fn values_bound<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
         unsafe { &*self.values.get() }.clone_ref(py).into_bound(py)
     }
 
-    pub(crate) fn sync_values_from_dict<'py>(self_: &Bound<'py, NotifyingMap>) -> PyResult<()> {
+    pub(crate) fn sync_values_from_dict<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        mapping: &Bound<'py, PyDict>,
+    ) -> PyResult<()> {
         let py = self_.py();
         let values = unsafe { &*self_.get().values.get() }.bind(py);
         values.clear();
         unsafe { (*self_.get().order.get()).clear() };
-        let dict = unsafe { self_.cast_unchecked::<PyDict>() };
-        for (key, value) in dict.iter() {
+        for (key, value) in mapping.iter() {
             values.set_item(&key, &value)?;
             unsafe { (*self_.get().order.get()).push(key.unbind()) };
-        }
-        Ok(())
-    }
-
-    pub(crate) fn sync_dict_from_values<'py>(self_: &Bound<'py, NotifyingMap>) -> PyResult<()> {
-        let py = self_.py();
-        let values = unsafe { &*self_.get().values.get() }.bind(py);
-        let dict = unsafe { self_.cast_unchecked::<PyDict>() };
-        dict.clear();
-        for key in unsafe { &*self_.get().order.get() } {
-            let key_bound = key.bind(py);
-            let value = values
-                .get_item(key_bound)?
-                .expect("stored key must still exist");
-            dict.set_item(key_bound, &value)?;
         }
         Ok(())
     }
@@ -361,8 +339,7 @@ impl NotifyingMap {
             )),
             member_name: UnsafeCell::new(None),
             object: UnsafeCell::new(None),
-            notification_state: UnsafeCell::new(NotificationState::Normal),
-            pending_operations: UnsafeCell::new(Vec::new()),
+            notification_buffer: UnsafeCell::new(NotificationBuffer::new()),
         })
     }
 
@@ -415,7 +392,6 @@ impl NotifyingMap {
         if dict.get_item(key)?.is_some() {
             let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
             dict.set_item(&valid_key, &valid_value)?;
-            NotifyingMap::sync_dict_from_values(self_)?;
             return Ok(());
         }
         NotifyingMap::add(self_, key, value, None)
@@ -495,29 +471,30 @@ impl NotifyingMap {
             return Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(key_repr));
         }
 
-        let order = unsafe { &mut *self_.get().order.get() };
+        let order_snapshot: &[Py<PyAny>] = unsafe { &*self_.get().order.get() };
         let insertion = if let Some(before_key) = before {
             let before_valid = self_.get().validate_key(py, before_key)?;
             if dict.get_item(&before_valid)?.is_none() {
                 let key_repr = NotifyingMap::key_to_string(&before_valid)?;
                 return Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(key_repr));
             }
-            NotifyingMap::order_index(order, &before_valid, py).unwrap_or(order.len())
+            NotifyingMap::order_index(order_snapshot, &before_valid, py)
+                .unwrap_or(order_snapshot.len())
         } else {
-            order.len()
+            order_snapshot.len()
         };
 
         dict.set_item(&valid_key, &valid_value)?;
+        let order: &mut Vec<Py<PyAny>> = unsafe { &mut *self_.get().order.get() };
         order.insert(insertion, valid_key.clone().unbind());
 
         let op = ContainerOperation::Added {
             index: insertion,
-            key: Some(valid_key.clone().unbind()),
-            value: Some(valid_value.clone().unbind()),
-            item: Some(valid_key.clone().unbind()),
+            payload: PyTuple::new(py, [valid_key.clone(), valid_value.clone()])?
+                .into_any()
+                .unbind(),
         };
-        self_.get().record_operation(py, op, self_)?;
-        NotifyingMap::sync_dict_from_values(self_)
+        self_.get().record_operation(py, op, self_)
     }
 
     #[pyo3(name = "move", signature = (key, before=None))]
@@ -527,14 +504,15 @@ impl NotifyingMap {
         before: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<()> {
         let py = self_.py();
-        let order = unsafe { &mut *self_.get().order.get() };
         let dict = self_.get().values_bound(py);
         let valid_key = self_.get().validate_key(py, key)?;
-        let current_index = NotifyingMap::order_index(order, &valid_key, py).ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyKeyError, _>(
-                NotifyingMap::key_to_string(&valid_key).unwrap_or_else(|_| "key".to_string()),
-            )
-        })?;
+        let order_snapshot: &[Py<PyAny>] = unsafe { &*self_.get().order.get() };
+        let current_index =
+            NotifyingMap::order_index(order_snapshot, &valid_key, py).ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyKeyError, _>(
+                    NotifyingMap::key_to_string(&valid_key).unwrap_or_else(|_| "key".to_string()),
+                )
+            })?;
 
         if let Some(before_key) = before {
             let before_valid = self_.get().validate_key(py, before_key)?;
@@ -545,8 +523,9 @@ impl NotifyingMap {
             if before_valid.eq(&valid_key)? {
                 return Ok(());
             }
-            let target_index =
-                NotifyingMap::order_index(order, &before_valid, py).unwrap_or(current_index);
+            let target_index = NotifyingMap::order_index(order_snapshot, &before_valid, py)
+                .unwrap_or(current_index);
+            let order: &mut Vec<Py<PyAny>> = unsafe { &mut *self_.get().order.get() };
             let item = order.remove(current_index);
             let final_index = if current_index < target_index {
                 target_index - 1
@@ -557,23 +536,39 @@ impl NotifyingMap {
             let op = ContainerOperation::Moved {
                 from_index: current_index,
                 to_index: final_index,
-                key: Some(valid_key.clone().unbind()),
-                item: Some(valid_key.clone().unbind()),
+                payload: PyTuple::new(
+                    py,
+                    [
+                        valid_key.clone(),
+                        dict.get_item(&valid_key)?
+                            .expect("stored key must still exist"),
+                    ],
+                )?
+                .into_any()
+                .unbind(),
             };
             self_.get().record_operation(py, op, self_)?;
-            return NotifyingMap::sync_dict_from_values(self_);
+            return Ok(());
         }
 
+        let order: &mut Vec<Py<PyAny>> = unsafe { &mut *self_.get().order.get() };
         let item = order.remove(current_index);
         order.push(item);
         let op = ContainerOperation::Moved {
             from_index: current_index,
             to_index: order.len().saturating_sub(1),
-            key: Some(valid_key.clone().unbind()),
-            item: Some(valid_key.clone().unbind()),
+            payload: PyTuple::new(
+                py,
+                [
+                    valid_key.clone(),
+                    dict.get_item(&valid_key)?
+                        .expect("stored key must still exist"),
+                ],
+            )?
+            .into_any()
+            .unbind(),
         };
-        self_.get().record_operation(py, op, self_)?;
-        NotifyingMap::sync_dict_from_values(self_)
+        self_.get().record_operation(py, op, self_)
     }
 
     fn remove<'py>(
@@ -590,18 +585,18 @@ impl NotifyingMap {
                 return Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(key_repr));
             }
         };
-        let order = unsafe { &mut *self_.get().order.get() };
-        let index = NotifyingMap::order_index(order, &valid_key, py).unwrap_or(0);
+        let order_snapshot: &[Py<PyAny>] = unsafe { &*self_.get().order.get() };
+        let index = NotifyingMap::order_index(order_snapshot, &valid_key, py).unwrap_or(0);
+        let order: &mut Vec<Py<PyAny>> = unsafe { &mut *self_.get().order.get() };
         order.remove(index);
         dict.del_item(&valid_key)?;
         let op = ContainerOperation::Removed {
             old_index: index,
-            key: Some(valid_key.clone().unbind()),
-            value: Some(value.clone().unbind()),
-            item: Some(valid_key.clone().unbind()),
+            payload: PyTuple::new(py, [valid_key.clone(), value.clone()])?
+                .into_any()
+                .unbind(),
         };
         self_.get().record_operation(py, op, self_)?;
-        NotifyingMap::sync_dict_from_values(self_)?;
         Ok(value)
     }
 
@@ -660,8 +655,7 @@ impl NotifyingMap {
                 )),
                 member_name: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
-                notification_state: UnsafeCell::new(NotificationState::Normal),
-                pending_operations: UnsafeCell::new(Vec::new()),
+                notification_buffer: UnsafeCell::new(NotificationBuffer::new()),
             },
         )
     }
@@ -671,8 +665,18 @@ impl NotifyingMap {
         py: Python<'py>,
         _protocol: usize,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let py_dict = unsafe { self_.cast_unchecked::<PyDict>() };
-        let items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> = py_dict.iter().collect();
+        let values = self_.get().values_bound(py);
+        let items: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> =
+            unsafe { &*self_.get().order.get() }
+                .iter()
+                .map(|key| {
+                    let key_bound = key.bind(py);
+                    let value = values
+                        .get_item(key_bound)?
+                        .expect("stored key must still exist");
+                    Ok((key_bound.clone(), value))
+                })
+                .collect::<PyResult<Vec<_>>>()?;
         let items_iter = items.into_bound_py_any(py)?.try_iter()?;
         (
             self_.getattr(intern!(py, "_construct"))?,

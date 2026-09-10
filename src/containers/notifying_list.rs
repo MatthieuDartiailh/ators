@@ -6,230 +6,21 @@
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
 use pyo3::{
-    Bound, IntoPyObjectExt, Py, PyAny, PyClassInitializer, PyErr, PyResult, Python, ffi, intern,
-    pyclass, pymethods,
+    Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyResult, Python, ffi, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
     types::{PyAnyMethods, PyList, PyListMethods, PyType},
 };
 use std::cell::UnsafeCell;
 
 use crate::{
-    class::{
-        AtorsBase,
-        base::{get_observer_pool, notifications_enabled},
+    class::AtorsBase,
+    containers::{
+        AtorsDict, AtorsList, AtorsSet,
+        common::{ContainerOperation, NotificationBuffer, NotificationState},
     },
-    containers::{AtorsDict, AtorsList, AtorsSet},
-    observers::AtorsChange,
     utils::error_on_minusone,
     validators::Validator,
 };
-
-// ============================================================================
-// NotifyingList Support Types
-// ============================================================================
-
-/// An operation performed on a NotifyingList (mutation record).
-#[pyclass(module = "ators._ators", frozen, skip_from_py_object)]
-#[derive(Debug)]
-pub enum Operation {
-    Added {
-        item: Py<PyAny>,
-        index: usize,
-    },
-    Removed {
-        item: Py<PyAny>,
-        old_index: usize,
-    },
-    Moved {
-        item: Py<PyAny>,
-        from_index: usize,
-        to_index: usize,
-    },
-}
-
-impl Clone for Operation {
-    fn clone(&self) -> Self {
-        Python::attach(|py| match self {
-            Operation::Added { item, index } => Operation::Added {
-                item: item.clone_ref(py),
-                index: *index,
-            },
-            Operation::Removed { item, old_index } => Operation::Removed {
-                item: item.clone_ref(py),
-                old_index: *old_index,
-            },
-            Operation::Moved {
-                item,
-                from_index,
-                to_index,
-            } => Operation::Moved {
-                item: item.clone_ref(py),
-                from_index: *from_index,
-                to_index: *to_index,
-            },
-        })
-    }
-}
-
-#[pymethods]
-impl Operation {
-    fn __repr__(&self) -> String {
-        match self {
-            Operation::Added { index, .. } => format!("Operation.Added(index={})", index),
-            Operation::Removed { old_index, .. } => {
-                format!("Operation.Removed(old_index={})", old_index)
-            }
-            Operation::Moved {
-                from_index,
-                to_index,
-                ..
-            } => format!(
-                "Operation.Moved(from_index={}, to_index={})",
-                from_index, to_index
-            ),
-        }
-    }
-}
-
-/// Shared operation payload for ordered container mutations.
-#[pyclass(module = "ators._ators", frozen, skip_from_py_object)]
-#[derive(Debug)]
-pub enum ContainerOperation {
-    Added {
-        index: usize,
-        key: Option<Py<PyAny>>,
-        value: Option<Py<PyAny>>,
-        item: Option<Py<PyAny>>,
-    },
-    Removed {
-        old_index: usize,
-        key: Option<Py<PyAny>>,
-        value: Option<Py<PyAny>>,
-        item: Option<Py<PyAny>>,
-    },
-    Moved {
-        from_index: usize,
-        to_index: usize,
-        key: Option<Py<PyAny>>,
-        item: Option<Py<PyAny>>,
-    },
-}
-
-impl Clone for ContainerOperation {
-    fn clone(&self) -> Self {
-        Python::attach(|py| match self {
-            ContainerOperation::Added {
-                index,
-                key,
-                value,
-                item,
-            } => ContainerOperation::Added {
-                index: *index,
-                key: key.as_ref().map(|k| k.clone_ref(py)),
-                value: value.as_ref().map(|v| v.clone_ref(py)),
-                item: item.as_ref().map(|i| i.clone_ref(py)),
-            },
-            ContainerOperation::Removed {
-                old_index,
-                key,
-                value,
-                item,
-            } => ContainerOperation::Removed {
-                old_index: *old_index,
-                key: key.as_ref().map(|k| k.clone_ref(py)),
-                value: value.as_ref().map(|v| v.clone_ref(py)),
-                item: item.as_ref().map(|i| i.clone_ref(py)),
-            },
-            ContainerOperation::Moved {
-                from_index,
-                to_index,
-                key,
-                item,
-            } => ContainerOperation::Moved {
-                from_index: *from_index,
-                to_index: *to_index,
-                key: key.as_ref().map(|k| k.clone_ref(py)),
-                item: item.as_ref().map(|i| i.clone_ref(py)),
-            },
-        })
-    }
-}
-
-#[pymethods]
-impl ContainerOperation {
-    fn __repr__(&self) -> String {
-        match self {
-            ContainerOperation::Added { index, .. } => format!("Added(index={index})"),
-            ContainerOperation::Removed { old_index, .. } => {
-                format!("Removed(old_index={old_index})")
-            }
-            ContainerOperation::Moved {
-                from_index,
-                to_index,
-                ..
-            } => format!("Moved(from_index={from_index}, to_index={to_index})"),
-        }
-    }
-}
-
-impl From<Operation> for ContainerOperation {
-    fn from(operation: Operation) -> Self {
-        match operation {
-            Operation::Added { item, index } => ContainerOperation::Added {
-                index,
-                key: None,
-                value: None,
-                item: Some(item),
-            },
-            Operation::Removed { item, old_index } => ContainerOperation::Removed {
-                old_index,
-                key: None,
-                value: None,
-                item: Some(item),
-            },
-            Operation::Moved {
-                item,
-                from_index,
-                to_index,
-            } => ContainerOperation::Moved {
-                from_index,
-                to_index,
-                key: None,
-                item: Some(item),
-            },
-        }
-    }
-}
-
-/// Shared change object for container mutations.
-/// Extends `AtorsChange` with a uniform operation list for list/map containers.
-#[pyclass(module = "ators._ators", extends=AtorsChange, subclass, frozen)]
-pub struct ContainerChange {
-    #[pyo3(get)]
-    operations: Vec<ContainerOperation>,
-}
-
-impl ContainerChange {
-    pub(crate) fn new(
-        object: Py<AtorsBase>,
-        member_name: String,
-        oldvalue: Py<PyAny>,
-        newvalue: Py<PyAny>,
-        operations: Vec<ContainerOperation>,
-    ) -> PyClassInitializer<Self> {
-        PyClassInitializer::from(AtorsChange::new(object, member_name, oldvalue, newvalue))
-            .add_subclass(Self { operations })
-    }
-}
-
-/// Internal state for batching notifications in NotifyingList.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NotificationState {
-    /// Emit notifications immediately on each operation.
-    Normal,
-    /// Accumulate operations and emit on batch exit.
-    Batching,
-}
 
 // ============================================================================
 // NotifyingList - List with detailed change notifications
@@ -269,10 +60,7 @@ pub struct NotifyingList {
     member_name: UnsafeCell<Option<String>>,
     // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
     object: UnsafeCell<Option<Py<AtorsBase>>>,
-    // Batching state: whether we're accumulating operations
-    notification_state: UnsafeCell<NotificationState>,
-    // Accumulated operations when in batching mode
-    pending_operations: UnsafeCell<Vec<Operation>>,
+    notification_buffer: UnsafeCell<NotificationBuffer>,
 }
 
 // Safety: validator and member_name are written only once (at construction or during restore
@@ -295,8 +83,7 @@ impl NotifyingList {
                 validator: UnsafeCell::new(validator),
                 member_name: UnsafeCell::new(member_name.map(|m| m.to_string())),
                 object: UnsafeCell::new(object),
-                notification_state: UnsafeCell::new(NotificationState::Normal),
-                pending_operations: UnsafeCell::new(Vec::new()),
+                notification_buffer: UnsafeCell::new(NotificationBuffer::new()),
             },
         )
     }
@@ -449,23 +236,39 @@ impl NotifyingList {
     fn record_operation<'py>(
         &self,
         py: Python<'py>,
-        operation: Operation,
+        operation: ContainerOperation,
         self_bound: &Bound<'py, NotifyingList>,
     ) -> PyResult<()> {
-        let state = unsafe { *self.notification_state.get() };
+        let should_emit = with_critical_section(self_bound.as_any(), || unsafe {
+            let buffer = &mut *self.notification_buffer.get();
+            match buffer.state {
+                NotificationState::Normal => true,
+                NotificationState::Batching => {
+                    buffer.push_operation(operation.clone());
+                    false
+                }
+            }
+        });
 
-        match state {
-            NotificationState::Normal => {
-                // Emit immediately
-                self.emit_notification(py, vec![operation], self_bound)
-            }
-            NotificationState::Batching => {
-                // Accumulate for batch
-                with_critical_section(self_bound.as_any(), || {
-                    unsafe { (*self.pending_operations.get()).push(operation) };
-                });
-                Ok(())
-            }
+        if should_emit {
+            let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
+                return Ok(());
+            };
+            let member_name = unsafe { &*self.member_name.get() }
+                .as_deref()
+                .unwrap_or("")
+                .to_string();
+            let py_list = unsafe { self_bound.cast_unchecked::<PyList>() };
+            let newvalue: Py<PyAny> = py_list.clone().unbind().into();
+            NotificationBuffer::emit_container_change(
+                py,
+                object.bind(py),
+                &member_name,
+                newvalue,
+                vec![operation],
+            )
+        } else {
+            Ok(())
         }
     }
 
@@ -473,60 +276,25 @@ impl NotifyingList {
     fn emit_notification<'py>(
         &self,
         py: Python<'py>,
-        operations: Vec<Operation>,
+        operations: Vec<ContainerOperation>,
         self_bound: &Bound<'py, NotifyingList>,
     ) -> PyResult<()> {
-        // Safety: same as validate_item.
-        let object_ref = unsafe { &*self.object.get() };
-
-        // Only emit if we have an object
-        let Some(object) = object_ref else {
+        let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
             return Ok(());
         };
-
-        // Check if parent has disabled notifications (parent always wins)
-        let obj_bound = object.bind(py);
-        if !notifications_enabled(obj_bound) {
-            return Ok(());
-        }
-
         let member_name = unsafe { &*self.member_name.get() }
             .as_deref()
             .unwrap_or("")
             .to_string();
-
-        // Cast to PyList to get the current list state and emit the shared
-        // ContainerChange directly; list-specific compatibility wrappers are no
-        // longer part of the notification contract on this unreleased branch.
         let py_list = unsafe { self_bound.cast_unchecked::<PyList>() };
         let newvalue: Py<PyAny> = py_list.clone().unbind().into();
-        let shared_operations: Vec<ContainerOperation> =
-            operations.into_iter().map(ContainerOperation::from).collect();
-
-        let change = Bound::new(
+        NotificationBuffer::emit_container_change(
             py,
-            ContainerChange::new(
-                object.clone_ref(py),
-                member_name.clone(),
-                py.None(),
-                newvalue,
-                shared_operations,
-            ),
-        )?;
-
-        let pool = get_observer_pool(obj_bound);
-        let base_change = change.cast::<AtorsChange>()?;
-        let errors = crate::observers::ObserverPool::fire(pool, &member_name, base_change)?;
-
-        if !errors.is_empty() {
-            let exception_group = py
-                .import(intern!(py, "builtins"))?
-                .getattr(intern!(py, "ExceptionGroup"))?
-                .call1(("errors in observers", errors))?;
-            return Err(pyo3::PyErr::from_value(exception_group));
-        }
-
-        Ok(())
+            object.bind(py),
+            &member_name,
+            newvalue,
+            operations,
+        )
     }
 
     fn del_item_base<'py>(py_list: &Bound<'py, PyList>, index: usize) -> PyResult<()> {
@@ -543,8 +311,7 @@ impl NotifyingList {
     /// Enter batch mode: start accumulating operations.
     fn begin_batch_inner(&self, self_bound: &Bound<'_, NotifyingList>) {
         with_critical_section(self_bound.as_any(), || unsafe {
-            *self.notification_state.get() = NotificationState::Batching;
-            (*self.pending_operations.get()).clear();
+            (*self.notification_buffer.get()).begin_batch();
         });
     }
 
@@ -555,8 +322,7 @@ impl NotifyingList {
         self_bound: &Bound<'py, NotifyingList>,
     ) -> PyResult<()> {
         let operations = with_critical_section(self_bound.as_any(), || unsafe {
-            *self.notification_state.get() = NotificationState::Normal;
-            std::mem::take(&mut *self.pending_operations.get())
+            (*self.notification_buffer.get()).end_batch()
         });
 
         if !operations.is_empty() {
@@ -580,9 +346,9 @@ impl NotifyingList {
         let index = py_list.len();
         py_list.append(&valid)?;
 
-        let operation = Operation::Added {
-            item: valid.unbind(),
+        let operation = ContainerOperation::Added {
             index,
+            payload: valid.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
@@ -597,9 +363,9 @@ impl NotifyingList {
         let py_list = unsafe { self_.cast_unchecked::<PyList>() };
         py_list.insert(index, &valid)?;
 
-        let operation = Operation::Added {
-            item: valid.unbind(),
+        let operation = ContainerOperation::Added {
             index,
+            payload: valid.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
@@ -618,9 +384,9 @@ impl NotifyingList {
         }
 
         for (offset, item) in validated.iter().enumerate() {
-            let operation = Operation::Added {
-                item: item.unbind(),
+            let operation = ContainerOperation::Added {
                 index: start_index + offset,
+                payload: item.unbind(),
             };
             self_.get().record_operation(py, operation, self_)?;
         }
@@ -648,9 +414,9 @@ impl NotifyingList {
             let item = py_list.get_item(index)?;
             Self::del_item_base(py_list, index)?;
 
-            let operation = Operation::Removed {
-                item: item.unbind(),
+            let operation = ContainerOperation::Removed {
                 old_index: index,
+                payload: item.unbind(),
             };
             self_.get().record_operation(py, operation, self_)
         } else {
@@ -684,9 +450,9 @@ impl NotifyingList {
         let item = py_list.get_item(idx)?;
         Self::del_item_base(py_list, idx)?;
 
-        let operation = Operation::Removed {
-            item: item.clone().unbind(),
+        let operation = ContainerOperation::Removed {
             old_index: idx,
+            payload: item.clone().unbind(),
         };
         self_.get().record_operation(py, operation, self_)?;
 
@@ -704,9 +470,9 @@ impl NotifyingList {
             let item = py_list.get_item(index)?;
             Self::del_item_base(py_list, index)?;
 
-            let operation = Operation::Removed {
-                item: item.unbind(),
+            let operation = ContainerOperation::Removed {
                 old_index: index,
+                payload: item.unbind(),
             };
             self_.get().record_operation(py, operation, self_)?;
         }
@@ -738,10 +504,10 @@ impl NotifyingList {
         Self::del_item_base(py_list, from_index)?;
         py_list.insert(to_index, &item)?;
 
-        let operation = Operation::Moved {
-            item: item.unbind(),
+        let operation = ContainerOperation::Moved {
             from_index,
             to_index,
+            payload: item.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
@@ -763,9 +529,9 @@ impl NotifyingList {
 
         py_list.set_item(index, &valid)?;
 
-        let operation = Operation::Added {
-            item: valid.unbind(),
+        let operation = ContainerOperation::Added {
             index,
+            payload: valid.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
@@ -783,9 +549,9 @@ impl NotifyingList {
         let item = py_list.get_item(index)?;
         Self::del_item_base(py_list, index)?;
 
-        let operation = Operation::Removed {
-            item: item.unbind(),
+        let operation = ContainerOperation::Removed {
             old_index: index,
+            payload: item.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
@@ -807,9 +573,9 @@ impl NotifyingList {
             // Delete from the end backwards to maintain correct indices
             for (idx, item) in indices.into_iter().zip(items).rev() {
                 Self::del_item_base(py_list, idx)?;
-                let operation = Operation::Removed {
-                    item: item.unbind(),
+                let operation = ContainerOperation::Removed {
                     old_index: idx,
+                    payload: item.unbind(),
                 };
                 self_.get().record_operation(py, operation, self_)?;
             }
@@ -822,9 +588,9 @@ impl NotifyingList {
                     let item = item_py.bind(py);
                     py_list.append(item)?;
 
-                    let operation = Operation::Added {
-                        item: item_py.clone_ref(py),
+                    let operation = ContainerOperation::Added {
                         index: start_index + offset,
+                        payload: item_py.clone_ref(py),
                     };
                     self_.get().record_operation(py, operation, self_)?;
                 }
@@ -882,8 +648,7 @@ impl NotifyingList {
                 }),
                 member_name: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
-                notification_state: UnsafeCell::new(NotificationState::Normal),
-                pending_operations: UnsafeCell::new(Vec::new()),
+                notification_buffer: UnsafeCell::new(NotificationBuffer::new()),
             },
         )
     }
