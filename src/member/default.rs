@@ -51,9 +51,11 @@ impl DefaultBehavior {
                 object.repr()?
             ))),
             Self::Static { value } => Ok(value.clone_ref(member.py()).into_bound(member.py())),
-            Self::ValidatorDelegate { args, kwargs } => member
-                .validator
-                .create_default(args.bind(member.py()), kwargs),
+            Self::ValidatorDelegate { args, kwargs } => {
+                member
+                    .validator
+                    .create_default(None, None, args.bind(member.py()), kwargs)
+            }
             Self::Call { callable } => callable.0.bind(member.py()).call0(),
             Self::CallMemberObject { callable } => {
                 callable.0.bind(member.py()).call1((&member.name, object))
