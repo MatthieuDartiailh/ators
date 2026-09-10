@@ -911,7 +911,7 @@ impl MemberBuilder {
         factory_or_modules: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
-        
+
         let fc = if factory_or_modules.is_callable() {
             let py = factory_or_modules.py();
             let sig = py
