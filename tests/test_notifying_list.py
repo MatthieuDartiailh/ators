@@ -72,6 +72,22 @@ def test_notifying_list_context_manager_batches_operations():
     assert list(obj.items) == [1, 2, 3, 4, 5]
 
 
+def test_notifying_list_batch_buffer_is_shared_across_mutations():
+    obj = _ObservableNotifyingListOwner(items=[1])
+    changes = []
+    observe(obj, "items", changes.append)
+
+    with obj.items.batched_notifications():
+        obj.items.append(2)
+        obj.items.insert(0, 0)
+        obj.items.remove(1)
+
+    assert len(changes) == 1
+    assert type(changes[0]) is ContainerChange
+    assert list(changes[0].newvalue) == [0, 2]
+    assert len(changes[0].operations) == 3
+
+
 def test_notifying_list_move_item_emits_notification():
     obj = _ObservableNotifyingListOwner(items=[1, 2, 3])
     changes = []

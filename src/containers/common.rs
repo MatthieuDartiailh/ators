@@ -81,6 +81,11 @@ impl ContainerOperation {
 
 /// Shared change object for container mutations.
 /// Extends `AtorsChange` with a uniform operation list for list/map containers.
+///
+/// The `oldvalue` field is intentionally left as `None` for large mutable containers.
+/// This avoids copying the full container on every mutation while still emitting a
+/// stable delta payload; observers can reconstruct the previous state by replaying
+/// the reverse of the recorded `operations` when needed.
 #[pyclass(module = "ators._ators", extends=AtorsChange, subclass, frozen)]
 pub struct ContainerChange {
     #[pyo3(get)]
@@ -130,6 +135,19 @@ impl NotificationBuffer {
     pub(crate) fn push_operation(&mut self, operation: ContainerOperation) {
         if self.state == NotificationState::Batching {
             self.pending_operations.push(operation);
+        }
+    }
+
+    pub(crate) fn record_operation(
+        &mut self,
+        operation: ContainerOperation,
+    ) -> Option<ContainerOperation> {
+        match self.state {
+            NotificationState::Normal => Some(operation),
+            NotificationState::Batching => {
+                self.pending_operations.push(operation.clone());
+                None
+            }
         }
     }
 
@@ -185,4 +203,16 @@ pub(super) fn matches_assignment_context<'py>(
             (Some(stored), Some(current)) => stored.bind(current.py()).as_ptr() == current.as_ptr(),
             _ => false,
         }
+}
+
+pub(super) fn notification_context(
+    member_name_cell: &UnsafeCell<Option<String>>,
+    object_cell: &UnsafeCell<Option<Py<AtorsBase>>>,
+) -> Option<(Py<AtorsBase>, String)> {
+    let member_name = unsafe { &*member_name_cell.get() }
+        .as_deref()
+        .unwrap_or("")
+        .to_string();
+    let object = unsafe { &*object_cell.get() }.as_ref().cloned()?;
+    Some((object, member_name))
 }

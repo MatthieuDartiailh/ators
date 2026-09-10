@@ -16,7 +16,10 @@ use crate::{
     class::AtorsBase,
     containers::{
         AtorsDict, AtorsList, AtorsSet,
-        common::{ContainerOperation, NotificationBuffer, NotificationState},
+        common::{
+            ContainerOperation, NotificationBuffer, NotificationState, matches_assignment_context,
+            notification_context,
+        },
     },
     utils::error_on_minusone,
     validators::Validator,
@@ -128,15 +131,7 @@ impl NotifyingList {
         member_name: Option<&str>,
         object: Option<&Bound<'py, AtorsBase>>,
     ) -> bool {
-        // Safety: same as validate_item.
-        unsafe { &*self.member_name.get() }.as_deref() == member_name
-            && match (unsafe { &*self.object.get() }.as_ref(), object) {
-                (None, None) => true,
-                (Some(stored), Some(current)) => {
-                    stored.bind(current.py()).as_ptr() == current.as_ptr()
-                }
-                _ => false,
-            }
+        matches_assignment_context(&self.member_name, &self.object, member_name, object)
     }
 
     pub(crate) fn clone_for_assignment<'py>(
@@ -241,23 +236,14 @@ impl NotifyingList {
     ) -> PyResult<()> {
         let should_emit = with_critical_section(self_bound.as_any(), || unsafe {
             let buffer = &mut *self.notification_buffer.get();
-            match buffer.state {
-                NotificationState::Normal => true,
-                NotificationState::Batching => {
-                    buffer.push_operation(operation.clone());
-                    false
-                }
-            }
+            buffer.record_operation(operation.clone()).is_some()
         });
 
         if should_emit {
-            let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
+            let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+            else {
                 return Ok(());
             };
-            let member_name = unsafe { &*self.member_name.get() }
-                .as_deref()
-                .unwrap_or("")
-                .to_string();
             let py_list = unsafe { self_bound.cast_unchecked::<PyList>() };
             let newvalue: Py<PyAny> = py_list.clone().unbind().into();
             NotificationBuffer::emit_container_change(
@@ -279,13 +265,10 @@ impl NotifyingList {
         operations: Vec<ContainerOperation>,
         self_bound: &Bound<'py, NotifyingList>,
     ) -> PyResult<()> {
-        let Some(object) = unsafe { &*self.object.get() }.as_ref() else {
+        let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+        else {
             return Ok(());
         };
-        let member_name = unsafe { &*self.member_name.get() }
-            .as_deref()
-            .unwrap_or("")
-            .to_string();
         let py_list = unsafe { self_bound.cast_unchecked::<PyList>() };
         let newvalue: Py<PyAny> = py_list.clone().unbind().into();
         NotificationBuffer::emit_container_change(

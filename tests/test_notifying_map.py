@@ -69,6 +69,22 @@ def test_notifying_map_emits_change_events_and_batches():
     assert list(changes[-1].newvalue) == ["a"]
 
 
+def test_notifying_map_batch_buffer_is_shared_across_mutations():
+    obj = _ObservableNotifyingMapOwner(items={})
+    changes = []
+    observe(obj, "items", changes.append)
+
+    with obj.items.batched_notifications():
+        obj.items.add("a", 1)
+        obj.items.add("b", 2, before="a")
+        obj.items.move("b", None)
+
+    assert len(changes) == 1
+    assert isinstance(changes[0], ContainerChange)
+    assert list(changes[0].newvalue) == ["a", "b"]
+    assert len(changes[0].operations) == 3
+
+
 def test_notifying_map_respects_parent_notification_controls():
     obj = _ObservableNotifyingMapOwner(items={"a": 1})
     changes = []

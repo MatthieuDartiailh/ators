@@ -30,6 +30,24 @@ use crate::{
     },
 };
 
+fn validate_top_level_observable_container(
+    container_name: &str,
+    is_observable: bool,
+    is_nested: bool,
+) -> PyResult<()> {
+    if !is_observable {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{container_name} can only be used in observable classes"
+        )));
+    }
+    if is_nested {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "{container_name} can only be used as a top-level annotation, not inside a container"
+        )));
+    }
+    Ok(())
+}
+
 /// Information extracted while building a validator from an annotation.
 #[pyclass(module = "ators._ators", frozen, get_all, skip_from_py_object)]
 #[derive(Clone, Debug, Default)]
@@ -402,16 +420,7 @@ pub fn build_validator_from_annotation<'py>(
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<NotifyingList>()) {
-            if !is_observable {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "NotifyingList can only be used in observable classes",
-                ));
-            }
-            if is_nested {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "NotifyingList can only be used as a top-level annotation, not inside a container",
-                ));
-            }
+            validate_top_level_observable_container("NotifyingList", is_observable, is_nested)?;
             let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
                 let (item_validator, item_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-item")).cast()?,
@@ -440,16 +449,7 @@ pub fn build_validator_from_annotation<'py>(
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<NotifyingMap>()) {
-            if !is_observable {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "NotifyingMap can only be used in observable classes",
-                ));
-            }
-            if is_nested {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "NotifyingMap can only be used as a top-level annotation, not inside a container",
-                ));
-            }
+            validate_top_level_observable_container("NotifyingMap", is_observable, is_nested)?;
             let (key_val, key_requires_owner) = if let Ok(key_arg) = args.get_item(0) {
                 let (key_validator, key_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-key")).cast()?,
