@@ -244,13 +244,14 @@ pub fn create_ators_subclass<'py>(
     let typevar_bindings = take_pending_specialization_bindings_for_inputs(py, &name, &dct)?;
     let typevar_bindings_ref = typevar_bindings.as_ref().map(|tb| tb.bind(py));
 
-    // Single annotation pass: returns both member builders and event builders.
+    // Single annotation pass: returns both member and event builders.
     let (mut member_builders, mut event_builders) = generate_member_builders_from_cls_namespace(
         &name,
         &dct,
         type_containers,
         typevar_bindings_ref,
         validate_attr,
+        is_observable,
     )?;
 
     // Collect the new members defined in this class that require the owning

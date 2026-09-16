@@ -15,6 +15,7 @@ use std::cell::UnsafeCell;
 
 use crate::class::info::{ClassMutability, get_class_info};
 use crate::class::r#ref::unregister_ators_instance;
+use crate::containers::{NotifyingList, NotifyingMap};
 use crate::event::{Event, EventCustomizationTool};
 use crate::get_type_mutability_map;
 use crate::member::{Member, MemberCustomizationTool, member_coerce_init};
@@ -311,6 +312,18 @@ impl AtorsBase {
                         AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
                     }
                 }
+                TypeValidator::NotifyingList {
+                    item: Some(item_bv),
+                } => {
+                    if let Ok(alist) = value.cast::<NotifyingList>() {
+                        NotifyingList::restore(
+                            alist,
+                            (*item_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
                 TypeValidator::Set {
                     item: Some(item_bv),
                 } => {
@@ -324,6 +337,20 @@ impl AtorsBase {
                     if let Ok(adict) = value.cast::<AtorsDict>() {
                         AtorsDict::restore(
                             adict,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                        );
+                    }
+                }
+                TypeValidator::NotifyingMap {
+                    key: Some(key_bv),
+                    value: Some(val_bv),
+                } => {
+                    if let Ok(amap) = value.cast::<NotifyingMap>() {
+                        NotifyingMap::restore(
+                            amap,
                             (*key_bv.0).clone(),
                             (*val_bv.0).clone(),
                             Some(mb.name()),

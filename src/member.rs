@@ -740,14 +740,12 @@ impl MemberBuilder {
         value_validator: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
-        {
-            let b = value_validator.cast::<ValueValidator>()?;
-            if let Some(vv) = &mut mself.value_validators {
-                vv.push(b.as_any().extract()?);
-            } else {
-                mself.value_validators.replace(vec![b.as_any().extract()?]);
-            }
-        };
+        let b = value_validator.cast::<ValueValidator>()?;
+        if let Some(vv) = &mut mself.value_validators {
+            vv.push(b.as_any().extract()?);
+        } else {
+            mself.value_validators.replace(vec![b.as_any().extract()?]);
+        }
         Ok(self_)
     }
 
@@ -769,10 +767,8 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        {
-            let b = pre_getattr.cast::<PreGetattrBehavior>()?;
-            mself.pre_getattr = Some(b.as_any().extract()?)
-        }
+        let b = pre_getattr.cast::<PreGetattrBehavior>()?;
+        mself.pre_getattr = Some(b.as_any().extract()?);
         self_.into_bound_py_any(py)
     }
 
@@ -794,10 +790,8 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        {
-            let b = post_getattr.cast::<PostGetattrBehavior>()?;
-            mself.post_getattr = Some(b.as_any().extract()?)
-        }
+        let b = post_getattr.cast::<PostGetattrBehavior>()?;
+        mself.post_getattr = Some(b.as_any().extract()?);
         self_.into_bound_py_any(py)
     }
 
@@ -818,10 +812,8 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        {
-            let b = pre_setattr.cast::<PreSetattrBehavior>()?;
-            mself.pre_setattr = Some(b.as_any().extract()?)
-        }
+        let b = pre_setattr.cast::<PreSetattrBehavior>()?;
+        mself.pre_setattr = Some(b.as_any().extract()?);
         self_.into_bound_py_any(py)
     }
 
@@ -856,10 +848,8 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        {
-            let b = post_setattr.cast::<PostSetattrBehavior>()?;
-            mself.post_setattr = Some(b.as_any().extract()?)
-        }
+        let b = post_setattr.cast::<PostSetattrBehavior>()?;
+        mself.post_setattr = Some(b.as_any().extract()?);
         self_.into_bound_py_any(py)
     }
 
@@ -911,7 +901,6 @@ impl MemberBuilder {
         factory_or_modules: Bound<'py, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
-
         let fc = if factory_or_modules.is_callable() {
             let py = factory_or_modules.py();
             let sig = py

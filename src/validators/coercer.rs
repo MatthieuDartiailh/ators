@@ -179,6 +179,84 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
+                TypeValidator::NotifyingList { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    // For coercion, we just create a PyList with coerced items
+                    // The actual NotifyingList will be created in validate_type()
+                    PyList::new(
+                        py,
+                        temp
+                        .try_iter()?
+                        .map(|v| -> PyResult<Bound<'py, PyAny>> {
+                                if let Some(item_validator) = item {
+                                    self.coerce_value(is_init_coercion, &item_validator.type_validator, name, object, &v?)
+                                }
+                                else {
+                                    v
+                                }
+                            }
+                        )
+                        .collect::<PyResult<Vec<_>>>()?
+                    ).map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::NotifyingMap { key, value: value_validator } => {
+                    let coerced = PyDict::new(py);
+                    if let Ok(t) = value.cast::<PyDict>() {
+                        for (k, v) in t.iter() {
+                            let ck = if let Some(key_validator) = key {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                )?
+                            } else {
+                                k.clone()
+                            };
+                            let cv = if let Some(val_validator) = value_validator {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                )?
+                            } else {
+                                v.clone()
+                            };
+                            coerced.set_item(ck, cv)?;
+                        }
+                    } else if let Ok(tm) = value.cast::<PyMapping>() {
+                        for i in tm.items()?.iter() {
+                            let (k, v) = i.extract()?;
+                            let ck = if let Some(key_validator) = key {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                )?
+                            } else {
+                                k
+                            };
+                            let cv = if let Some(val_validator) = value_validator {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                )?
+                            } else {
+                                v
+                            };
+                            coerced.set_item(ck, cv)?;
+                        }
+                    }
+                    Ok(coerced.as_any().clone())
+                },
                 TypeValidator::Dict { items } => {
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {
