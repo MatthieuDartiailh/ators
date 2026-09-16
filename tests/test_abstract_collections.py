@@ -11,8 +11,11 @@ import warnings
 from collections import UserDict, UserList
 from collections.abc import (
     Collection,
+    Container,
     Mapping,
+    Reversible,
     Sequence,
+    Set,
 )
 from types import MappingProxyType
 
@@ -193,6 +196,105 @@ def test_mapping_returns_original_value(mapping_holder):
     original = {"a": 1}
     mapping_holder.m = original
     assert mapping_holder.m is original
+
+
+# -------------------------------------------------------------------------------------
+# Block A/C/G: additional non-mutable ABCs
+# -------------------------------------------------------------------------------------
+
+
+class ContainerHolder(Ators):
+    c: Container[int] = member()
+    c_bare: Container = member()
+
+
+@pytest.fixture()
+def container_holder():
+    return ContainerHolder(c=[1, 2, 3], c_bare={1, 2, 3})
+
+
+def test_container_list_ok(container_holder):
+    container_holder.c = [1, 2, 3]
+
+
+def test_container_set_ok(container_holder):
+    container_holder.c = {1, 2, 3}
+
+
+def test_container_item_validation_error(container_holder):
+    with pytest.raises(TypeError):
+        container_holder.c = [1, "x"]
+
+
+def test_container_bare_no_validation(container_holder):
+    container_holder.c_bare = [1, "x", None]
+    container_holder.c_bare = {"a": 1}
+
+
+class SetHolder(Ators):
+    s: Set[int] = member()
+    s_bare: Set = member()
+
+
+@pytest.fixture()
+def set_holder():
+    return SetHolder(s={1, 2, 3}, s_bare={1, 2, 3})
+
+
+def test_set_ok(set_holder):
+    set_holder.s = {4, 5, 6}
+
+
+def test_frozenset_ok(set_holder):
+    set_holder.s = frozenset({4, 5, 6})
+
+
+def test_set_item_validation_error(set_holder):
+    with pytest.raises(TypeError):
+        set_holder.s = {1, "x"}
+
+
+def test_set_bare_no_validation(set_holder):
+    set_holder.s_bare = {1, "x", None}
+    set_holder.s_bare = frozenset({"a", "b"})
+
+
+def test_set_non_set_rejected(set_holder):
+    with pytest.raises(TypeError):
+        set_holder.s = [1, 2, 3]
+
+
+class ReversibleHolder(Ators):
+    r: Reversible[int] = member()
+    r_bare: Reversible = member()
+
+
+@pytest.fixture()
+def reversible_holder():
+    return ReversibleHolder(r=(1, 2, 3), r_bare=(1, 2, 3))
+
+
+def test_reversible_tuple_ok(reversible_holder):
+    reversible_holder.r = (4, 5, 6)
+
+
+def test_reversible_range_ok(reversible_holder):
+    reversible_holder.r = range(5)
+
+
+def test_reversible_item_validation_error(reversible_holder):
+    with pytest.raises(TypeError):
+        reversible_holder.r = (1, "x")
+
+
+def test_reversible_bare_no_validation(reversible_holder):
+    reversible_holder.r_bare = [1, "x", None]
+    reversible_holder.r_bare = range(3)
+
+
+def test_reversible_non_reversible_rejected(reversible_holder):
+    with pytest.raises(TypeError):
+        reversible_holder.r = {1, 2, 3}
 
 
 # -------------------------------------------------------------------------------------
@@ -399,16 +501,22 @@ def test_parametrized_subclass_mapping_ok(parametrized_subclass_holder):
     parametrized_subclass_holder.mp = MyMapParametrized({"b": 2})
 
 
-def test_parametrized_subclass_mapping_item_validation_key(parametrized_subclass_holder):
+def test_parametrized_subclass_mapping_item_validation_key(
+    parametrized_subclass_holder,
+):
     """Explicit Mapping[K, V] binding validates keys match type parameter."""
     with pytest.raises(TypeError):
         parametrized_subclass_holder.mp = MyMapParametrized({1: 2})  # key should be str
 
 
-def test_parametrized_subclass_mapping_item_validation_value(parametrized_subclass_holder):
+def test_parametrized_subclass_mapping_item_validation_value(
+    parametrized_subclass_holder,
+):
     """Explicit Mapping[K, V] binding validates values match type parameter."""
     with pytest.raises(TypeError):
-        parametrized_subclass_holder.mp = MyMapParametrized({"a": "x"})  # value should be int
+        parametrized_subclass_holder.mp = MyMapParametrized(
+            {"a": "x"}
+        )  # value should be int
 
 
 def test_parametrized_subclass_no_userwarning_emitted():

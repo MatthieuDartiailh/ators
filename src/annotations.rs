@@ -57,8 +57,11 @@ pub(crate) struct PyTypes<'py> {
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
     abc_sequence: Bound<'py, PyAny>,
+    abc_container: Bound<'py, PyAny>,
     abc_collection: Bound<'py, PyAny>,
+    abc_set: Bound<'py, PyAny>,
     abc_mapping: Bound<'py, PyAny>,
+    abc_reversible: Bound<'py, PyAny>,
     // FIXME defaultdict
 }
 
@@ -107,8 +110,11 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
             abc_sequence: abc_mod.getattr(intern!(py, "Sequence"))?,
+            abc_container: abc_mod.getattr(intern!(py, "Container"))?,
             abc_collection: abc_mod.getattr(intern!(py, "Collection"))?,
+            abc_set: abc_mod.getattr(intern!(py, "Set"))?,
             abc_mapping: abc_mod.getattr(intern!(py, "Mapping"))?,
+            abc_reversible: abc_mod.getattr(intern!(py, "Reversible"))?,
         },
     })
 }
@@ -174,12 +180,18 @@ fn extract_protocol_from_orig_bases<'py>(
         // Check if the base itself (when bare) is an ABC protocol
         let is_bare_abc_protocol = base.is(&tools.types.abc_mapping)
             || base.is(&tools.types.abc_sequence)
-            || base.is(&tools.types.abc_collection);
+            || base.is(&tools.types.abc_container)
+            || base.is(&tools.types.abc_collection)
+            || base.is(&tools.types.abc_set)
+            || base.is(&tools.types.abc_reversible);
 
         // Check if the origin (for parameterized bases) is an ABC protocol
         let is_abc_protocol = base_origin.is(&tools.types.abc_mapping)
             || base_origin.is(&tools.types.abc_sequence)
-            || base_origin.is(&tools.types.abc_collection);
+            || base_origin.is(&tools.types.abc_container)
+            || base_origin.is(&tools.types.abc_collection)
+            || base_origin.is(&tools.types.abc_set)
+            || base_origin.is(&tools.types.abc_reversible);
 
         if is_bare_abc_protocol {
             // Bare protocol base like `class MySeq[T](Sequence)`
@@ -511,6 +523,32 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(TypeValidator::Sequence { item: item_val }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(&tools.types.abc_container) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::Container { item: item_val },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
         } else if origin.is(&tools.types.abc_collection) {
             let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
                 let (item_validator, item_info) = build_validator_from_annotation(
@@ -535,6 +573,27 @@ pub fn build_validator_from_annotation<'py>(
                     None,
                     None,
                 ),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(&tools.types.abc_set) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(TypeValidator::Set { item: item_val }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.abc_mapping) {
@@ -570,6 +629,32 @@ pub fn build_validator_from_annotation<'py>(
                     TypeValidator::Mapping {
                         items: items_validator,
                     },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(&tools.types.abc_reversible) {
+            let (item_val, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::Reversible { item: item_val },
                     None,
                     None,
                     None,
@@ -619,7 +704,10 @@ pub fn build_validator_from_annotation<'py>(
                 let should_use_type_args = protocol_base_opt.as_ref().map_or(true, |p| {
                     !p.is(&tools.types.abc_mapping)
                         && !p.is(&tools.types.abc_sequence)
+                        && !p.is(&tools.types.abc_container)
                         && !p.is(&tools.types.abc_collection)
+                        && !p.is(&tools.types.abc_set)
+                        && !p.is(&tools.types.abc_reversible)
                 });
 
                 if origin_type.is_subclass(&tools.types.abc_mapping)? {
@@ -715,6 +803,42 @@ pub fn build_validator_from_annotation<'py>(
                         ),
                         ValidatorBuildInfo { requires_owner },
                     ));
+                } else if origin_type.is_subclass(&tools.types.abc_container)? {
+                    let (item_val, requires_owner) = if should_use_type_args
+                        && let Ok(item_arg) = args.get_item(0)
+                    {
+                        let (item_validator, item_info) = build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-item")).cast()?,
+                            &item_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                            typevar_bindings,
+                        )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Container. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
+                        (
+                            Some(BoxedValidator::from(item_validator)),
+                            item_info.requires_owner,
+                        )
+                    } else {
+                        (None, false)
+                    };
+                    return Ok((
+                        Validator::new(
+                            TypeValidator::Container { item: item_val },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner },
+                    ));
                 } else if origin_type.is_subclass(&tools.types.abc_collection)? {
                     let (item_val, requires_owner) = if should_use_type_args
                         && let Ok(item_arg) = args.get_item(0)
@@ -745,6 +869,73 @@ pub fn build_validator_from_annotation<'py>(
                     return Ok((
                         Validator::new(
                             TypeValidator::Collection { item: item_val },
+                            None,
+                            None,
+                            None,
+                        ),
+                        ValidatorBuildInfo { requires_owner },
+                    ));
+                } else if origin_type.is_subclass(&tools.types.abc_set)? {
+                    let (item_val, requires_owner) = if should_use_type_args
+                        && let Ok(item_arg) = args.get_item(0)
+                    {
+                        let (item_validator, item_info) = build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-item")).cast()?,
+                            &item_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                            typevar_bindings,
+                        )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Set. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
+                        (
+                            Some(BoxedValidator::from(item_validator)),
+                            item_info.requires_owner,
+                        )
+                    } else {
+                        (None, false)
+                    };
+                    return Ok((
+                        Validator::new(TypeValidator::Set { item: item_val }, None, None, None),
+                        ValidatorBuildInfo { requires_owner },
+                    ));
+                } else if origin_type.is_subclass(&tools.types.abc_reversible)? {
+                    let (item_val, requires_owner) = if should_use_type_args
+                        && let Ok(item_arg) = args.get_item(0)
+                    {
+                        let (item_validator, item_info) = build_validator_from_annotation(
+                            PyString::new(py, &format!("{name}-item")).cast()?,
+                            &item_arg,
+                            type_containers,
+                            tools,
+                            ctx_provider,
+                            typevar_bindings,
+                        )?;
+                        if is_mutable_container(&item_validator.type_validator, py) {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Cannot use mutable container {} as item type for Reversible. \
+                                 Mutable containers (list, dict, set) cannot be used in abstract collections \
+                                 because ators cannot insert wrapped versions inside them.",
+                                item_arg.repr()?
+                            )));
+                        }
+                        (
+                            Some(BoxedValidator::from(item_validator)),
+                            item_info.requires_owner,
+                        )
+                    } else {
+                        (None, false)
+                    };
+                    return Ok((
+                        Validator::new(
+                            TypeValidator::Reversible { item: item_val },
                             None,
                             None,
                             None,
@@ -1131,6 +1322,26 @@ pub fn build_validator_from_annotation<'py>(
                         requires_owner: false,
                     },
                 ));
+            } else if ty.is_subclass(&tools.types.abc_container)? {
+                if let Some((protocol_ann, bindings)) =
+                    extract_protocol_from_orig_bases(&ty, tools)?
+                {
+                    let typevar_bindings = bindings.as_ref();
+                    return build_validator_from_annotation(
+                        name,
+                        &protocol_ann,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    );
+                }
+                return Ok((
+                    Validator::new(TypeValidator::Container { item: None }, None, None, None),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ));
             } else if ty.is_subclass(&tools.types.abc_collection)? {
                 // Try to extract generic parameters from __orig_bases__ for custom subclasses
                 if let Some((protocol_ann, bindings)) =
@@ -1150,6 +1361,46 @@ pub fn build_validator_from_annotation<'py>(
                 }
                 return Ok((
                     Validator::new(TypeValidator::Collection { item: None }, None, None, None),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ));
+            } else if ty.is_subclass(&tools.types.abc_set)? {
+                if let Some((protocol_ann, bindings)) =
+                    extract_protocol_from_orig_bases(&ty, tools)?
+                {
+                    let typevar_bindings = bindings.as_ref();
+                    return build_validator_from_annotation(
+                        name,
+                        &protocol_ann,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    );
+                }
+                return Ok((
+                    Validator::new(TypeValidator::Set { item: None }, None, None, None),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ));
+            } else if ty.is_subclass(&tools.types.abc_reversible)? {
+                if let Some((protocol_ann, bindings)) =
+                    extract_protocol_from_orig_bases(&ty, tools)?
+                {
+                    let typevar_bindings = bindings.as_ref();
+                    return build_validator_from_annotation(
+                        name,
+                        &protocol_ann,
+                        type_containers,
+                        tools,
+                        ctx_provider,
+                        typevar_bindings,
+                    );
+                }
+                return Ok((
+                    Validator::new(TypeValidator::Reversible { item: None }, None, None, None),
                     ValidatorBuildInfo {
                         requires_owner: false,
                     },
@@ -1521,7 +1772,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                     if ann.is(&tools.types.abc_sequence) || origin.is(&tools.types.abc_sequence) {
                         return Ok(Some("Sequence"));
                     }
-                    if ann.is(&tools.types.abc_collection) || origin.is(&tools.types.abc_collection) {
+                    if ann.is(&tools.types.abc_collection) || origin.is(&tools.types.abc_collection)
+                    {
                         return Ok(Some("Collection"));
                     }
                     if let Ok(origin_type) = origin.cast::<PyType>() {

@@ -1170,8 +1170,11 @@ impl MemberBuilder {
         if (self.coerce.is_some() || self.coerce_init.is_some())
             && let Some(type_name_str) = (match &tv {
                 TypeValidator::Sequence { .. } => Some("Sequence"),
+                TypeValidator::Container { .. } => Some("Container"),
                 TypeValidator::Collection { .. } => Some("Collection"),
+                TypeValidator::Set { .. } => Some("Set"),
                 TypeValidator::Mapping { .. } => Some("Mapping"),
+                TypeValidator::Reversible { .. } => Some("Reversible"),
                 _ => None,
             })
         {

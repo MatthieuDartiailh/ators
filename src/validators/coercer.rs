@@ -258,11 +258,13 @@ impl Coercer {
                     type_.bind(py).call1((value,))
                 }
                 TypeValidator::Sequence { .. }
+                | TypeValidator::Container { .. }
                 | TypeValidator::Collection { .. }
-                | TypeValidator::Mapping { .. } => Err(
+                | TypeValidator::Mapping { .. }
+                | TypeValidator::Reversible { .. } => Err(
                     pyo3::exceptions::PyTypeError::new_err(
                         "Cannot coerce a value to an abstract collection type \
-                         (Sequence, Collection, or Mapping). Assign a concrete value instead."
+                         (Sequence, Container, Collection, Mapping, or Reversible). Assign a concrete value instead."
                     )
                 ),
             },
