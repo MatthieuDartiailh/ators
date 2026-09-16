@@ -205,7 +205,8 @@ pub(super) fn matches_assignment_context<'py>(
         }
 }
 
-pub(super) fn notification_context(
+pub(super) fn notification_context<'py>(
+    py: Python<'py>,
     member_name_cell: &UnsafeCell<Option<String>>,
     object_cell: &UnsafeCell<Option<Py<AtorsBase>>>,
 ) -> Option<(Py<AtorsBase>, String)> {
@@ -213,6 +214,6 @@ pub(super) fn notification_context(
         .as_deref()
         .unwrap_or("")
         .to_string();
-    let object = unsafe { &*object_cell.get() }.as_ref().cloned()?;
+    let object = unsafe { &*object_cell.get() }.as_ref()?.clone_ref(py);
     Some((object, member_name))
 }

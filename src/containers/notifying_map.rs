@@ -202,7 +202,7 @@ impl NotifyingMap {
         operation: ContainerOperation,
         self_bound: &Bound<'py, NotifyingMap>,
     ) -> PyResult<()> {
-        let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+        let Some((object, member_name)) = notification_context(py, &self.member_name, &self.object)
         else {
             return Ok(());
         };
@@ -254,7 +254,8 @@ impl NotifyingMap {
         });
 
         if !operations.is_empty() {
-            let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+            let Some((object, member_name)) =
+                notification_context(py, &self.member_name, &self.object)
             else {
                 return Ok(());
             };

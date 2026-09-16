@@ -240,7 +240,8 @@ impl NotifyingList {
         });
 
         if should_emit {
-            let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+            let Some((object, member_name)) =
+                notification_context(py, &self.member_name, &self.object)
             else {
                 return Ok(());
             };
@@ -265,7 +266,7 @@ impl NotifyingList {
         operations: Vec<ContainerOperation>,
         self_bound: &Bound<'py, NotifyingList>,
     ) -> PyResult<()> {
-        let Some((object, member_name)) = notification_context(&self.member_name, &self.object)
+        let Some((object, member_name)) = notification_context(py, &self.member_name, &self.object)
         else {
             return Ok(());
         };
