@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test ators object containers validation behavior."""
 
+from collections import defaultdict
 from contextlib import nullcontext
 from types import MappingProxyType
 
@@ -120,12 +121,17 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
+@pytest.fixture(params=[dict[str, int], defaultdict[str, int]], ids=["dict", "defaultdict"])
+def dict_annotation(request):
+    return request.param
+
+
 @pytest.fixture()
-def ators_dict_object():
+def ators_dict_object(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     return A(a={"a": 2})
 
@@ -208,11 +214,11 @@ def test_set_same_owner_member_reassignment_copies_container():
     assert type(obj.a) is type(original)
 
 
-def test_dict_same_owner_member_reassignment_copies_container():
+def test_dict_same_owner_member_reassignment_copies_container(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     obj = A(a={"a": 1, "b": 2})
     original = obj.a
@@ -235,3 +241,80 @@ def test_list_reassignment_to_other_member_still_validates():
 
     with pytest.raises(TypeError):
         obj.strs = obj.ints  # type: ignore
+
+
+def test_dict_assignment_from_dict_and_copy_on_reassignment(dict_annotation):
+    from ators import Ators
+
+    class A(Ators):
+        a: dict_annotation
+
+    obj = A(a={"a": 1, "b": 2})
+    source = {"x": 10}
+    obj.a = source
+    source["y"] = 20
+    assert dict(obj.a) == {"x": 10}
+
+    original = obj.a
+    obj.a = original
+    assert obj.a == {"x": 10}
+    assert obj.a is not original
+    obj.a["z"] = 30
+    assert "z" not in original
+
+
+def test_defaultdict_missing_scalar_default():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={})
+    assert obj.a["missing"] == 0
+    assert obj.a["missing"] == 0
+    assert dict(obj.a) == {"missing": 0}
+    with pytest.raises(TypeError):
+        _ = obj.a[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_nested_defaults_and_validation():
+    from ators import Ators
+
+    class A(Ators):
+        lists: defaultdict[str, list[int]]
+        sets: defaultdict[str, set[int]]
+        dicts: defaultdict[str, dict[str, int]]
+        nested: defaultdict[str, defaultdict[str, int]]
+
+    obj = A(lists={}, sets={}, dicts={}, nested={})
+
+    obj.lists["k"].append(1)
+    with pytest.raises(TypeError):
+        obj.lists["k"].append("bad")
+
+    obj.sets["k"].add(1)
+    with pytest.raises(TypeError):
+        obj.sets["k"].add("bad")
+
+    obj.dicts["k"]["x"] = 1
+    with pytest.raises(TypeError):
+        obj.dicts["k"]["x"] = "bad"
+
+    assert obj.nested["outer"]["inner"] == 0
+    with pytest.raises(TypeError):
+        _ = obj.nested[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_typed_default_requires_nullary_ctor():
+    from ators import Ators
+
+    class RequiresArg:
+        def __init__(self, value):
+            self.value = value
+
+    class A(Ators):
+        a: defaultdict[str, RequiresArg]
+
+    obj = A(a={})
+    with pytest.raises(TypeError):
+        _ = obj.a["missing"]

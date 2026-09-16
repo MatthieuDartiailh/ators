@@ -9,7 +9,8 @@
 
 from abc import ABC
 from annotationlib import ForwardRef
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from collections import defaultdict
+from typing import TYPE_CHECKING, Any, DefaultDict, Literal, TypeVar
 
 import pytest
 
@@ -87,6 +88,18 @@ type MyInt = int
         (set[int], [set(), {1}], [1, (), {1, "a"}], False),
         (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
+        (
+            defaultdict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
+        (
+            DefaultDict[int, int],
+            [{}, {1: 1}, defaultdict(int, {1: 1})],
+            [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
         # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
         (CustomBase, [CustomObj()], ["", 1, object()], False),
@@ -240,6 +253,17 @@ def test_inherited_type_validator():
     assert b.a == 5
     with pytest.raises(TypeError):
         b.a = ""
+
+
+@pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
+def test_bare_defaultdict_annotation_is_rejected(annotation):
+    with pytest.raises(TypeError, match="Failed to configure Member a from annotation") as exc_info:
+
+        class A(Ators):
+            a: annotation = member()
+
+    assert exc_info.value.__cause__ is not None
+    assert "bare defaultdict" in str(exc_info.value.__cause__)
 
 
 class GenericBox[T](Ators):
