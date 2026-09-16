@@ -16,9 +16,7 @@ use crate::{
     class::AtorsBase,
     containers::{
         ContainerOperation,
-        common::{
-            NotificationBuffer, NotificationState, matches_assignment_context, notification_context,
-        },
+        common::{NotificationBuffer, matches_assignment_context, notification_context},
     },
     validators::Validator,
 };
@@ -371,13 +369,130 @@ impl NotifyingMap {
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = self_.py();
+        let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
         let dict = self_.get().values_bound(py);
-        if dict.get_item(key)?.is_some() {
-            let (valid_key, valid_value) = self_.get().validate_item(py, key, value)?;
+        if dict.get_item(&valid_key)?.is_some() {
+            let old_value = dict
+                .get_item(&valid_key)?
+                .expect("stored key must still exist");
+            let index =
+                NotifyingMap::order_index(unsafe { &*self_.get().order.get() }, &valid_key, py)
+                    .expect("stored key must still exist in order metadata");
             dict.set_item(&valid_key, &valid_value)?;
-            return Ok(());
+            let operation = ContainerOperation::Replaced {
+                index,
+                old_value: PyTuple::new(py, [valid_key.clone(), old_value.clone()])?
+                    .into_any()
+                    .unbind(),
+                new_value: PyTuple::new(py, [valid_key.clone(), valid_value.clone()])?
+                    .into_any()
+                    .unbind(),
+            };
+            return self_.get().record_operation(py, operation, self_);
         }
-        NotifyingMap::add(self_, key, value, None)
+        NotifyingMap::add(self_, &valid_key, &valid_value, None)
+    }
+
+    #[pyo3(signature = (key, default=None))]
+    fn get<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        key: &Bound<'py, PyAny>,
+        default: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = self_.py();
+        let valid_key = self_.get().validate_key(py, key)?;
+        let dict = self_.get().values_bound(py);
+        match dict.get_item(&valid_key)? {
+            Some(value) => Ok(value),
+            None => match default {
+                Some(value) => Ok(value.clone()),
+                None => Ok(py.None().into_bound(py)),
+            },
+        }
+    }
+
+    #[pyo3(signature = (key, default=None))]
+    fn setdefault<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        key: &Bound<'py, PyAny>,
+        default: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = self_.py();
+        let valid_key = self_.get().validate_key(py, key)?;
+        let dict = self_.get().values_bound(py);
+        if let Some(existing) = dict.get_item(&valid_key)? {
+            return Ok(existing);
+        }
+
+        let default_value = default
+            .map(|value| self_.get().validate_value(py, value))
+            .transpose()?
+            .unwrap_or_else(|| py.None().into_bound(py));
+
+        NotifyingMap::add(self_, &valid_key, &default_value, None)?;
+        Ok(default_value)
+    }
+
+    #[pyo3(signature = (other=None, **kwargs))]
+    fn update<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        other: Option<&Bound<'py, PyAny>>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<()> {
+        let py = self_.py();
+
+        if let Some(other) = other {
+            if let Ok(mapping) = other.cast::<PyDict>() {
+                for (key, value) in mapping.iter() {
+                    self_.get().validate_item(py, &key, &value)?;
+                    NotifyingMap::__setitem__(self_, &key, &value)?;
+                }
+            } else if other.hasattr(intern!(py, "keys"))? {
+                let keys = other.call_method0(intern!(py, "keys"))?;
+                for key in keys.try_iter()? {
+                    let key = key?;
+                    let value = other.getattr(intern!(py, "__getitem__"))?.call1((&key,))?;
+                    self_.get().validate_item(py, &key, &value)?;
+                    NotifyingMap::__setitem__(self_, &key, &value)?;
+                }
+            } else {
+                for item in other.try_iter()? {
+                    let (key, value) = item?.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
+                    self_.get().validate_item(py, &key, &value)?;
+                    NotifyingMap::__setitem__(self_, &key, &value)?;
+                }
+            }
+        }
+
+        if let Some(kwargs) = kwargs {
+            for (key, value) in kwargs.iter() {
+                self_.get().validate_item(py, &key, &value)?;
+                NotifyingMap::__setitem__(self_, &key, &value)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[pyo3(signature = (key, default=None))]
+    fn pop<'py>(
+        self_: &Bound<'py, NotifyingMap>,
+        key: &Bound<'py, PyAny>,
+        default: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = self_.py();
+        let valid_key = self_.get().validate_key(py, key)?;
+        let dict = self_.get().values_bound(py);
+        match dict.get_item(&valid_key)? {
+            Some(_) => NotifyingMap::remove(self_, &valid_key),
+            None => match default {
+                Some(value) => Ok(value.clone()),
+                None => {
+                    let key_repr = NotifyingMap::key_to_string(&valid_key)?;
+                    Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(key_repr))
+                }
+            },
+        }
     }
 
     fn __delitem__<'py>(self_: &Bound<'py, NotifyingMap>, key: &Bound<'py, PyAny>) -> PyResult<()> {

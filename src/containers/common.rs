@@ -173,12 +173,6 @@ impl NotificationBuffer {
         std::mem::take(&mut self.pending_operations)
     }
 
-    pub(crate) fn push_operation(&mut self, operation: ContainerOperation) {
-        if self.state == NotificationState::Batching {
-            self.pending_operations.push(operation);
-        }
-    }
-
     pub(crate) fn record_operation(
         &mut self,
         operation: ContainerOperation,
