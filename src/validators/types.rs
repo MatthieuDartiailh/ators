@@ -340,10 +340,11 @@ pub enum TypeValidator {
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
     },
-    #[pyo3(constructor = (params, return_type))]
+    #[pyo3(constructor = (params, return_type, variadic))]
     Callable {
         params: Vec<Py<PyAny>>,
         return_type: Option<Py<PyAny>>,
+        variadic: bool,
     },
     // Sequence,
     // List,
@@ -1017,6 +1018,7 @@ impl TypeValidator {
             Self::Callable {
                 params,
                 return_type,
+                variadic,
             } => {
                 let py = value.py();
                 // Check if value is callable
@@ -1055,7 +1057,7 @@ impl TypeValidator {
                 let param_values = sig_params.call_method0(pyo3::intern!(py, "values"))?;
                 let param_list: Vec<_> = param_values.try_iter()?.collect::<PyResult<_>>()?;
 
-                if !params.is_empty() && param_list.len() != params.len() {
+                if !*variadic && param_list.len() != params.len() {
                     if let Some(m) = name
                         && let Some(o) = object
                     {
@@ -1075,7 +1077,7 @@ impl TypeValidator {
                     }
                 }
 
-                if !params.is_empty() {
+                if !*variadic {
                     let empty_annotation = py
                         .import(pyo3::intern!(py, "inspect"))?
                         .getattr(pyo3::intern!(py, "Parameter"))?
@@ -1354,6 +1356,7 @@ impl TypeValidator {
             Self::Callable {
                 params: _,
                 return_type: _,
+                variadic: _,
             } => Mutability::Undecidable,
         }
     }
@@ -1402,11 +1405,13 @@ impl Clone for TypeValidator {
             Self::Callable {
                 params,
                 return_type,
+                variadic,
             } => Self::Callable {
                 params: params.iter().map(|p| p.clone_ref(py)).collect(),
                 return_type: return_type
                     .as_ref()
                     .map(|rt| rt.clone_ref(py)),
+                variadic: *variadic,
             },
         })
     }

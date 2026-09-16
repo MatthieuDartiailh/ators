@@ -297,8 +297,6 @@ def test_validated_positional_only_change_arg_and_default() -> None:
     for inner_exc in exc.value.exceptions:
         assert isinstance(inner_exc, TypeError)
 
-
-<<<<<<< HEAD
 def test_validated_positional_only_change_followed_by_unannotated() -> None:
 
     @validated
@@ -318,8 +316,6 @@ def test_validated_positional_only_change_arg_second() -> None:
     assert f(1, [42]) == 2
     assert f(1, [100]) == 2
 
-
-<<<<<<< HEAD
 def test_validated_positional_only_change_default_arg() -> None:
 
     @validated
@@ -344,8 +340,6 @@ def test_validated_positional_only_bad_default() -> None:
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
 
-
-<<<<<<< HEAD
 def test_validated_positional_only_aggregate_errors_false() -> None:
     """Test aggregate_errors=False with multiple positional-only args (early return)."""
 
@@ -440,8 +434,6 @@ def test_validation_positional_or_keyword_change_arg_second() -> None:
     assert f(1, items=[10, 20]) == 31
     assert f(x=2, items=[10, 20]) == 32
 
-
-<<<<<<< HEAD
 def test_validated_positional_or_keyword_change_default_arg() -> None:
 
     @validated
@@ -540,7 +532,6 @@ def test_validated_keyword_only_change_arg_second() -> None:
     assert f(y=2, x=[10, 20]) == 4
 
 
-<<<<<<< HEAD
 def test_validated_keyword_only_change_default_arg() -> None:
 
     @validated
@@ -898,7 +889,6 @@ def test_validated_return_error_preserves_original_context() -> None:
     assert "Expected a" in original_error or "list" in original_error
 
 
-<<<<<<< HEAD
 # ============================================================================
 # Tests for Missing Required Arguments
 # ============================================================================
@@ -1191,124 +1181,3 @@ def test_validated_missing_required_keyword_only_primary() -> None:
     error_msg = str(exc.value)
     assert "missing" in error_msg.lower()
     assert "required" in error_msg
-=======
-# ---------------------------------------------------------------------------
-# Callable Variance Tests with @validated Integration
-# ---------------------------------------------------------------------------
-# These tests verify that variance-aware callable validation works with
-# the @validated decorator when callables are used as parameters or return types.
-
-
-# class Animal:
-#     pass
-
-
-# class Dog(Animal):
-#     pass
-
-
-# def test_validated_callable_contravariance_with_decorator():
-#     """Test contravariant parameter acceptance in @validated decorator"""
-
-#     @validated
-#     def register_handler(handler: Callable[[Animal], str]) -> None:
-#         """Expects callable that accepts Animal"""
-#         result = handler(Animal())
-#         assert isinstance(result, str)
-
-#     # This should work: callable accepts object (supertype of Animal)
-#     def handler_accepts_object(x: object) -> str:
-#         return "ok"
-
-#     register_handler(handler_accepts_object)
-
-#     # This should fail: callable accepts Dog (subtype of Animal)
-#     def handler_accepts_dog(x: Dog) -> str:
-#         return "ok"
-
-#     with pytest.raises(TypeError, match="contravariance"):
-#         register_handler(handler_accepts_dog)
-
-
-# def test_validated_callable_covariance_with_decorator():
-#     """Test covariant return acceptance in @validated decorator"""
-
-#     @validated
-#     def register_provider(provider: Callable[[int], Animal]) -> None:
-#         """Expects callable that returns Animal"""
-#         result = provider(42)
-#         assert isinstance(result, Animal)
-
-#     # This should work: callable returns Dog (subtype of Animal)
-#     def provider_returns_dog(x: int) -> Dog:
-#         return Dog()
-
-#     register_provider(provider_returns_dog)
-
-#     # This should fail: callable returns object (supertype of Animal)
-#     def provider_returns_object(x: int) -> object:
-#         return object()
-
-#     with pytest.raises(TypeError, match="covariance"):
-#         register_provider(provider_returns_object)
-
-
-# def test_validated_callable_variance_both_correct():
-#     """Test that both contravariance and covariance work together"""
-
-#     @validated
-#     def register_transformer(
-#         transformer: Callable[[Animal], Animal],
-#     ) -> None:
-#         """Expects callable: Animal -> Animal"""
-#         result = transformer(Animal())
-#         assert isinstance(result, Animal)
-
-#     # This works: object -> Dog (contravariant params, covariant return)
-#     def transformer_object_to_dog(x: object) -> Dog:
-#         return Dog()
-
-#     register_transformer(transformer_object_to_dog)
-
-
-# def test_validated_callable_variance_error_message_includes_context():
-#     """Test that error messages include parameter name and location context"""
-
-#     @validated
-#     def register_handler(handler: Callable[[Animal], str]) -> None:
-#         pass
-
-#     def wrong_handler(x: Dog) -> str:
-#         return "ok"
-
-#     with pytest.raises(TypeError) as exc:
-#         register_handler(wrong_handler)
-
-#     error_msg = str(exc.value)
-#     # Should mention 'handler' parameter and contravariance issue
-#     assert "handler" in error_msg or "contravariance" in error_msg
-
-
-# def test_validated_callable_variance_with_aggregation():
-#     """Test callable variance with error aggregation"""
-
-#     @validated(aggregate_errors=True)
-#     def process(
-#         handler1: Callable[[Animal], str],
-#         handler2: Callable[[int], Animal],
-#     ) -> None:
-#         pass
-
-#     # Both wrong: handler1 has contravariance failure, handler2 has covariance failure
-#     def bad_handler1(x: Dog) -> str:
-#         return "ok"
-
-#     def bad_handler2(x: int) -> object:
-#         return object()
-
-#     with pytest.raises(ExceptionGroup) as exc:
-#         process(bad_handler1, bad_handler2)
-
-#     # Should have 2 errors aggregated
-#     assert len(exc.value.exceptions) == 2
->>>>>>> af25e69 (add dedicated test file for validated decorator)

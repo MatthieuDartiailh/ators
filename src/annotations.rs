@@ -57,6 +57,7 @@ pub(crate) struct PyTypes<'py> {
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
     callable: Bound<'py, PyAny>,
+    callable_abc: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
@@ -75,6 +76,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
 
     let builtins_mod = py.import(intern!(py, "builtins"))?;
+    let collections_abc_mod = py.import(intern!(py, "collections.abc"))?;
     let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
 
@@ -106,6 +108,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
             callable: typing_mod.getattr(intern!(py, "Callable"))?,
+            callable_abc: collections_abc_mod.getattr(intern!(py, "Callable"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
@@ -403,7 +406,7 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(TypeValidator::Union { members }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
-        } else if origin.is(&tools.types.callable) {
+        } else if origin.is(&tools.types.callable) || origin.is(&tools.types.callable_abc) {
             // Bare Callable is permissive while still rejecting non-callables.
             if args.is_empty() {
                 return Ok((
@@ -411,6 +414,7 @@ pub fn build_validator_from_annotation<'py>(
                         TypeValidator::Callable {
                             params: Vec::new(),
                             return_type: None,
+                            variadic: true,
                         },
                         None,
                         None,
@@ -424,10 +428,12 @@ pub fn build_validator_from_annotation<'py>(
 
             let return_type = args.get_item(args.len() - 1)?;
             let mut params = Vec::new();
+            let mut variadic = false;
 
             for i in 0..(args.len() - 1) {
                 let arg = args.get_item(i)?;
                 if arg.is(py.Ellipsis()) {
+                    variadic = true;
                     continue;
                 }
 
@@ -445,6 +451,7 @@ pub fn build_validator_from_annotation<'py>(
                     TypeValidator::Callable {
                         params: params.into_iter().map(|p| p.unbind()).collect(),
                         return_type: Some(return_type.unbind()),
+                        variadic,
                     },
                     None,
                     None,
@@ -597,7 +604,7 @@ pub fn build_validator_from_annotation<'py>(
                 requires_owner: false,
             },
         ))
-    } else if ann.is(&tools.types.callable) {
+    } else if ann.is(&tools.types.callable) || ann.is(&tools.types.callable_abc) {
         // Bare Callable without type parameters - accept any callable (like Any)
         Ok((
             Validator::default(),

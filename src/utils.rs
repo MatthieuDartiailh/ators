@@ -343,6 +343,17 @@ pub enum Mutability {
 /// `true` if candidate is a subtype of expected, `false` otherwise
 pub(crate) fn is_subtype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = candidate.py();
+    let none_type = py.None().bind(py).get_type().into_any();
+
+    if is_any_type(candidate)? || is_any_type(expected)? {
+        return Ok(true);
+    }
+    if candidate.is_none() {
+        return is_subtype(&none_type, expected);
+    }
+    if expected.is_none() {
+        return is_subtype(candidate, &none_type);
+    }
 
     // Try casting both to PyType for class-based comparison
     if let (Ok(cand_type), Ok(exp_type)) = (candidate.cast::<PyType>(), expected.cast::<PyType>()) {
@@ -374,6 +385,19 @@ pub(crate) fn is_subtype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAn
 ///
 /// `true` if candidate is a supertype of expected, `false` otherwise
 pub(crate) fn is_supertype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let py = candidate.py();
+    let none_type = py.None().bind(py).get_type().into_any();
+
+    if is_any_type(candidate)? || is_any_type(expected)? {
+        return Ok(true);
+    }
+    if candidate.is_none() {
+        return is_subtype(expected, &none_type);
+    }
+    if expected.is_none() {
+        return is_subtype(&none_type, candidate);
+    }
+
     // Supertype check is: is_subtype(expected, candidate)
     // i.e., expected must be a subtype of candidate
     is_subtype(expected, candidate)
