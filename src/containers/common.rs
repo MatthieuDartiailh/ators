@@ -31,6 +31,11 @@ pub enum ContainerOperation {
         old_index: usize,
         payload: Py<PyAny>,
     },
+    Replaced {
+        index: usize,
+        old_value: Py<PyAny>,
+        new_value: Py<PyAny>,
+    },
     Moved {
         from_index: usize,
         to_index: usize,
@@ -49,6 +54,15 @@ impl Clone for ContainerOperation {
                 old_index: *old_index,
                 payload: payload.clone_ref(py),
             },
+            ContainerOperation::Replaced {
+                index,
+                old_value,
+                new_value,
+            } => ContainerOperation::Replaced {
+                index: *index,
+                old_value: old_value.clone_ref(py),
+                new_value: new_value.clone_ref(py),
+            },
             ContainerOperation::Moved {
                 from_index,
                 to_index,
@@ -64,17 +78,44 @@ impl Clone for ContainerOperation {
 
 #[pymethods]
 impl ContainerOperation {
-    fn __repr__(&self) -> String {
+    fn __repr__(&self) -> PyResult<String> {
         match self {
-            ContainerOperation::Added { index, .. } => format!("Added(index={index})"),
-            ContainerOperation::Removed { old_index, .. } => {
-                format!("Removed(old_index={old_index})")
+            ContainerOperation::Added { index, payload } => {
+                let value = Python::attach(|py| payload.bind(py).repr().map(|r| r.to_string()))
+                    .unwrap_or_else(|_| "<unavailable>".to_string());
+                Ok(format!("Added(index={index}, value={value})"))
+            }
+            ContainerOperation::Removed { old_index, payload } => {
+                let value = Python::attach(|py| payload.bind(py).repr().map(|r| r.to_string()))
+                    .unwrap_or_else(|_| "<unavailable>".to_string());
+                Ok(format!("Removed(old_index={old_index}, value={value})"))
+            }
+            ContainerOperation::Replaced {
+                index,
+                old_value,
+                new_value,
+            } => {
+                let old_value_repr =
+                    Python::attach(|py| old_value.bind(py).repr().map(|r| r.to_string()))
+                        .unwrap_or_else(|_| "<unavailable>".to_string());
+                let new_value_repr =
+                    Python::attach(|py| new_value.bind(py).repr().map(|r| r.to_string()))
+                        .unwrap_or_else(|_| "<unavailable>".to_string());
+                Ok(format!(
+                    "Replaced(index={index}, old_value={old_value_repr}, new_value={new_value_repr})"
+                ))
             }
             ContainerOperation::Moved {
                 from_index,
                 to_index,
-                ..
-            } => format!("Moved(from_index={from_index}, to_index={to_index})"),
+                payload,
+            } => {
+                let value = Python::attach(|py| payload.bind(py).repr().map(|r| r.to_string()))
+                    .unwrap_or_else(|_| "<unavailable>".to_string());
+                Ok(format!(
+                    "Moved(from_index={from_index}, to_index={to_index}, value={value})"
+                ))
+            }
         }
     }
 }

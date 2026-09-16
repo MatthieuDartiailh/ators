@@ -15,6 +15,7 @@ from ators import (
     Ators,
     AtorsChange,
     ContainerChange,
+    ContainerOperation,
     NotifyingList,
     disable_notifications,
     enable_notifications,
@@ -53,7 +54,84 @@ def test_notifying_list_emits_container_change():
     assert changes[0].member_name == "items"
     assert list(changes[0].newvalue) == [1, 2, 3]
     assert len(changes[0].operations) == 1
-    assert "Added(index=2)" in repr(changes[0].operations[0])
+    operation = changes[0].operations[0]
+    assert isinstance(operation, ContainerOperation.Added)
+    assert operation.index == 2
+    assert operation.payload == 3
+
+
+def test_notifying_list_setitem_emits_replaced_operation():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3])
+    changes = []
+
+    observe(obj, "items", changes.append)
+    obj.items[1] = 20
+
+    assert list(obj.items) == [1, 20, 3]
+    assert len(changes) == 1
+    assert type(changes[0]) is ContainerChange
+    assert len(changes[0].operations) == 1
+    operation = changes[0].operations[0]
+    assert isinstance(operation, ContainerOperation.Replaced)
+    assert operation.index == 1
+    assert operation.old_value == 2
+    assert operation.new_value == 20
+
+
+def test_notifying_list_slice_setitem_replaces_in_place_when_lengths_match():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3, 4])
+    changes = []
+
+    observe(obj, "items", changes.append)
+    obj.items[1:3] = [10, 11]
+
+    assert list(obj.items) == [1, 10, 11, 4]
+    assert len(changes) == 1
+    assert type(changes[0]) is ContainerChange
+    assert len(changes[0].operations) == 1
+    operation = changes[0].operations[0]
+    assert isinstance(operation, ContainerOperation.Replaced)
+    assert operation.index == 1
+    assert operation.old_value == (2, 3)
+    assert operation.new_value == (10, 11)
+
+
+def test_notifying_list_slice_setitem_emits_atomic_changes():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3, 4])
+    changes = []
+
+    observe(obj, "items", changes.append)
+    obj.items[1:3] = [10, 11, 12]
+
+    assert list(obj.items) == [1, 10, 11, 12, 4]
+    assert len(changes) == 1
+    assert type(changes[0]) is ContainerChange
+    assert len(changes[0].operations) == 1
+    operation = changes[0].operations[0]
+    assert isinstance(operation, ContainerOperation.Replaced)
+    assert operation.index == 1
+    assert operation.old_value == (2, 3)
+    assert operation.new_value == (10, 11, 12)
+
+
+def test_notifying_list_slice_delitem_emits_atomic_changes():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3, 4])
+    changes = []
+
+    observe(obj, "items", changes.append)
+    del obj.items[1:3]
+
+    assert list(obj.items) == [1, 4]
+    assert len(changes) == 1
+    assert type(changes[0]) is ContainerChange
+    assert len(changes[0].operations) == 2
+    operations = changes[0].operations
+    assert isinstance(operations[0], ContainerOperation.Removed)
+    assert isinstance(operations[1], ContainerOperation.Removed)
+    assert operations[0].old_index == 1
+    assert operations[0].payload == 2
+    assert operations[1].old_index == 2
+    assert operations[1].payload == 3
 
 
 def test_notifying_list_context_manager_batches_operations():
@@ -98,7 +176,11 @@ def test_notifying_list_move_item_emits_notification():
     assert len(changes) == 1
     assert type(changes[0]) is ContainerChange
     assert len(changes[0].operations) == 1
-    assert "Moved(from_index=0, to_index=2)" in repr(changes[0].operations[0])
+    operation = changes[0].operations[0]
+    assert isinstance(operation, ContainerOperation.Moved)
+    assert operation.from_index == 0
+    assert operation.to_index == 2
+    assert operation.payload == 1
     assert list(obj.items) == [2, 3, 1]
 
 

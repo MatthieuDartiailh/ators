@@ -8,7 +8,7 @@
 use pyo3::{
     Bound, IntoPyObjectExt, Py, PyAny, PyErr, PyResult, Python, ffi, intern, pyclass, pymethods,
     sync::critical_section::with_critical_section,
-    types::{PyAnyMethods, PyList, PyListMethods, PyType},
+    types::{PyAnyMethods, PyList, PyListMethods, PySlice, PyTuple, PyType},
 };
 use std::cell::UnsafeCell;
 
@@ -17,7 +17,7 @@ use crate::{
     containers::{
         AtorsDict, AtorsList, AtorsSet,
         common::{
-            ContainerOperation, NotificationBuffer, NotificationState, matches_assignment_context,
+            ContainerOperation, NotificationBuffer, matches_assignment_context,
             notification_context,
         },
     },
@@ -292,6 +292,32 @@ impl NotifyingList {
         })
     }
 
+    fn slice_indices<'py>(
+        py_list: &Bound<'py, PyList>,
+        index: &Bound<'py, PySlice>,
+    ) -> PyResult<(Vec<usize>, isize, isize, isize)> {
+        let len = py_list.len() as isize;
+        let (start, stop, step): (isize, isize, isize) =
+            index.call_method1("indices", (len,))?.extract()?;
+        let mut indices = Vec::new();
+
+        if step > 0 {
+            let mut cursor = start;
+            while cursor < stop {
+                indices.push(cursor as usize);
+                cursor += step;
+            }
+        } else if step < 0 {
+            let mut cursor = start;
+            while cursor > stop {
+                indices.push(cursor as usize);
+                cursor += step;
+            }
+        }
+
+        Ok((indices, start, stop, step))
+    }
+
     /// Enter batch mode: start accumulating operations.
     fn begin_batch_inner(&self, self_bound: &Bound<'_, NotifyingList>) {
         with_critical_section(self_bound.as_any(), || unsafe {
@@ -498,43 +524,128 @@ impl NotifyingList {
 
     pub fn __setitem__<'py>(
         self_: &Bound<'py, NotifyingList>,
-        index: usize,
+        index: &Bound<'py, PyAny>,
         value: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         let py = value.py();
-        let valid = self_.get().validate_item(py, value)?;
         let py_list = unsafe { self_.cast_unchecked::<PyList>() };
 
-        if index >= py_list.len() {
+        if index.is_instance_of::<PySlice>() {
+            let slice_index = index.cast::<PySlice>()?;
+            let (removed_indices, start, stop, _step) =
+                Self::slice_indices(&py_list, &slice_index)?;
+            let removed_items: Vec<_> = removed_indices
+                .iter()
+                .map(|idx| py_list.get_item(*idx))
+                .collect::<PyResult<Vec<_>>>()?;
+            let valid = self_.get().validate_iterable(py, value)?;
+
+            self_.get().begin_batch_inner(self_);
+            let result = unsafe {
+                error_on_minusone(
+                    py,
+                    ffi::PyList_SetSlice(py_list.as_ptr(), start, stop, valid.as_ptr()),
+                )
+            };
+            if let Err(err) = result {
+                let _ = self_.get().end_batch_inner(py, self_);
+                return Err(err);
+            }
+
+            let old_value =
+                PyTuple::new(py, removed_items.iter().cloned().map(|item| item.unbind()))?
+                    .into_any()
+                    .unbind();
+            let new_value = PyTuple::new(py, valid.iter().map(|item| item.clone().unbind()))?
+                .into_any()
+                .unbind();
+            let operation = ContainerOperation::Replaced {
+                index: start as usize,
+                old_value,
+                new_value,
+            };
+            self_.get().record_operation(py, operation, self_)?;
+            return self_.get().end_batch_inner(py, self_);
+        }
+
+        let valid = self_.get().validate_item(py, value)?;
+        let index_i = index.as_any().extract::<isize>()?;
+        let len = py_list.len() as isize;
+        let normalized = if index_i < 0 { index_i + len } else { index_i };
+        if normalized < 0 || normalized >= len {
             return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(
                 "list index out of range",
             ));
         }
 
-        py_list.set_item(index, &valid)?;
+        let index_usize = normalized as usize;
+        let old_item = py_list.get_item(index_usize)?;
+        py_list.set_item(index_usize, &valid)?;
 
-        let operation = ContainerOperation::Added {
-            index,
-            payload: valid.unbind(),
+        let operation = ContainerOperation::Replaced {
+            index: index_usize,
+            old_value: old_item.unbind(),
+            new_value: valid.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
     }
 
-    pub fn __delitem__<'py>(self_: &Bound<'py, NotifyingList>, index: usize) -> PyResult<()> {
+    pub fn __delitem__<'py>(
+        self_: &Bound<'py, NotifyingList>,
+        index: &Bound<'py, PyAny>,
+    ) -> PyResult<()> {
         let py = self_.py();
         let py_list = unsafe { self_.cast_unchecked::<PyList>() };
 
-        if index >= py_list.len() {
+        if index.is_instance_of::<PySlice>() {
+            let slice_index = index.cast::<PySlice>()?;
+            let (removed_indices, start, stop, _step) =
+                Self::slice_indices(&py_list, &slice_index)?;
+            if removed_indices.is_empty() {
+                return Ok(());
+            }
+            let removed_items: Vec<_> = removed_indices
+                .iter()
+                .map(|idx| py_list.get_item(*idx))
+                .collect::<PyResult<Vec<_>>>()?;
+
+            self_.get().begin_batch_inner(self_);
+            let result = unsafe {
+                error_on_minusone(
+                    py,
+                    ffi::PyList_SetSlice(py_list.as_ptr(), start, stop, std::ptr::null_mut()),
+                )
+            };
+            if let Err(err) = result {
+                let _ = self_.get().end_batch_inner(py, self_);
+                return Err(err);
+            }
+
+            for (old_index, item) in removed_indices.iter().zip(removed_items) {
+                let operation = ContainerOperation::Removed {
+                    old_index: *old_index,
+                    payload: item.unbind(),
+                };
+                self_.get().record_operation(py, operation, self_)?;
+            }
+            return self_.get().end_batch_inner(py, self_);
+        }
+
+        let index_i = index.as_any().extract::<isize>()?;
+        let len = py_list.len() as isize;
+        let normalized = if index_i < 0 { index_i + len } else { index_i };
+        if normalized < 0 || normalized >= len {
             return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(
                 "list index out of range",
             ));
         }
 
-        let item = py_list.get_item(index)?;
-        Self::del_item_base(py_list, index)?;
+        let idx = normalized as usize;
+        let item = py_list.get_item(idx)?;
+        Self::del_item_base(py_list, idx)?;
 
         let operation = ContainerOperation::Removed {
-            old_index: index,
+            old_index: idx,
             payload: item.unbind(),
         };
         self_.get().record_operation(py, operation, self_)
