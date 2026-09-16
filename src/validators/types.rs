@@ -21,8 +21,9 @@ use pyo3::{
     pyclass, pymethods,
     sync::OnceLockExt,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
-        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyAnyMethods, PyDict, PyDictMethods, PyFrozenSet, PyFrozenSetMethods, PyList,
+        PyListMethods, PySet, PySetMethods, PyString, PyTuple, PyTupleMethods, PyType,
+        PyTypeMethods,
     },
 };
 use std::{
@@ -339,9 +340,22 @@ pub enum TypeValidator {
     Dict {
         items: Option<(BoxedValidator, BoxedValidator)>,
     },
-    // Sequence,
-    // List,
-    // Mapping,
+    #[pyo3(constructor = (item))]
+    Sequence { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (item))]
+    Container { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (item))]
+    Collection { item: Option<BoxedValidator> },
+    #[pyo3(constructor = (items))]
+    Mapping {
+        items: Option<(BoxedValidator, BoxedValidator)>,
+    },
+    #[pyo3(constructor = (item))]
+    Reversible { item: Option<BoxedValidator> },
+    // MutableSequence,
+    // MutableMapping,
+    // Iterable,
+    // Iterator,
     // DefaultDict,
     // OrderedDict,
     // Callable,
@@ -417,6 +431,34 @@ impl TypeValidator {
                         BoxedValidator::from(v.with_owner(py, owner)),
                     )
                 }),
+            },
+            Self::Sequence { item } => Self::Sequence {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Container { item } => Self::Container {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Collection { item } => Self::Collection {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
+            },
+            Self::Mapping { items } => Self::Mapping {
+                items: items.as_ref().map(|(k, v)| {
+                    (
+                        BoxedValidator::from(k.with_owner(py, owner)),
+                        BoxedValidator::from(v.with_owner(py, owner)),
+                    )
+                }),
+            },
+            Self::Reversible { item } => Self::Reversible {
+                item: item
+                    .as_ref()
+                    .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
             },
             _ => self.clone(),
         }
@@ -742,6 +784,71 @@ impl TypeValidator {
                         }
                     }
                     Ok(aset.into_any())
+                } else if let Ok(fset) = value.cast::<pyo3::types::PyFrozenSet>() {
+                    let py = value.py();
+                    let validated: Vec<_> = fset
+                        .iter()
+                        .enumerate()
+                        .map(|(index, titem)| {
+                            item.validate(name, object, &titem).map_err(|cause| {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    let object_repr = o
+                                        .repr()
+                                        .map(|obj| obj.to_string())
+                                        .unwrap_or_else(|_| "<repr failed>".to_string());
+                                    err_with_cause(
+                                        py,
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {} for the member {} of {}.",
+                                            index,
+                                            m,
+                                            object_repr
+                                        )),
+                                        cause,
+                                    )
+                                } else {
+                                    err_with_cause(
+                                        py,
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate item {index}.",
+                                        )),
+                                        cause,
+                                    )
+                                }
+                            })
+                        })
+                        .collect::<PyResult<Vec<_>>>()?;
+                    Ok(PyFrozenSet::new(py, validated)?.into_any())
+                } else if value.is_instance(crate::get_abc_set(value.py()).as_any())? {
+                    for (index, titem) in value.try_iter()?.enumerate() {
+                        if let Err(cause) = item.validate(name, object, &titem?) {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {} for the member {} of {}.",
+                                        index,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    cause,
+                                ));
+                            } else {
+                                return Err(err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate item {index}.",
+                                    )),
+                                    cause,
+                                ));
+                            }
+                        }
+                    }
+                    Ok(value.clone())
                 } else {
                     validation_error!("set", name, object, value)
                 }
@@ -750,6 +857,10 @@ impl TypeValidator {
                 if let Ok(v) = value.cast::<pyo3::types::PySet>() {
                     // Preserve the copy on assignment semantic
                     PySet::new(v.py(), v.iter()).map(|s| s.into_any())
+                } else if let Ok(v) = value.cast::<pyo3::types::PyFrozenSet>() {
+                    PyFrozenSet::new(v.py(), v.iter()).map(|s| s.into_any())
+                } else if value.is_instance(crate::get_abc_set(value.py()).as_any())? {
+                    Ok(value.clone())
                 } else {
                     validation_error!("set", name, object, value)
                 }
@@ -908,6 +1019,255 @@ impl TypeValidator {
                     PyDict::from_sequence(v).map(|d| d.into_any())
                 } else {
                     validation_error!("dict", name, object, value)
+                }
+            }
+            Self::Sequence { item: Some(item) } => {
+                let py = value.py();
+                if !value.is_instance(crate::get_abc_sequence(py).as_any())? {
+                    return validation_error!("Sequence", name, object, value);
+                }
+                for (index, titem) in value.try_iter()?.enumerate() {
+                    if let Err(cause) = item.validate(name, object, &titem?) {
+                        if let Some(m) = name
+                            && let Some(o) = object
+                        {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {} for the member {} of {}.",
+                                    index,
+                                    m,
+                                    o.repr()?
+                                )),
+                                cause,
+                            ));
+                        } else {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {index}.",
+                                )),
+                                cause,
+                            ));
+                        }
+                    }
+                }
+                Ok(value.clone())
+            }
+            Self::Sequence { item: None } => {
+                let py = value.py();
+                if value.is_instance(crate::get_abc_sequence(py).as_any())? {
+                    Ok(value.clone())
+                } else {
+                    validation_error!("Sequence", name, object, value)
+                }
+            }
+            Self::Container { item: Some(item) } => {
+                let py = value.py();
+                if !value.is_instance(crate::get_abc_container(py).as_any())? {
+                    return validation_error!("Container", name, object, value);
+                }
+                for (index, titem) in value.try_iter()?.enumerate() {
+                    if let Err(cause) = item.validate(name, object, &titem?) {
+                        if let Some(m) = name
+                            && let Some(o) = object
+                        {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {} for the member {} of {}.",
+                                    index,
+                                    m,
+                                    o.repr()?
+                                )),
+                                cause,
+                            ));
+                        } else {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {index}.",
+                                )),
+                                cause,
+                            ));
+                        }
+                    }
+                }
+                Ok(value.clone())
+            }
+            Self::Container { item: None } => {
+                let py = value.py();
+                if value.is_instance(crate::get_abc_container(py).as_any())? {
+                    Ok(value.clone())
+                } else {
+                    validation_error!("Container", name, object, value)
+                }
+            }
+            Self::Collection { item: Some(item) } => {
+                let py = value.py();
+                if !value.is_instance(crate::get_abc_collection(py).as_any())? {
+                    return validation_error!("Collection", name, object, value);
+                }
+                for (index, titem) in value.try_iter()?.enumerate() {
+                    if let Err(cause) = item.validate(name, object, &titem?) {
+                        if let Some(m) = name
+                            && let Some(o) = object
+                        {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {} for the member {} of {}.",
+                                    index,
+                                    m,
+                                    o.repr()?
+                                )),
+                                cause,
+                            ));
+                        } else {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate item {index}.",
+                                )),
+                                cause,
+                            ));
+                        }
+                    }
+                }
+                Ok(value.clone())
+            }
+            Self::Collection { item: None } => {
+                let py = value.py();
+                if value.is_instance(crate::get_abc_collection(py).as_any())? {
+                    Ok(value.clone())
+                } else {
+                    validation_error!("Collection", name, object, value)
+                }
+            }
+            Self::Reversible { item: Some(item) } => {
+                let py = value.py();
+                if !value.is_instance(crate::get_abc_reversible(py).as_any())? {
+                    return validation_error!("Reversible", name, object, value);
+                }
+                let reversed_obj = py
+                    .import("builtins")?
+                    .getattr("reversed")?
+                    .call1((value,))?;
+                for (index, titem) in reversed_obj.try_iter()?.enumerate() {
+                    if let Err(cause) = item.validate(name, object, &titem?) {
+                        if let Some(m) = name
+                            && let Some(o) = object
+                        {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate reversed item {} for the member {} of {}.",
+                                    index,
+                                    m,
+                                    o.repr()?
+                                )),
+                                cause,
+                            ));
+                        } else {
+                            return Err(err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate reversed item {index}.",
+                                )),
+                                cause,
+                            ));
+                        }
+                    }
+                }
+                Ok(value.clone())
+            }
+            Self::Reversible { item: None } => {
+                let py = value.py();
+                if value.is_instance(crate::get_abc_reversible(py).as_any())? {
+                    Ok(value.clone())
+                } else {
+                    validation_error!("Reversible", name, object, value)
+                }
+            }
+            Self::Mapping {
+                items: Some((key_v, val_v)),
+            } => {
+                let py = value.py();
+                if !value.is_instance(crate::get_abc_mapping(py).as_any())? {
+                    return validation_error!("Mapping", name, object, value);
+                }
+                let mapping_items = value.call_method0("items")?;
+                for pair in mapping_items.try_iter()? {
+                    let pair = pair?.cast_into::<PyTuple>()?;
+                    let tk = pair.get_item(0)?;
+                    let tv = pair.get_item(1)?;
+                    match (
+                        key_v.validate(name, object, &tk),
+                        val_v.validate(name, object, &tv),
+                    ) {
+                        (Ok(_), Ok(_)) => {}
+                        (Err(err), _) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}' for the member {} of {}.",
+                                        tk.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate key '{}'.",
+                                        tk.repr()?,
+                                    )),
+                                    err,
+                                ));
+                            }
+                        }
+                        (Ok(_), Err(err)) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                        tv.repr()?,
+                                        tk.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(err_with_cause(
+                                    py,
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate value '{}' with key '{}'.",
+                                        tv.repr()?,
+                                        tk.repr()?,
+                                    )),
+                                    err,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(value.clone())
+            }
+            Self::Mapping { items: None } => {
+                let py = value.py();
+                if value.is_instance(crate::get_abc_mapping(py).as_any())? {
+                    Ok(value.clone())
+                } else {
+                    validation_error!("Mapping", name, object, value)
                 }
             }
             Self::Typed { type_ } => {
@@ -1077,6 +1437,11 @@ impl TypeValidator {
             Self::Set { item: _ } => Mutability::Mutable,
             Self::List { item: _ } => Mutability::Mutable,
             Self::Dict { items: _ } => Mutability::Mutable,
+            Self::Sequence { item: _ } => Mutability::Undecidable,
+            Self::Container { item: _ } => Mutability::Undecidable,
+            Self::Collection { item: _ } => Mutability::Undecidable,
+            Self::Mapping { items: _ } => Mutability::Undecidable,
+            Self::Reversible { item: _ } => Mutability::Undecidable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1174,6 +1539,13 @@ impl Clone for TypeValidator {
             Self::Dict { items } => Self::Dict {
                 items: items.clone(),
             },
+            Self::Sequence { item } => Self::Sequence { item: item.clone() },
+            Self::Container { item } => Self::Container { item: item.clone() },
+            Self::Collection { item } => Self::Collection { item: item.clone() },
+            Self::Mapping { items } => Self::Mapping {
+                items: items.clone(),
+            },
+            Self::Reversible { item } => Self::Reversible { item: item.clone() },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),
             },
