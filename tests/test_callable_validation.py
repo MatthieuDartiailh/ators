@@ -9,7 +9,7 @@
 
 import asyncio
 import inspect
-from typing import Callable, ClassVar
+from typing import ClassVar
 
 import pytest
 
@@ -297,6 +297,7 @@ def test_validated_positional_only_change_arg_and_default() -> None:
     for inner_exc in exc.value.exceptions:
         assert isinstance(inner_exc, TypeError)
 
+
 def test_validated_positional_only_change_followed_by_unannotated() -> None:
 
     @validated
@@ -315,6 +316,7 @@ def test_validated_positional_only_change_arg_second() -> None:
 
     assert f(1, [42]) == 2
     assert f(1, [100]) == 2
+
 
 def test_validated_positional_only_change_default_arg() -> None:
 
@@ -339,6 +341,7 @@ def test_validated_positional_only_bad_default() -> None:
     assert len(exc.value.exceptions) == 1
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
 
 def test_validated_positional_only_aggregate_errors_false() -> None:
     """Test aggregate_errors=False with multiple positional-only args (early return)."""
@@ -433,6 +436,7 @@ def test_validation_positional_or_keyword_change_arg_second() -> None:
     assert f(1, [1, 2, 3]) == 7
     assert f(1, items=[10, 20]) == 31
     assert f(x=2, items=[10, 20]) == 32
+
 
 def test_validated_positional_or_keyword_change_default_arg() -> None:
 

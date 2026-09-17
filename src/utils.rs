@@ -341,7 +341,10 @@ pub enum Mutability {
 /// # Returns
 ///
 /// `true` if candidate is a subtype of expected, `false` otherwise
-pub(crate) fn is_subtype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn is_subtype(
+    candidate: &Bound<'_, PyAny>,
+    expected: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
     let py = candidate.py();
     let none_type = py.None().bind(py).get_type().into_any();
 
@@ -384,7 +387,10 @@ pub(crate) fn is_subtype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAn
 /// # Returns
 ///
 /// `true` if candidate is a supertype of expected, `false` otherwise
-pub(crate) fn is_supertype(candidate: &Bound<'_, PyAny>, expected: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn is_supertype(
+    candidate: &Bound<'_, PyAny>,
+    expected: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
     let py = candidate.py();
     let none_type = py.None().bind(py).get_type().into_any();
 

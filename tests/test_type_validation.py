@@ -417,8 +417,6 @@ def test_constrained_typevar_rejects_other_types():
 # Callable validation tests
 # ============================================================================
 
-from typing import Callable
-
 
 class CallableBox(Ators):
     """Test class with Callable type member"""
@@ -439,7 +437,7 @@ def test_callable_valid_with_correct_signature():
 def test_callable_valid_lambda_not_supported():
     """Test that unannotated lambdas are rejected"""
     box = CallableBox()
-    with pytest.raises(TypeError, match="annotated|annotation"):
+    with pytest.raises(TypeError, match=r"annotated|annotation"):
         box.callback = lambda x, y: True
 
 
@@ -468,7 +466,7 @@ def test_callable_reject_missing_parameter_annotation():
         return True
 
     box = CallableBox()
-    with pytest.raises(TypeError, match="annotated|annotation"):
+    with pytest.raises(TypeError, match=r"annotated|annotation"):
         box.callback = unannotated_param
 
 
@@ -479,7 +477,7 @@ def test_callable_reject_missing_return_annotation():
         return True
 
     box = CallableBox()
-    with pytest.raises(TypeError, match="return|annotation"):
+    with pytest.raises(TypeError, match=r"return|annotation"):
         box.callback = no_return_annotation
 
 
@@ -490,7 +488,7 @@ def test_callable_reject_wrong_parameter_type():
         return True
 
     box = CallableBox()
-    with pytest.raises(TypeError, match="type|parameter"):
+    with pytest.raises(TypeError, match=r"type|parameter"):
         box.callback = wrong_param_type
 
 
@@ -501,7 +499,7 @@ def test_callable_reject_wrong_return_type():
         return "true"
 
     box = CallableBox()
-    with pytest.raises(TypeError, match="return|type"):
+    with pytest.raises(TypeError, match=r"return|type"):
         box.callback = wrong_return_type
 
 
@@ -582,6 +580,7 @@ def test_constrained_typevar_matches_union_behavior():
 # ---------------------------------------------------------------------------
 # Constrained TypeVar generic class specialization tests
 # ---------------------------------------------------------------------------
+
 
 # PEP 695 syntax: [T: (int, str)] creates a constrained TypeVar
 class ConstrainedGenericBox[T: (int, str)](Ators):
@@ -767,6 +766,7 @@ def callable_dog_to_dog(x: Dog) -> Dog:
 # Contravariance Tests (Parameter Acceptance)
 # =========================================================================
 
+
 def test_callable_contravariance_supertype_params_accepted():
     """Callable accepting supertype (object) should substitute for Animal"""
 
@@ -826,7 +826,7 @@ def test_callable_contravariance_first_param_fails():
         return Animal()
 
     obj = TwoParamHandler()
-    with pytest.raises(TypeError, match="Parameter 0|contravariance"):
+    with pytest.raises(TypeError, match=r"Parameter 0|contravariance"):
         obj.handler = handler_first_narrow
 
 
@@ -840,13 +840,14 @@ def test_callable_contravariance_second_param_fails():
         return Animal()
 
     obj = TwoParamHandler()
-    with pytest.raises(TypeError, match="Parameter 1|contravariance"):
+    with pytest.raises(TypeError, match=r"Parameter 1|contravariance"):
         obj.handler = handler_second_narrow
 
 
 # =========================================================================
 # Covariance Tests (Return Type Acceptance)
 # =========================================================================
+
 
 def test_callable_covariance_subtype_return_accepted():
     """Callable returning subtype (Dog) should substitute for Animal"""
@@ -905,6 +906,7 @@ def test_callable_covariance_deep_hierarchy():
 # Combined Variance Tests
 # =========================================================================
 
+
 def test_callable_both_variances_correct():
     """Test that contravariant params + covariant return both work together"""
 
@@ -960,6 +962,7 @@ def test_callable_both_variances_fail():
 # =========================================================================
 # Edge Cases
 # =========================================================================
+
 
 def test_callable_variance_with_object_param():
     """Test that object as parameter type follows contravariance"""
@@ -1029,6 +1032,7 @@ def test_callable_variance_builtin_types():
 # =========================================================================
 # Regression Tests (Phase 1 Still Works)
 # =========================================================================
+
 
 def test_callable_variance_exact_match_single_param():
     """Exact matching for single parameter should still work"""
@@ -1221,7 +1225,7 @@ def test_callable_variadic_return_annotation_still_required():
         return "ok"
 
     obj = Provider()
-    with pytest.raises(TypeError, match="return|annotated"):
+    with pytest.raises(TypeError, match=r"return|annotated"):
         obj.provider = provider_no_return_annotation
 
 

@@ -11,8 +11,8 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySet,
-        PyString, PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySet, PyString,
+        PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::collections::HashMap;

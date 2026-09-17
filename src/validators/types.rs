@@ -16,8 +16,7 @@ use pyo3::types::PyStringMethods;
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
-        PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check,
-        PyUnicode_Check,
+        PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
     pyclass, pymethods,
     sync::OnceLockExt,
@@ -1124,7 +1123,8 @@ impl TypeValidator {
                             }
                         }
 
-                        let is_valid = is_supertype(&annotation, &expected_type.bind(py))?;
+                        let expected = expected_type.bind(py);
+                        let is_valid = is_supertype(&annotation, expected)?;
                         if !is_valid {
                             if let Some(m) = name
                                 && let Some(o) = object
@@ -1150,7 +1150,9 @@ impl TypeValidator {
                 }
 
                 if let Some(return_type) = return_type {
-                    let return_annotation = match sig.getattr(pyo3::intern!(py, "return_annotation")) {
+                    let return_annotation = match sig
+                        .getattr(pyo3::intern!(py, "return_annotation"))
+                    {
                         Ok(ann) => ann,
                         Err(_) => {
                             if let Some(m) = name
@@ -1189,7 +1191,8 @@ impl TypeValidator {
                         }
                     }
 
-                    let is_valid = is_subtype(&return_annotation, &return_type.bind(py))?;
+                    let expected_return = return_type.bind(py);
+                    let is_valid = is_subtype(&return_annotation, expected_return)?;
                     if !is_valid {
                         if let Some(m) = name
                             && let Some(o) = object
@@ -1408,9 +1411,7 @@ impl Clone for TypeValidator {
                 variadic,
             } => Self::Callable {
                 params: params.iter().map(|p| p.clone_ref(py)).collect(),
-                return_type: return_type
-                    .as_ref()
-                    .map(|rt| rt.clone_ref(py)),
+                return_type: return_type.as_ref().map(|rt| rt.clone_ref(py)),
                 variadic: *variadic,
             },
         })

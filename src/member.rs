@@ -14,8 +14,8 @@ use crate::{
     validators::{Coercer, TypeValidator, Validator, ValueValidator},
 };
 use pyo3::{
-    Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult,
-    Python, intern, pyclass, pymethods,
+    Borrowed, Bound, FromPyObject, IntoPyObjectExt, Py, PyAny, PyRef, PyRefMut, PyResult, Python,
+    intern, pyclass, pymethods,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyGenericAlias, PyListMethods, PyModuleMethods,
         PyString, PyTuple, PyType,
