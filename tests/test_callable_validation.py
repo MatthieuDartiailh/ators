@@ -258,7 +258,7 @@ def test_validated_varargs_and_kwargs_aggregate_errors_false() -> None:
 
 def test_validated_positional_only_argument() -> None:
     @validated
-    def f(x: int, /, y) -> int:
+    def f(x: int, /, y: int) -> int:
         return x + y
 
     assert f(1, 2) == 3

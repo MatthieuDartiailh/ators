@@ -383,18 +383,16 @@ fn validate_set_failed<'py>(
             object.repr()?,
         )));
     }
-    Ok(err_with_cause(
-        py,
-        pyo3::PyErr::from_type(
-            err.get_type(py),
-            format!(
-                "Validation failed for member '{}' of {}",
-                member.name,
-                object.repr()?,
-            ),
-        ),
+
+    let formatted = format!(
+        "Validation failed for member '{}' of {}: {}",
+        member.name,
+        object.repr()?,
         err,
-    ))
+    );
+    let wrapped = pyo3::PyErr::from_type(err.get_type(py), formatted);
+    wrapped.set_cause(py, Some(err));
+    Ok(wrapped)
 }
 
 /// Cold path: runs post_set hook (only called when post_setattr is not noop).

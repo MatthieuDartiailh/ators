@@ -11,7 +11,7 @@ use pyo3::{
     sync::critical_section::with_critical_section,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
-        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySet, PyString,
+        PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySet, PyString,
         PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
@@ -56,6 +56,8 @@ pub(crate) struct PyTypes<'py> {
     literal: Bound<'py, PyAny>,
     type_alias: Bound<'py, PyAny>,
     unpack: Bound<'py, PyAny>,
+    callable: Bound<'py, PyAny>,
+    callable_abc: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
     // FIXME defaultdict
@@ -74,6 +76,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     let annotationlib = py.import(intern!(py, "annotationlib"))?;
 
     let builtins_mod = py.import(intern!(py, "builtins"))?;
+    let collections_abc_mod = py.import(intern!(py, "collections.abc"))?;
     let types_mod = py.import(intern!(py, "types"))?;
     let typing_mod = py.import(intern!(py, "typing"))?;
 
@@ -104,6 +107,8 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
             type_alias: typing_mod.getattr(intern!(py, "TypeAliasType"))?,
             unpack: typing_mod.getattr(intern!(py, "Unpack"))?,
+            callable: typing_mod.getattr(intern!(py, "Callable"))?,
+            callable_abc: collections_abc_mod.getattr(intern!(py, "Callable"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
         },
@@ -401,6 +406,61 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(TypeValidator::Union { members }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(&tools.types.callable) || origin.is(&tools.types.callable_abc) {
+            // Bare Callable is permissive while still rejecting non-callables.
+            if args.is_empty() {
+                return Ok((
+                    Validator::new(
+                        TypeValidator::Callable {
+                            params: Vec::new(),
+                            return_type: None,
+                            variadic: true,
+                        },
+                        None,
+                        None,
+                        None,
+                    ),
+                    ValidatorBuildInfo {
+                        requires_owner: false,
+                    },
+                ));
+            }
+
+            let return_type = args.get_item(args.len() - 1)?;
+            let mut params = Vec::new();
+            let mut variadic = false;
+
+            for i in 0..(args.len() - 1) {
+                let arg = args.get_item(i)?;
+                if arg.is(py.Ellipsis()) {
+                    variadic = true;
+                    continue;
+                }
+
+                if let Ok(seq) = arg.cast::<PySequence>() {
+                    for item in seq.try_iter()? {
+                        params.push(item?);
+                    }
+                } else {
+                    params.push(arg);
+                }
+            }
+
+            Ok((
+                Validator::new(
+                    TypeValidator::Callable {
+                        params: params.into_iter().map(|p| p.unbind()).collect(),
+                        return_type: Some(return_type.unbind()),
+                        variadic,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: false,
+                },
+            ))
         } else if origin.is(&tools.types.unpack) {
             Err(pyo3::exceptions::PyTypeError::new_err("Unsupported Unpack")) // FIXME
         } else {
@@ -538,6 +598,14 @@ pub fn build_validator_from_annotation<'py>(
             typevar_bindings,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
+        Ok((
+            Validator::default(),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
+    } else if ann.is(&tools.types.callable) || ann.is(&tools.types.callable_abc) {
+        // Bare Callable without type parameters - accept any callable (like Any)
         Ok((
             Validator::default(),
             ValidatorBuildInfo {
