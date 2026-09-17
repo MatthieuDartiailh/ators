@@ -947,6 +947,122 @@ fn decorate_target<'py>(
     Ok(wrapped)
 }
 
+fn annotation_is_compatible<'py>(
+    py: Python<'py>,
+    expected: &Bound<'py, PyAny>,
+    actual: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    if expected.is_none() || actual.is_none() {
+        return Ok(true);
+    }
+
+    if expected.is(actual) || expected.eq(actual)? {
+        return Ok(true);
+    }
+
+    let builtins = py.import("builtins")?;
+    let type_ty = builtins.getattr(intern!(py, "type"))?;
+    if expected.is_instance(&type_ty)? && actual.is_instance(&type_ty)? {
+        let issubclass = builtins.getattr(intern!(py, "issubclass"))?;
+        let result = issubclass.call1((actual, expected))?;
+        return result.extract::<bool>();
+    }
+
+    Ok(false)
+}
+
+fn annotation_to_string<'py>(value: &Bound<'py, PyAny>) -> String {
+    match value.repr() {
+        Ok(repr) => repr.to_string(),
+        Err(_) => "<unknown>".to_string(),
+    }
+}
+
+fn protocol_callable_compatibility<'py>(
+    py: Python<'py>,
+    candidate: &Bound<'py, PyAny>,
+    protocol: &Bound<'py, PyAny>,
+) -> PyResult<Option<String>> {
+    if !candidate.is_callable() {
+        return Ok(Some("Candidate is not callable.".to_string()));
+    }
+
+    let protocol_call = protocol.getattr(intern!(py, "__call__"))?;
+    let candidate_call = candidate.clone();
+    let inspect = py.import("inspect")?;
+    let signature = inspect.getattr(intern!(py, "signature"))?;
+
+    let protocol_sig = signature.call1((protocol_call,))?;
+    let candidate_sig = signature.call1((candidate_call,))?;
+
+    let protocol_params = protocol_sig.getattr(intern!(py, "parameters"))?;
+    let candidate_params = candidate_sig.getattr(intern!(py, "parameters"))?;
+
+    for param in protocol_params.call_method0("values")?.try_iter()? {
+        let param = param?;
+        let name = param.getattr(intern!(py, "name"))?.to_string();
+        if name == "self" || name == "cls" {
+            continue;
+        }
+
+        let candidate_param = match candidate_params.get_item(name.clone()) {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(Some(format!(
+                    "Protocol __call__ expects parameter '{}' but candidate callable does not accept it.",
+                    name
+                )));
+            }
+        };
+
+        let protocol_annotation = param.getattr(intern!(py, "annotation"))?;
+        let candidate_annotation = candidate_param.getattr(intern!(py, "annotation"))?;
+        if !annotation_is_compatible(py, &protocol_annotation, &candidate_annotation)? {
+            return Ok(Some(format!(
+                "Parameter '{}' is incompatible: protocol expects {}, candidate provides {}.",
+                name,
+                annotation_to_string(&protocol_annotation),
+                annotation_to_string(&candidate_annotation),
+            )));
+        }
+    }
+
+    let protocol_return = protocol_sig.getattr(intern!(py, "return_annotation"))?;
+    let candidate_return = candidate_sig.getattr(intern!(py, "return_annotation"))?;
+    if !annotation_is_compatible(py, &protocol_return, &candidate_return)? {
+        return Ok(Some(format!(
+            "Protocol __call__ return annotation is {}, but candidate returns {}.",
+            annotation_to_string(&protocol_return),
+            annotation_to_string(&candidate_return),
+        )));
+    }
+
+    Ok(None)
+}
+
+#[pyfunction]
+pub fn is_runtime_callable_compatible<'py>(
+    py: Python<'py>,
+    candidate: &Bound<'py, PyAny>,
+    protocol: &Bound<'py, PyAny>,
+) -> PyResult<bool> {
+    Ok(protocol_callable_compatibility(py, candidate, protocol)?.is_none())
+}
+
+#[pyfunction]
+pub fn explain_callable_mismatch<'py>(
+    py: Python<'py>,
+    candidate: &Bound<'py, PyAny>,
+    protocol: &Bound<'py, PyAny>,
+) -> PyResult<Option<String>> {
+    let protocol_target = match protocol.getattr(intern!(py, "__origin__")) {
+        Ok(origin) if !origin.is_none() => origin,
+        Ok(_) | Err(_) => protocol.clone(),
+    };
+
+    protocol_callable_compatibility(py, candidate, &protocol_target)
+}
+
 #[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub struct ValidatedDecorator {

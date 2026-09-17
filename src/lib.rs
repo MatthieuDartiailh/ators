@@ -88,7 +88,8 @@ mod _ators {
 
     #[pymodule_export]
     use self::callable_validation::{
-        AsyncCallableValidator, SyncCallableValidator, ValidatedDecorator, validated,
+        AsyncCallableValidator, SyncCallableValidator, ValidatedDecorator,
+        explain_callable_mismatch, is_runtime_callable_compatible, validated,
     };
 
     #[pyfunction]

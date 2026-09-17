@@ -9,11 +9,11 @@
 
 import asyncio
 import inspect
-from typing import Callable, ClassVar
+from typing import Callable, ClassVar, Protocol, TypeVar, runtime_checkable
 
 import pytest
 
-from ators import Member, validated
+from ators import Member, call_checkable, explain_callable_mismatch, validated
 
 
 def test_validated_function_argument() -> None:
@@ -119,6 +119,86 @@ def test_validated_validate_return_false() -> None:
         return str(x)  # type: ignore
 
     assert f(1) == "1"
+
+
+def test_call_checkable_runtime_protocol_checks_call_signature() -> None:
+    @runtime_checkable
+    @call_checkable
+    class SupportsIntCall(Protocol):
+        def __call__(self, x: int) -> int: ...
+
+    class Good:
+        def __call__(self, x: int) -> int:
+            return x + 1
+
+    class WrongArg:
+        def __call__(self, x: str) -> int:
+            return int(x)
+
+    class WrongReturn:
+        def __call__(self, x: int) -> str:
+            return str(x)
+
+    class NotCallable:
+        pass
+
+    assert isinstance(Good(), SupportsIntCall)
+    assert not isinstance(WrongArg(), SupportsIntCall)
+    assert not isinstance(WrongReturn(), SupportsIntCall)
+    assert not isinstance(NotCallable(), SupportsIntCall)
+    assert "x" in (explain_callable_mismatch(WrongArg(), SupportsIntCall) or "")
+
+
+def test_call_checkable_works_with_runtime_checkable() -> None:
+    @runtime_checkable
+    @call_checkable
+    class SupportsIntCall(Protocol):
+        def __call__(self, x: int) -> int: ...
+
+    class Good:
+        def __call__(self, x: int) -> int:
+            return x + 1
+
+    class WrongArg:
+        def __call__(self, x: str) -> int:
+            return int(x)
+
+    assert isinstance(Good(), SupportsIntCall)
+    assert not isinstance(WrongArg(), SupportsIntCall)
+
+    @call_checkable
+    @runtime_checkable
+    class SupportsIntCallReverse(Protocol):
+        def __call__(self, x: int) -> int: ...
+
+    assert isinstance(Good(), SupportsIntCallReverse)
+    assert not isinstance(WrongArg(), SupportsIntCallReverse)
+
+
+def test_call_checkable_generic_protocol_specialization() -> None:
+    T = TypeVar("T")
+
+    @runtime_checkable
+    @call_checkable
+    class ValueCall(Protocol[T]):
+        def __call__(self, value: T) -> T: ...
+
+    class IntCallable:
+        def __call__(self, value: int) -> int:
+            return value
+
+    class StrCallable:
+        def __call__(self, value: str) -> str:
+            return value
+
+    assert isinstance(IntCallable(), ValueCall[int])
+    assert not isinstance(StrCallable(), ValueCall[int])
+    assert not isinstance(IntCallable(), ValueCall[str])
+
+
+def test_call_checkable_requires_protocol_subclass() -> None:
+    with pytest.raises(TypeError, match="Protocol"):
+        call_checkable(object)
 
 
 def test_validated_rejects_non_callable() -> None:
@@ -297,6 +377,7 @@ def test_validated_positional_only_change_arg_and_default() -> None:
     for inner_exc in exc.value.exceptions:
         assert isinstance(inner_exc, TypeError)
 
+
 def test_validated_positional_only_change_followed_by_unannotated() -> None:
 
     @validated
@@ -315,6 +396,7 @@ def test_validated_positional_only_change_arg_second() -> None:
 
     assert f(1, [42]) == 2
     assert f(1, [100]) == 2
+
 
 def test_validated_positional_only_change_default_arg() -> None:
 
@@ -339,6 +421,7 @@ def test_validated_positional_only_bad_default() -> None:
     assert len(exc.value.exceptions) == 1
     assert isinstance(exc.value.exceptions[0], TypeError)
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
+
 
 def test_validated_positional_only_aggregate_errors_false() -> None:
     """Test aggregate_errors=False with multiple positional-only args (early return)."""
@@ -433,6 +516,7 @@ def test_validation_positional_or_keyword_change_arg_second() -> None:
     assert f(1, [1, 2, 3]) == 7
     assert f(1, items=[10, 20]) == 31
     assert f(x=2, items=[10, 20]) == 32
+
 
 def test_validated_positional_or_keyword_change_default_arg() -> None:
 
