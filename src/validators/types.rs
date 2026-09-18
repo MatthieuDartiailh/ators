@@ -407,10 +407,18 @@ impl TypeValidator {
         }
         match self {
             // Containers with CheckAndWrap mode always modify (wrap)
-            Self::List { validation_mode, .. }
-            | Self::Set { validation_mode, .. }
-            | Self::FrozenSet { validation_mode, .. }
-            | Self::Dict { validation_mode, .. } => *validation_mode == ValidationMode::CheckOnly,
+            Self::List {
+                validation_mode, ..
+            }
+            | Self::Set {
+                validation_mode, ..
+            }
+            | Self::FrozenSet {
+                validation_mode, ..
+            }
+            | Self::Dict {
+                validation_mode, ..
+            } => *validation_mode == ValidationMode::CheckOnly,
             // All other validators don't modify the value
             _ => true,
         }
@@ -439,25 +447,37 @@ impl TypeValidator {
             Self::ForwardValidator { late_validator } => Self::ForwardValidator {
                 late_validator: late_validator.with_owner(py, owner),
             },
-            Self::FrozenSet { item, validation_mode } => Self::FrozenSet {
+            Self::FrozenSet {
+                item,
+                validation_mode,
+            } => Self::FrozenSet {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
                 validation_mode: *validation_mode,
             },
-            Self::Set { item, validation_mode } => Self::Set {
+            Self::Set {
+                item,
+                validation_mode,
+            } => Self::Set {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
                 validation_mode: *validation_mode,
             },
-            Self::List { item, validation_mode } => Self::List {
+            Self::List {
+                item,
+                validation_mode,
+            } => Self::List {
                 item: item
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
                 validation_mode: *validation_mode,
             },
-            Self::Dict { items, validation_mode } => Self::Dict {
+            Self::Dict {
+                items,
+                validation_mode,
+            } => Self::Dict {
                 items: items.as_ref().map(|(k, v)| {
                     (
                         BoxedValidator::from(k.with_owner(py, owner)),
@@ -729,11 +749,9 @@ impl TypeValidator {
                                                 None => {
                                                     let mut vec = Vec::with_capacity(fset.len());
                                                     for i in 0..index {
-                                                        vec.push(
-                                                            fset.get_item(i).expect(
-                                                                "All indexes are known to be valid.",
-                                                            ),
-                                                        );
+                                                        vec.push(fset.get_item(i).expect(
+                                                            "All indexes are known to be valid.",
+                                                        ));
                                                     }
                                                     vec.push(v);
                                                     validated_items = Some(vec);
@@ -1330,7 +1348,11 @@ impl TypeValidator {
             | Self::Bytes {}
             | Self::Str {} => Mutability::Immutable,
             Self::Any {} => Mutability::Undecidable,
-            Self::FrozenSet { item, validation_mode: _ } | Self::VarTuple { item } => match item {
+            Self::FrozenSet {
+                item,
+                validation_mode: _,
+            }
+            | Self::VarTuple { item } => match item {
                 None => Mutability::Immutable,
                 Some(iv) => iv.type_validator.is_type_mutable(py),
             },
@@ -1357,9 +1379,18 @@ impl TypeValidator {
                         }
                     })
             }
-            Self::Set { item: _, validation_mode: _ } => Mutability::Mutable,
-            Self::List { item: _, validation_mode: _ } => Mutability::Mutable,
-            Self::Dict { items: _, validation_mode: _ } => Mutability::Mutable,
+            Self::Set {
+                item: _,
+                validation_mode: _,
+            } => Mutability::Mutable,
+            Self::List {
+                item: _,
+                validation_mode: _,
+            } => Mutability::Mutable,
+            Self::Dict {
+                items: _,
+                validation_mode: _,
+            } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1451,10 +1482,31 @@ impl Clone for TypeValidator {
                 items: items.to_vec(),
             },
             Self::VarTuple { item } => Self::VarTuple { item: item.clone() },
-            Self::FrozenSet { item, validation_mode } => Self::FrozenSet { item: item.clone(), validation_mode: *validation_mode },
-            Self::Set { item, validation_mode } => Self::Set { item: item.clone(), validation_mode: *validation_mode },
-            Self::List { item, validation_mode } => Self::List { item: item.clone(), validation_mode: *validation_mode },
-            Self::Dict { items, validation_mode } => Self::Dict {
+            Self::FrozenSet {
+                item,
+                validation_mode,
+            } => Self::FrozenSet {
+                item: item.clone(),
+                validation_mode: *validation_mode,
+            },
+            Self::Set {
+                item,
+                validation_mode,
+            } => Self::Set {
+                item: item.clone(),
+                validation_mode: *validation_mode,
+            },
+            Self::List {
+                item,
+                validation_mode,
+            } => Self::List {
+                item: item.clone(),
+                validation_mode: *validation_mode,
+            },
+            Self::Dict {
+                items,
+                validation_mode,
+            } => Self::Dict {
                 items: items.clone(),
                 validation_mode: *validation_mode,
             },

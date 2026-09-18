@@ -598,7 +598,7 @@ fn handle_iterator_error<'py>(
                 Err(pyo3::PyErr::new::<pyo3::exceptions::PyStopIteration, _>((
                     py_value,
                 )))
-            },
+            }
             Err(original_err) => {
                 let wrapped_msg = format!("Failed to validate return value: {}", original_err);
                 let wrapped_err = pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(wrapped_msg);
