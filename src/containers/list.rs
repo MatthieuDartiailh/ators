@@ -149,6 +149,7 @@ impl AtorsList {
             match &item_v.type_validator {
                 TypeValidator::List {
                     item: Some(nested_bv),
+                    validation_mode: _,
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsList>() {
                         AtorsList::restore(nested, (*nested_bv.0).clone(), member_name, object);
@@ -156,6 +157,7 @@ impl AtorsList {
                 }
                 TypeValidator::Set {
                     item: Some(nested_bv),
+                    validation_mode: _,
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsSet>() {
                         AtorsSet::restore(nested, (*nested_bv.0).clone(), member_name, object);
@@ -163,6 +165,7 @@ impl AtorsList {
                 }
                 TypeValidator::Dict {
                     items: Some((key_bv, val_bv)),
+                    validation_mode: _,
                 } => {
                     if let Ok(nested) = list_item.cast::<AtorsDict>() {
                         AtorsDict::restore(

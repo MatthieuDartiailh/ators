@@ -15,7 +15,7 @@ use pyo3::{
 mod coercer;
 pub use coercer::Coercer;
 pub(crate) mod types;
-pub use types::TypeValidator;
+pub use types::{TypeValidator, ValidationMode};
 mod values;
 pub(crate) use values::ValidValues;
 pub use values::ValueValidator;

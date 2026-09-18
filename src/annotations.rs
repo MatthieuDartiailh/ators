@@ -24,7 +24,7 @@ use crate::{
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
     utils::err_with_cause,
     validators::{
-        TypeValidator, ValidValues, Validator, ValueValidator,
+        TypeValidator, ValidValues, ValidationMode, Validator, ValueValidator,
         types::{BoxedValidator, LateResolvedValidator},
     },
 };
@@ -121,6 +121,7 @@ pub fn build_validator_from_annotation<'py>(
     tools: &TypeTools<'py>,
     ctx_provider: Option<&Bound<'py, PyAny>>,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
+    validation_mode: ValidationMode,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
     // Ators generic specializations can be represented as GenericAlias wrappers
     // on the Python side; unwrap them to the canonical specialized class for
@@ -167,6 +168,7 @@ pub fn build_validator_from_annotation<'py>(
             tools,
             ctx_provider,
             typevar_bindings,
+            validation_mode,
         );
     }
 
@@ -238,6 +240,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 Ok((
                     Validator::new(
@@ -264,6 +267,7 @@ pub fn build_validator_from_annotation<'py>(
                         tools,
                         ctx_provider,
                         typevar_bindings,
+                        validation_mode,
                     )?;
                     requires_owner = requires_owner || item_info.requires_owner;
                     items.push(item_validator);
@@ -282,6 +286,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -292,7 +297,10 @@ pub fn build_validator_from_annotation<'py>(
             };
             Ok((
                 Validator::new(
-                    TypeValidator::FrozenSet { item: item_val },
+                    TypeValidator::FrozenSet {
+                        item: item_val,
+                        validation_mode,
+                    },
                     None,
                     None,
                     None,
@@ -308,6 +316,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -317,7 +326,15 @@ pub fn build_validator_from_annotation<'py>(
                 (None, false)
             };
             Ok((
-                Validator::new(TypeValidator::Set { item: item_val }, None, None, None),
+                Validator::new(
+                    TypeValidator::Set {
+                        item: item_val,
+                        validation_mode,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<PyList>()) {
@@ -329,6 +346,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 (
                     Some(BoxedValidator::from(item_validator)),
@@ -338,7 +356,15 @@ pub fn build_validator_from_annotation<'py>(
                 (None, false)
             };
             Ok((
-                Validator::new(TypeValidator::List { item: item_val }, None, None, None),
+                Validator::new(
+                    TypeValidator::List {
+                        item: item_val,
+                        validation_mode,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<PyDict>()) {
@@ -350,6 +376,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 let (val_validator, val_info) = build_validator_from_annotation(
                     PyString::new(py, &format!("{name}-value")).cast()?,
@@ -358,6 +385,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 (
                     Some((
@@ -373,6 +401,7 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(
                     TypeValidator::Dict {
                         items: items_validator,
+                        validation_mode,
                     },
                     None,
                     None,
@@ -393,6 +422,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 requires_owner = requires_owner || info.requires_owner;
                 members.push(validator);
@@ -427,6 +457,7 @@ pub fn build_validator_from_annotation<'py>(
                         tools,
                         ctx_provider,
                         typevar_bindings,
+                        validation_mode,
                     )?;
                     requires_owner = requires_owner || attr_info.requires_owner;
                     attributes.push((attr_name_str, attr_validator));
@@ -481,6 +512,7 @@ pub fn build_validator_from_annotation<'py>(
                 tools,
                 ctx_provider,
                 typevar_bindings,
+                validation_mode,
             );
         }
 
@@ -500,6 +532,7 @@ pub fn build_validator_from_annotation<'py>(
                     tools,
                     ctx_provider,
                     typevar_bindings,
+                    validation_mode,
                 )?;
                 requires_owner = requires_owner || info.requires_owner;
                 members.push(validator);
@@ -519,6 +552,7 @@ pub fn build_validator_from_annotation<'py>(
                 tools,
                 ctx_provider,
                 typevar_bindings,
+                validation_mode,
             );
         }
 
@@ -536,6 +570,7 @@ pub fn build_validator_from_annotation<'py>(
             tools,
             ctx_provider,
             typevar_bindings,
+            validation_mode,
         )
     } else if ann.is(&tools.types.any) || ann.is(&tools.types.object) {
         Ok((
@@ -646,7 +681,15 @@ pub fn build_function_argument_or_return_validator<'py>(
         )));
     }
 
-    let (validator, _) = build_validator_from_annotation(name, ann, 0, tools, None, None)?;
+    let (validator, _) = build_validator_from_annotation(
+        name,
+        ann,
+        0,
+        tools,
+        None,
+        None,
+        ValidationMode::CheckOnly,
+    )?;
     Ok(validator)
 }
 
@@ -717,6 +760,7 @@ fn configure_member_builder_from_annotation<'py>(
             .forward_ref_environment_factory()
             .map(|f| f.bind(name.py())),
         typevar_bindings,
+        ValidationMode::CheckAndWrap,
     ) {
         Ok(v) => Ok(v),
         Err(err) => Err(err_with_cause(
@@ -862,6 +906,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                     &tools,
                     None,
                     typevar_bindings,
+                    ValidationMode::CheckAndWrap,
                 )
                 .map_err(|err| {
                     err_with_cause(

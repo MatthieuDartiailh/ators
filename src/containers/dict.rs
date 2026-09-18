@@ -151,7 +151,10 @@ impl AtorsDict {
             // SAFETY: AtorsDict is declared as `extends=PyDict`, so this cast is always valid.
             let pydict = unsafe { adict.cast_unchecked::<PyDict>() };
             match &value_validator.type_validator {
-                TypeValidator::List { item: Some(item_v) } => {
+                TypeValidator::List {
+                    item: Some(item_v),
+                    validation_mode: _,
+                } => {
                     for (_, v) in pydict.iter() {
                         AtorsList::restore(
                             unsafe { v.cast_unchecked::<AtorsList>() },
@@ -161,7 +164,10 @@ impl AtorsDict {
                         )
                     }
                 }
-                TypeValidator::Set { item: Some(item_v) } => {
+                TypeValidator::Set {
+                    item: Some(item_v),
+                    validation_mode: _,
+                } => {
                     for (_, v) in pydict.iter() {
                         AtorsSet::restore(
                             unsafe { v.cast_unchecked::<AtorsSet>() },
@@ -173,6 +179,7 @@ impl AtorsDict {
                 }
                 TypeValidator::Dict {
                     items: Some((key_v, val_v)),
+                    validation_mode: _,
                 } => {
                     for (_, v) in pydict.iter() {
                         AtorsDict::restore(
@@ -204,6 +211,7 @@ impl AtorsDict {
         match &value_v.type_validator {
             TypeValidator::List {
                 item: Some(item_bv),
+                validation_mode: _,
             } => {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsList>() {
@@ -213,6 +221,7 @@ impl AtorsDict {
             }
             TypeValidator::Set {
                 item: Some(item_bv),
+                validation_mode: _,
             } => {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsSet>() {
@@ -222,6 +231,7 @@ impl AtorsDict {
             }
             TypeValidator::Dict {
                 items: Some((key_bv, val_bv)),
+                validation_mode: _,
             } => {
                 for (_, v) in py_dict.iter() {
                     if let Ok(nested) = v.cast::<AtorsDict>() {
