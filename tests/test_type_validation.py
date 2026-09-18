@@ -8,7 +8,6 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from annotationlib import ForwardRef
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import pytest
@@ -136,6 +135,48 @@ def test_type_validators(ann, goods, bads, warn):
             a.a = bad
 
 
+@pytest.mark.parametrize(
+    "ann, bad",
+    [
+        (list[int], "not-a-list"),
+        (set[int], {"not": "a-set"}),
+        (frozenset[int], [1, 2, 3]),
+        (dict[int, int], [("a", 1)]),
+        (tuple[int, ...], 1),
+    ],
+)
+def test_container_validator_rejects_wrong_shape(ann, bad):
+    class A(Ators):
+        a: ann = member()
+
+    obj = A()
+    with pytest.raises(TypeError):
+        obj.a = bad
+
+
+def test_union_validator_reports_grouped_cause():
+    class A(Ators):
+        a: int | str = member()
+
+    obj = A()
+    with pytest.raises(TypeError) as exc:
+        obj.a = object()  # type: ignore
+
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, BaseExceptionGroup)
+
+
+def test_generic_attributes_reject_invalid_typed_attribute_value():
+    class A(Ators):
+        a: MyGen[int] = member()
+
+    obj = A()
+    obj.a = MyGen(1)
+
+    with pytest.raises(TypeError):
+        obj.a = MyGen("not-an-int")  # type: ignore
+
+
 class SelfRefA(Ators):
     a: SelfRefA = member()
 
@@ -147,7 +188,7 @@ def test_forward_ref_support_self_reference():
     a1.a = a2
     assert a1.a is a2
     with pytest.raises(TypeError):
-        a1.a = 5
+        a1.a = 5  # type: ignore
 
 
 class OutOfOrderA(Ators):
@@ -183,19 +224,19 @@ def test_forward_ref_preserve_owner_in_subclasses():
     a1.a = a2
     assert a1.a is a2
     with pytest.raises(TypeError):
-        a1.a = 5
+        a1.a = 5  # type: ignore
 
     a1 = NOOA()
     b1 = OutOfOrderB()
     a1.a = b1
     assert a1.a is b1
     with pytest.raises(TypeError):
-        a1.a = 5
+        a1.a = 5  # type: ignore
 
 
 def test_forward_ref_failed_to_resolve():
     class A(Ators):
-        a: NonExistent = member()  # noqa : F821
+        a: NonExistent = member()  # noqa : F821  # type: ignore
 
     a1 = A()
     with pytest.raises(NameError) as e:
@@ -221,11 +262,11 @@ def test_forward_ref_support_callable_and_type_alias(resolver):
 
     a1.a = logging.getLogger("test")
     with pytest.raises(TypeError):
-        a1.a = 5
+        a1.a = 5  # type: ignore
     a1.b = logging.getLogger("test")
     a1.b = 5
     with pytest.raises(TypeError):
-        a1.b = ""
+        a1.b = ""  # type: ignore
 
 
 def test_inherited_type_validator():
@@ -265,11 +306,11 @@ class BoundedPair[T: int, U: int](Ators):
 
 
 class ForwardRefPartialHolder[T: int](Ators):
-    pair: ForwardRef("GenericPair[int, T]") = member()
+    pair: GenericPair[int, T] = member()
 
 
 class DelayedForwardRefPartialHolder[T: int](Ators):
-    pair: ForwardRef("DelayedGenericPair[int, T]") = member()
+    pair: DelayedGenericPair[int, T] = member()
 
 
 class DelayedGenericPair[T, U](Ators):
@@ -340,7 +381,7 @@ def test_partial_specialization_keeps_generic_parameter():
     pair.first = 1
     pair.second = 2
     with pytest.raises(TypeError):
-        pair.second = "a"
+        pair.second = "a"  # type: ignore
 
 
 def test_partial_specialization_can_be_fully_specialized_later():
@@ -361,13 +402,13 @@ def test_partial_specialization_typevar_bound_must_be_narrower():
 
     wider = TypeVar("wider", bound=str)
     with pytest.raises(TypeError, match="not narrower"):
-        _ = BoundedPair[int, wider]
+        _ = BoundedPair[int, wider]  # type: ignore
 
 
 def test_partial_specialization_typevar_without_required_bound_is_rejected():
     unbounded = TypeVar("unbounded")
     with pytest.raises(TypeError, match="must define a bound"):
-        _ = BoundedPair[int, unbounded]
+        _ = BoundedPair[int, unbounded]  # type: ignore
 
 
 def test_forward_ref_support_partial_specialization():
@@ -376,14 +417,14 @@ def test_forward_ref_support_partial_specialization():
 
     holder.pair = GenericPair[int, T2]()
     with pytest.raises(TypeError):
-        holder.pair = GenericPair[str, T2]()
+        holder.pair = GenericPair[str, T2]()  # type: ignore
 
 
 def test_delayed_forward_ref_support_partial_specialization():
     holder = DelayedForwardRefPartialHolder[int]()
     holder.pair = DelayedGenericPair[int, int]()
     with pytest.raises(TypeError):
-        holder.pair = DelayedGenericPair[str, int]()
+        holder.pair = DelayedGenericPair[str, int]()  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +434,7 @@ def test_delayed_forward_ref_support_partial_specialization():
 T_constrained = TypeVar("T_constrained", int, str)
 
 
-class ConstrainedBox(Ators):
+class ConstrainedBox[T_constrained](Ators):
     item: T_constrained = member()
 
 
@@ -410,11 +451,11 @@ def test_constrained_typevar_accepts_second_constraint():
 def test_constrained_typevar_rejects_other_types():
     box = ConstrainedBox()
     with pytest.raises(TypeError):
-        box.item = 1.5
+        box.item = 1.5  # type: ignore
     with pytest.raises(TypeError):
-        box.item = []
+        box.item = []  # type: ignore
     with pytest.raises(TypeError):
-        box.item = {}
+        box.item = {}  # type: ignore
 
 
 def test_constrained_typevar_matches_union_behavior():
@@ -432,9 +473,9 @@ def test_constrained_typevar_matches_union_behavior():
 
     for val in (1.5, [], {}):
         with pytest.raises(TypeError):
-            cbox.item = val
+            cbox.item = val  # type: ignore
         with pytest.raises(TypeError):
-            ubox.item = val
+            ubox.item = val  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +502,7 @@ def test_constrained_generic_unspecialized_accepts_constraints():
 def test_constrained_generic_unspecialized_rejects_other_types():
     box = ConstrainedGenericBox()
     with pytest.raises(TypeError):
-        box.item = 1.5
+        box.item = 1.5  # type: ignore
 
 
 def test_constrained_generic_specialized_with_first_constraint():
@@ -469,7 +510,7 @@ def test_constrained_generic_specialized_with_first_constraint():
     box = IntBox()
     box.item = 1
     with pytest.raises(TypeError):
-        box.item = "a"
+        box.item = "a"  # type: ignore
 
 
 def test_constrained_generic_specialized_with_second_constraint():
@@ -477,7 +518,7 @@ def test_constrained_generic_specialized_with_second_constraint():
     box = StrBox()
     box.item = "hello"
     with pytest.raises(TypeError):
-        box.item = 1
+        box.item = 1  # type: ignore
 
 
 def test_constrained_generic_specialized_with_subclass_of_constraint():
@@ -486,17 +527,17 @@ def test_constrained_generic_specialized_with_subclass_of_constraint():
     box = BoolBox()
     box.item = True
     with pytest.raises(TypeError):
-        box.item = "a"
+        box.item = "a"  # type: ignore
 
 
 def test_constrained_generic_specialization_rejects_outside_constraints():
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericBox[float]
+        _ = ConstrainedGenericBox[float]  # type: ignore
 
 
 def test_constrained_generic_specialization_rejects_list_type():
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericBox[list]
+        _ = ConstrainedGenericBox[list]  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_with_subset_constraints():
@@ -507,20 +548,20 @@ def test_constrained_generic_partial_specialization_with_subset_constraints():
     pair.first = 1
     pair.second = "x"
     with pytest.raises(TypeError):
-        pair.first = "a"
+        pair.first = "a"  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_rejects_incompatible_constraints():
     # T_bad has float which is not within (int, str)
     T_bad = TypeVar("T_bad", int, float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_bad, str]
+        _ = ConstrainedGenericPair[T_bad, str]  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_rejects_unconstrained_typevar():
     T_free = TypeVar("T_free")
     with pytest.raises(TypeError, match="compatible with the constraints"):
-        _ = ConstrainedGenericPair[T_free, str]
+        _ = ConstrainedGenericPair[T_free, str]  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_with_bound_within_constraints():
@@ -531,13 +572,13 @@ def test_constrained_generic_partial_specialization_with_bound_within_constraint
     pair.first = 1
     pair.second = "x"
     with pytest.raises(TypeError):
-        pair.first = "a"
+        pair.first = "a"  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
     T_float_bound = TypeVar("T_float_bound", bound=float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_float_bound, str]
+        _ = ConstrainedGenericPair[T_float_bound, str]  # type: ignore
 
 
 def test_fixed_tuple_validation_preserves_unchanged_items_after_transformation():
@@ -574,4 +615,4 @@ def test_faulty_multiple_subscript_type_annotation():
     with pytest.raises(TypeError):
 
         class A(Ators):
-            a: type[int, str] = member()  # type: ignore[misc]
+            a: type[int, str] = member()  # type: ignore

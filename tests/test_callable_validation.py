@@ -385,6 +385,30 @@ def test_validated_var_or_keyword_bad_default() -> None:
     assert "Failed to validate 'x'" in str(exc.value.exceptions[0])
 
 
+def test_validated_default_argument_order_is_preserved() -> None:
+    @validated
+    def f(x: list[int] = [], y: int = 2, z: int = 3) -> int:
+        return len(x) + y + z
+
+    assert f() == 5
+    assert f([1, 2], 10, 11) == 23
+
+
+def test_validated_keyword_default_and_var_kwargs_still_validate() -> None:
+    @validated
+    def f(x: int = 1, *, y: int = 2, **rest: int) -> int:
+        return x + y + sum(rest.values())
+
+    assert f() == 3
+    assert f(x=5, y=6, z=7) == 18
+
+    with pytest.raises(ExceptionGroup) as exc:
+        f(x=1, y="bad", z=7)  # type: ignore[arg-type]
+
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+
+
 def test_validation_positional_or_keyword_change_arg() -> None:
     """Test list[int] validation in positional-or-keyword parameter with CheckOnly mode."""
 
