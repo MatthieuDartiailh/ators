@@ -24,7 +24,7 @@ use crate::{
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
     utils::err_with_cause,
     validators::{
-        TypeValidator, ValidValues, Validator, ValueValidator, ValidationMode,
+        TypeValidator, ValidValues, ValidationMode, Validator, ValueValidator,
         types::{BoxedValidator, LateResolvedValidator},
     },
 };
