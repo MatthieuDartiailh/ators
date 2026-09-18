@@ -402,7 +402,7 @@ impl TypeValidator {
     /// Returns false if the validator can modify the value (e.g., containers with CheckAndWrap mode).
     pub fn preserve_value(&self, coercer_present: bool) -> bool {
         if coercer_present {
-            // If a Coercer is present, value will be modified
+            // If a Coercer is present, value may be modified
             return false;
         }
         match self {
