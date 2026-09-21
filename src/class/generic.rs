@@ -666,13 +666,19 @@ pub fn create_ators_specialized_subclass<'py>(
         .collect::<PyResult<Vec<String>>>()?
         .join(", ");
     let specialized_name = format!("{base_name}[{rendered}]");
+    let origin_qualname: String = origin.getattr(intern!(py, "__qualname__"))?.extract()?;
+    let specialized_qualname = origin_qualname
+        .rsplit_once('.')
+        .map(|(prefix, _)| format!("{prefix}.{specialized_name}"))
+        .unwrap_or_else(|| specialized_name.clone());
+    namespace.set_item(intern!(py, "__qualname__"), &specialized_qualname)?;
 
     let kwargs = PyDict::new(py);
     kwargs.set_item(intern!(py, "frozen"), cls_info.frozen())?;
 
     let typevar_bindings_py = typevar_bindings.unbind();
     let origin_module: String = cls.getattr(intern!(py, "__module__"))?.extract()?;
-    let specialized_fqname = format!("{origin_module}.{specialized_name}");
+    let specialized_fqname = format!("{origin_module}.{specialized_qualname}");
     insert_pending_specialization_bindings(
         py,
         specialized_fqname,
