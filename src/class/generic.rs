@@ -669,6 +669,10 @@ pub fn create_ators_specialized_subclass<'py>(
     let origin_qualname: String = origin.getattr(intern!(py, "__qualname__"))?.extract()?;
     let specialized_qualname = origin_qualname
         .rsplit_once('.')
+        .filter(|(_, suffix)| {
+            let unparameterized = suffix.rfind('[').map_or(*suffix, |idx| &suffix[..idx]);
+            unparameterized == base_name
+        })
         .map(|(prefix, _)| format!("{prefix}.{specialized_name}"))
         .unwrap_or_else(|| specialized_name.clone());
     namespace.set_item(intern!(py, "__qualname__"), &specialized_qualname)?;
