@@ -1265,7 +1265,10 @@ impl TypeValidator {
                 Err(crate::utils::err_with_cause(
                     value.py(),
                     eg,
-                    pyo3::exceptions::PyBaseExceptionGroup::new_err(err),
+                    pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                        format!("Failed to validate {} against union members", value.repr()?),
+                        err,
+                    )),
                 ))
             }
             Self::GenericAttributes { type_, attributes } => {

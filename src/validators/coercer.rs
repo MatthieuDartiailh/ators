@@ -250,7 +250,10 @@ impl Coercer {
                                 value.repr()?,
                                 members
                             )),
-                            pyo3::exceptions::PyBaseExceptionGroup::new_err(err)
+                            pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                                format!("Failed to coerce {} against union members", value.repr()?),
+                                err,
+                            ))
                         )
                     )
                 },
