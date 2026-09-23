@@ -242,20 +242,32 @@ impl Coercer {
                             Err(e) => err.push(e),
                         }
                     }
-                    Err(
-                        err_with_cause(
-                            value.py(),
-                            pyo3::exceptions::PyTypeError::new_err(format!(
-                                "Could not coerce value {} to any member in union {:?}",
-                                value.repr()?,
-                                members
-                            )),
-                            pyo3::exceptions::PyBaseExceptionGroup::new_err((
-                                format!("Failed to coerce {} against union members", value.repr()?),
-                                err,
-                            ))
-                        )
-                    )
+                    let py = value.py();
+                    let group_items = PyTuple::new(
+                        py,
+                        err.into_iter().map(|e| e.into_value(py)).collect::<Vec<_>>(),
+                    )?
+                    .unbind();
+                    let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                        format!("Failed to coerce {} against union members", value.repr()?),
+                        group_items,
+                    ));
+                    let target = match object {
+                        Some(obj) => obj.repr()?,
+                        None => value.repr()?,
+                    };
+                    let outer = if let Some(member_name) = name {
+                        pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Failed to coerce member '{}' of {}",
+                            member_name, target
+                        ))
+                    } else {
+                        pyo3::exceptions::PyTypeError::new_err(format!(
+                            "Failed to coerce {}",
+                            target
+                        ))
+                    };
+                    Err(err_with_cause(py, outer, group))
                 },
                 TypeValidator::GenericAttributes { type_, .. } => {
                     type_.bind(py).call1((value,))

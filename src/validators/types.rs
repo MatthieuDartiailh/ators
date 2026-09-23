@@ -1257,19 +1257,32 @@ impl TypeValidator {
                         Err(e) => err.push(e),
                     }
                 }
-                let eg = pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Value {} is not valid for any member of the union for {:?}",
-                    value.repr()?,
-                    members
+                let py = value.py();
+                let group_items = PyTuple::new(
+                    py,
+                    err.into_iter().map(|e| e.into_value(py)).collect::<Vec<_>>(),
+                )?
+                .unbind();
+                let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                    format!("Failed to validate {} against union members", value.repr()?),
+                    group_items,
                 ));
-                Err(crate::utils::err_with_cause(
-                    value.py(),
-                    eg,
-                    pyo3::exceptions::PyBaseExceptionGroup::new_err((
-                        format!("Failed to validate {} against union members", value.repr()?),
-                        err,
-                    )),
-                ))
+                let outer = if let Some(member_name) = name {
+                    let target = match object {
+                        Some(obj) => obj.repr()?,
+                        None => value.repr()?,
+                    };
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for member '{}' of {}",
+                        member_name, target
+                    ))
+                } else {
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for {}",
+                        value.repr()?
+                    ))
+                };
+                Err(crate::utils::err_with_cause(py, outer, group))
             }
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());

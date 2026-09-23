@@ -95,6 +95,24 @@ class AtorsGenericAlias(types.GenericAlias):
     Ok(alias_cls.clone_ref(py).into_bound(py))
 }
 
+fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if left.is(right) {
+        return Ok(true);
+    }
+    if !is_type_var(left)? || !is_type_var(right)? {
+        return Ok(false);
+    }
+    let py = left.py();
+    let left_name: String = left.getattr(intern!(py, "__name__"))?.extract()?;
+    let right_name: String = right.getattr(intern!(py, "__name__"))?.extract()?;
+    if left_name != right_name {
+        return Ok(false);
+    }
+    let left_module: String = left.getattr(intern!(py, "__module__"))?.extract()?;
+    let right_module: String = right.getattr(intern!(py, "__module__"))?.extract()?;
+    Ok(left_module == right_module)
+}
+
 /// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
 fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
     let py = typevar.py();
@@ -523,7 +541,7 @@ pub fn create_ators_specialized_subclass<'py>(
     let fully_passthrough = exposed_params
         .iter()
         .zip(params_tuple.iter())
-        .all(|(tp, p)| tp.is(&p));
+        .all(|(tp, p)| same_typevar_slot(&tp.bind(py), &p).unwrap_or(false));
     if fully_passthrough {
         return Ok(cls.clone().into_any());
     }
@@ -558,7 +576,7 @@ pub fn create_ators_specialized_subclass<'py>(
         .map(|p| p.bind(py))
         .zip(params_tuple.iter())
     {
-        if exposed.is(&arg) {
+        if same_typevar_slot(&exposed, &arg)? {
             continue;
         }
 
@@ -569,7 +587,7 @@ pub fn create_ators_specialized_subclass<'py>(
 
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {
-            if value.is(exposed) {
+            if same_typevar_slot(&value, &exposed)? {
                 to_replace.push(key.unbind());
             }
         }
@@ -591,7 +609,11 @@ pub fn create_ators_specialized_subclass<'py>(
             .unwrap_or(origin_param.clone());
         // Remaining type params must preserve first-seen order while dropping
         // duplicates introduced by transitive substitutions.
-        if is_type_var(&value)? && !unresolved.iter().any(|p: &Bound<'_, PyAny>| p.is(&value)) {
+        if is_type_var(&value)?
+            && !unresolved
+                .iter()
+                .any(|p: &Bound<'_, PyAny>| same_typevar_slot(p, &value).unwrap_or(false))
+        {
             unresolved.push(value);
         }
     }

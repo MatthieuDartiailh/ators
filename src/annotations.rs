@@ -22,7 +22,7 @@ use crate::{
     event::EventBuilder,
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
-    utils::err_with_cause,
+    utils::{err_with_cause, is_type_var},
     validators::{
         TypeValidator, ValidValues, ValidationMode, Validator, ValueValidator,
         types::{BoxedValidator, LateResolvedValidator},
@@ -110,6 +110,106 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
     })
 }
 
+fn resolve_typevar_metadata_by_name<'py>(
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+    class_namespace: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let py = ann.py();
+    if is_type_var(ann)? {
+        let name = ann.getattr(intern!(py, "__name__"))?.extract::<String>()?;
+        let module_name: String = class_namespace
+            .get_item(intern!(py, "__module__"))?
+            .map(|m| m.extract())
+            .transpose()?
+            .unwrap_or_default();
+        if !module_name.is_empty() {
+            if let Ok(module) = py.import(module_name) {
+                if let Ok(candidate) = module.getattr(name.as_str())
+                    && is_type_var(&candidate)?
+                {
+                    let constraints = candidate.getattr(intern!(py, "__constraints__"))?;
+                    let bound = candidate.getattr(intern!(py, "__bound__"))?;
+                    if !constraints.cast::<PyTuple>()?.is_empty() || !bound.is_none() {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    let origin = tools.get_origin.call1((ann,))?;
+    if origin.is_none() {
+        return Ok(ann.clone());
+    }
+
+    let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+    let mut resolved_args = Vec::with_capacity(args.len());
+    let mut rebuilt = false;
+    for arg in args.iter() {
+        let resolved = resolve_typevar_metadata_by_name(&arg, tools, class_namespace)?;
+        if !resolved.is(&arg) {
+            rebuilt = true;
+        }
+        resolved_args.push(resolved);
+    }
+
+    if rebuilt {
+        let params = PyTuple::new(py, resolved_args.iter())?;
+        match origin.call_method("__class_getitem__", (params.clone(),), None) {
+            Ok(rebuilt_ann) => return Ok(rebuilt_ann),
+            Err(_) => {
+                let alias = origin.getattr(intern!(py, "__getitem__"))?;
+                return Ok(alias.call1((params,))?);
+            }
+        }
+    }
+
+    Ok(ann.clone())
+}
+
+fn apply_typevar_bindings<'py>(
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+    typevar_bindings: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(bindings) = typevar_bindings
+        && let Some(bound_ann) = bindings.get_item(ann)?
+    {
+        return Ok(bound_ann.cast_into()?);
+    }
+
+    let py = ann.py();
+    let origin = tools.get_origin.call1((ann,))?;
+    if origin.is_none() {
+        return Ok(ann.clone());
+    }
+
+    let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+    let mut resolved_args = Vec::with_capacity(args.len());
+    let mut rebuilt = false;
+    for arg in args.iter() {
+        let resolved = apply_typevar_bindings(&arg, tools, typevar_bindings)?;
+        if !resolved.is(&arg) {
+            rebuilt = true;
+        }
+        resolved_args.push(resolved);
+    }
+
+    if rebuilt {
+        let params = PyTuple::new(py, resolved_args.iter())?;
+        match origin.call_method("__class_getitem__", (params.clone(),), None) {
+            Ok(rebuilt_ann) => return Ok(rebuilt_ann),
+            Err(_) => {
+                let alias = origin.getattr(intern!(py, "__getitem__"))?;
+                return Ok(alias.call1((params,))?);
+            }
+        }
+    }
+
+    Ok(ann.clone())
+}
+
 /// Build a validator from a type annotation, extracting as much information as
 /// possible to optimize validation and behavior definition. The returned
 /// ValidatorBuildInfo contains information about the built validator that may
@@ -123,13 +223,18 @@ pub fn build_validator_from_annotation<'py>(
     typevar_bindings: Option<&Bound<'py, PyDict>>,
     validation_mode: ValidationMode,
 ) -> PyResult<(Validator, ValidatorBuildInfo)> {
+    // Resolve any pending TypeVar bindings before unwrapping generic alias
+    // wrappers.  If we unwrap too early we lose the alias-level parameter
+    // substitution and validation compares against the wrong specialized class.
+    let ann = apply_typevar_bindings(&ann, tools, typevar_bindings)?;
+
     // Ators generic specializations can be represented as GenericAlias wrappers
     // on the Python side; unwrap them to the canonical specialized class for
-    // validator inference.
+    // validator inference once the TypeVar mapping has been applied.
     let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))? {
         ann.getattr(intern!(name.py(), "__ators_specialized_class__"))?
     } else {
-        ann.clone()
+        ann
     };
 
     if ann.is_instance_of::<PyString>() {
@@ -501,7 +606,10 @@ pub fn build_validator_from_annotation<'py>(
                 ))
             }
         }
-    } else if ann.is_instance(&tools.types.type_var)? {
+    } else if is_type_var(&ann)?
+        || (ann.getattr(intern!(py, "__constraints__")).is_ok()
+            && ann.getattr(intern!(py, "__name__")).is_ok())
+    {
         if let Some(bindings) = typevar_bindings
             && let Some(bound_ann) = bindings.get_item(&ann)?
         {
@@ -701,6 +809,7 @@ fn configure_member_builder_from_annotation<'py>(
     tools: &TypeTools<'py>,
     final_annotated: bool,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
+    class_namespace: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<()> {
     let origin = tools.get_origin.call1((ann,))?;
 
@@ -726,6 +835,7 @@ fn configure_member_builder_from_annotation<'py>(
             tools,
             true,
             typevar_bindings,
+            class_namespace,
         )?;
         match builder.pre_setattr() {
             Some(PreSetattrBehavior::Constant {}) => {}
@@ -751,9 +861,15 @@ fn configure_member_builder_from_annotation<'py>(
 
     // Next analyze the annotation to build the validators (Final is not
     // permitted within container or generic).
+    let ann = if let Some(class_namespace) = class_namespace {
+        resolve_typevar_metadata_by_name(ann, tools, class_namespace)?
+    } else {
+        ann.clone()
+    };
+
     let (new, build_info) = match build_validator_from_annotation(
         name,
-        ann,
+        &ann,
         type_containers,
         tools,
         builder
@@ -1033,6 +1149,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                 &tools,
                 false,
                 typevar_bindings,
+                Some(dct),
             )
             .map_err(|err| {
                 err_with_cause(
