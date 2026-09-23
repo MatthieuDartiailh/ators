@@ -95,7 +95,7 @@ class AtorsGenericAlias(types.GenericAlias):
     Ok(alias_cls.clone_ref(py).into_bound(py))
 }
 
-fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub(crate) fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
     if left.is(right) {
         return Ok(true);
     }
@@ -111,6 +111,21 @@ fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyRes
     let left_module: String = left.getattr(intern!(py, "__module__"))?.extract()?;
     let right_module: String = right.getattr(intern!(py, "__module__"))?.extract()?;
     Ok(left_module == right_module)
+}
+
+pub(crate) fn lookup_typevar_binding<'py>(
+    bindings: &Bound<'py, PyDict>,
+    key: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if let Some(bound_ann) = bindings.get_item(key)? {
+        return Ok(Some(bound_ann));
+    }
+    for (binding_key, value) in bindings.iter() {
+        if same_typevar_slot(&binding_key, key)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
 }
 
 /// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
@@ -625,7 +640,7 @@ pub fn create_ators_specialized_subclass<'py>(
     let typevar_bindings = full_bindings;
     let full_args = origin_params
         .iter()
-        .map(|tp| Ok(typevar_bindings.get_item(&tp)?.unwrap_or(tp)))
+        .map(|tp| Ok(lookup_typevar_binding(&typevar_bindings, &tp)?.unwrap_or(tp)))
         .collect::<PyResult<Vec<Bound<'_, PyAny>>>>()?;
     let full_args_tuple = PyTuple::new(py, full_args.iter())?;
 

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 
 use crate::{
+    class::generic::lookup_typevar_binding,
     event::EventBuilder,
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
@@ -174,7 +175,7 @@ fn apply_typevar_bindings<'py>(
     typevar_bindings: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     if let Some(bindings) = typevar_bindings
-        && let Some(bound_ann) = bindings.get_item(ann)?
+        && let Some(bound_ann) = lookup_typevar_binding(bindings, ann)?
     {
         return Ok(bound_ann.cast_into()?);
     }
@@ -591,10 +592,15 @@ pub fn build_validator_from_annotation<'py>(
                     .as_c_str(),
                     0,
                 )?;
+                let fallback_type = if let Ok(typed) = ann.cast::<PyType>() {
+                    typed.clone()
+                } else {
+                    origin.cast_into::<PyType>()?
+                };
                 Ok((
                     Validator::new(
                         TypeValidator::Typed {
-                            type_: origin.cast_into::<PyType>()?.unbind(),
+                            type_: fallback_type.unbind(),
                         },
                         None,
                         None,
@@ -611,7 +617,7 @@ pub fn build_validator_from_annotation<'py>(
             && ann.getattr(intern!(py, "__name__")).is_ok())
     {
         if let Some(bindings) = typevar_bindings
-            && let Some(bound_ann) = bindings.get_item(&ann)?
+            && let Some(bound_ann) = lookup_typevar_binding(bindings, &ann)?
         {
             return build_validator_from_annotation(
                 name,
@@ -866,6 +872,16 @@ fn configure_member_builder_from_annotation<'py>(
     } else {
         ann.clone()
     };
+
+    if let Some(bindings) = typevar_bindings {
+        let ann_repr = ann.repr()?;
+        if ann_repr.to_string().contains("T") {
+            println!("DEBUG config effective_ann={} bindings={}", ann_repr, bindings.len());
+            for (k, v) in bindings.iter() {
+                println!("DEBUG config binding key={} value={}", k.repr()?, v.repr()?);
+            }
+        }
+    }
 
     let (new, build_info) = match build_validator_from_annotation(
         name,
