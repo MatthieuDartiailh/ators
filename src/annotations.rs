@@ -573,7 +573,10 @@ pub fn build_validator_from_annotation<'py>(
                 })
             };
             if let Some(attr_names) = attr_names_opt {
-                let origin_type = origin.cast_into::<PyType>()?;
+                let type_ = match ann.cast::<PyType>() {
+                    Ok(type_) => type_.clone().unbind(),
+                    Err(_) => origin.cast_into::<PyType>()?.unbind(),
+                };
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
                 for (attr_name_str, attr_type) in attr_names.into_iter().zip(args.iter()) {
@@ -591,10 +594,7 @@ pub fn build_validator_from_annotation<'py>(
                 }
                 Ok((
                     Validator::new(
-                        TypeValidator::GenericAttributes {
-                            type_: origin_type.unbind(),
-                            attributes,
-                        },
+                        TypeValidator::GenericAttributes { type_, attributes },
                         None,
                         None,
                         None,

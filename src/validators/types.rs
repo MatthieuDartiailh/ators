@@ -1292,8 +1292,49 @@ impl TypeValidator {
                     return validation_error!(t.repr()?, name, object, value);
                 }
                 for (attr_name, validator) in attributes {
-                    let Ok(attr_value) = value.getattr(attr_name.as_str()) else {
-                        continue;
+                    let attr_value = match value.getattr(attr_name.as_str()) {
+                        Ok(attr_value) => attr_value,
+                        Err(err)
+                            if err.is_instance_of::<pyo3::exceptions::PyAttributeError>(
+                                value.py(),
+                            ) || (err
+                                .is_instance_of::<pyo3::exceptions::PyTypeError>(value.py())
+                                && (err
+                                    .to_string()
+                                    .contains("value is unset and has no default")
+                                    || err
+                                        .to_string()
+                                        .contains("Failed to get default value for member"))) =>
+                        {
+                            continue;
+                        }
+                        Err(err) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {} for the member {} of {}.",
+                                        attr_name,
+                                        value.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {}.",
+                                        attr_name,
+                                        value.repr()?
+                                    )),
+                                    err,
+                                ));
+                            }
+                        }
                     };
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
