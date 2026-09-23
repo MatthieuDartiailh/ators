@@ -383,6 +383,14 @@ fn validate_set_failed<'py>(
             object.repr()?,
         )));
     }
+    // Preserve the validator's own chained context for ordinary validation
+    // failures, but do not wrap a union validation error a second time when the
+    // validator already attached a real BaseExceptionGroup as the direct cause.
+    if let Some(cause) = err.cause(py)
+        && cause.is_instance(py, &py.get_type::<pyo3::exceptions::PyBaseExceptionGroup>())
+    {
+        return Ok(err);
+    }
     Ok(err_with_cause(
         py,
         pyo3::PyErr::from_type(

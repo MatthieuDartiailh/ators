@@ -1257,16 +1257,34 @@ impl TypeValidator {
                         Err(e) => err.push(e),
                     }
                 }
-                let eg = pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Value {} is not valid for any member of the union for {:?}",
-                    value.repr()?,
-                    members
+                let py = value.py();
+                let group_items = PyTuple::new(
+                    py,
+                    err.into_iter()
+                        .map(|e| e.into_value(py))
+                        .collect::<Vec<_>>(),
+                )?
+                .unbind();
+                let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                    format!("Failed to validate {} against union members", value.repr()?),
+                    group_items,
                 ));
-                Err(crate::utils::err_with_cause(
-                    value.py(),
-                    eg,
-                    pyo3::exceptions::PyBaseExceptionGroup::new_err(err),
-                ))
+                let outer = if let Some(member_name) = name {
+                    let target = match object {
+                        Some(obj) => obj.repr()?,
+                        None => value.repr()?,
+                    };
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for member '{}' of {}",
+                        member_name, target
+                    ))
+                } else {
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for {}",
+                        value.repr()?
+                    ))
+                };
+                Err(crate::utils::err_with_cause(py, outer, group))
             }
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());
@@ -1274,7 +1292,50 @@ impl TypeValidator {
                     return validation_error!(t.repr()?, name, object, value);
                 }
                 for (attr_name, validator) in attributes {
-                    let attr_value = value.getattr(attr_name.as_str())?;
+                    let attr_value = match value.getattr(attr_name.as_str()) {
+                        Ok(attr_value) => attr_value,
+                        Err(err)
+                            if err.is_instance_of::<pyo3::exceptions::PyAttributeError>(
+                                value.py(),
+                            ) || (err
+                                .is_instance_of::<pyo3::exceptions::PyTypeError>(value.py())
+                                && (err
+                                    .to_string()
+                                    .contains("value is unset and has no default")
+                                    || err
+                                        .to_string()
+                                        .contains("Failed to get default value for member"))) =>
+                        {
+                            continue;
+                        }
+                        Err(err) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {} for the member {} of {}.",
+                                        attr_name,
+                                        value.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {}.",
+                                        attr_name,
+                                        value.repr()?
+                                    )),
+                                    err,
+                                ));
+                            }
+                        }
+                    };
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
                     match validator.strict_validate(name, object, &attr_value) {
