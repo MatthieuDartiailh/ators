@@ -165,7 +165,7 @@ fn resolve_typevar_metadata_by_name<'py>(
     Ok(ann.clone())
 }
 
-fn apply_typevar_bindings<'py>(
+pub(crate) fn apply_typevar_bindings<'py>(
     ann: &Bound<'py, PyAny>,
     tools: &TypeTools<'py>,
     typevar_bindings: Option<&Bound<'py, PyDict>>,

@@ -18,6 +18,7 @@ use pyo3::{
 };
 
 use crate::{
+    annotations::{apply_typevar_bindings, get_type_tools},
     class::info::{
         AtorsGenericInfo, class_key, get_ators_specialized_class_for_alias, get_class_info,
         get_class_info_store, insert_definitive_class_info, insert_pending_specialization_bindings,
@@ -836,11 +837,24 @@ pub fn create_ators_specialized_subclass<'py>(
         return Ok(cached);
     }
 
-    // `__annotations__` is guaranteed by Python to be a mapping; cast
-    // directly rather than copying through `builtins.dict`.
-    let annotations = cls
-        .getattr(intern!(py, "__annotations__"))?
-        .cast_into::<PyMapping>()?;
+    // `__annotations__` must be rewritten against the pending TypeVar mapping
+    // before the specialized subclass is created; otherwise the member
+    // validators retain the origin's unbound annotation and keep validating
+    // against the wrong generic slot.
+    let raw_annotations = cls.getattr(intern!(py, "__annotations__"))?;
+    let tools = get_type_tools(py)?;
+    let annotations = if raw_annotations.is_none() {
+        PyDict::new(py)
+    } else {
+        let raw_mapping = raw_annotations.cast_into::<PyDict>()?;
+        let specialized_annotations = PyDict::new(py);
+        for item in raw_mapping.iter() {
+            let (name, value) = item;
+            let resolved = apply_typevar_bindings(&value, &tools, Some(&typevar_bindings))?;
+            specialized_annotations.set_item(name, resolved)?;
+        }
+        specialized_annotations
+    };
 
     let namespace = PyDict::new(py);
     namespace.set_item(
