@@ -51,7 +51,6 @@ pub(crate) struct PyTypes<'py> {
     class_var: Bound<'py, PyAny>,
     final_: Bound<'py, PyAny>,
     union_: Bound<'py, PyAny>,
-    type_var: Bound<'py, PyAny>,
     new_type: Bound<'py, PyAny>,
     forward_ref: Bound<'py, PyAny>,
     literal: Bound<'py, PyAny>,
@@ -99,7 +98,6 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             class_var: typing_mod.getattr(intern!(py, "ClassVar"))?,
             final_: typing_mod.getattr(intern!(py, "Final"))?,
             union_: types_mod.getattr(intern!(py, "UnionType"))?,
-            type_var: typing_mod.getattr(intern!(py, "TypeVar"))?,
             new_type: typing_mod.getattr(intern!(py, "NewType"))?,
             forward_ref: annotationlib.getattr(intern!(py, "ForwardRef"))?,
             literal: typing_mod.getattr(intern!(py, "Literal"))?,
@@ -124,17 +122,15 @@ fn resolve_typevar_metadata_by_name<'py>(
             .map(|m| m.extract())
             .transpose()?
             .unwrap_or_default();
-        if !module_name.is_empty() {
-            if let Ok(module) = py.import(module_name) {
-                if let Ok(candidate) = module.getattr(name.as_str())
-                    && is_type_var(&candidate)?
-                {
-                    let constraints = candidate.getattr(intern!(py, "__constraints__"))?;
-                    let bound = candidate.getattr(intern!(py, "__bound__"))?;
-                    if !constraints.cast::<PyTuple>()?.is_empty() || !bound.is_none() {
-                        return Ok(candidate);
-                    }
-                }
+        if !module_name.is_empty()
+            && let Ok(module) = py.import(module_name)
+            && let Ok(candidate) = module.getattr(name.as_str())
+            && is_type_var(&candidate)?
+        {
+            let constraints = candidate.getattr(intern!(py, "__constraints__"))?;
+            let bound = candidate.getattr(intern!(py, "__bound__"))?;
+            if !constraints.cast::<PyTuple>()?.is_empty() || !bound.is_none() {
+                return Ok(candidate);
             }
         }
     }
@@ -161,7 +157,7 @@ fn resolve_typevar_metadata_by_name<'py>(
             Ok(rebuilt_ann) => return Ok(rebuilt_ann),
             Err(_) => {
                 let alias = origin.getattr(intern!(py, "__getitem__"))?;
-                return Ok(alias.call1((params,))?);
+                return alias.call1((params,));
             }
         }
     }
@@ -177,6 +173,9 @@ fn apply_typevar_bindings<'py>(
     if let Some(bindings) = typevar_bindings
         && let Some(bound_ann) = lookup_typevar_binding(bindings, ann)?
     {
+        if ann.is(&bound_ann) {
+            return Ok(ann.clone());
+        }
         return Ok(bound_ann.cast_into()?);
     }
 
@@ -203,7 +202,7 @@ fn apply_typevar_bindings<'py>(
             Ok(rebuilt_ann) => return Ok(rebuilt_ann),
             Err(_) => {
                 let alias = origin.getattr(intern!(py, "__getitem__"))?;
-                return Ok(alias.call1((params,))?);
+                return alias.call1((params,));
             }
         }
     }
@@ -227,7 +226,7 @@ pub fn build_validator_from_annotation<'py>(
     // Resolve any pending TypeVar bindings before unwrapping generic alias
     // wrappers.  If we unwrap too early we lose the alias-level parameter
     // substitution and validation compares against the wrong specialized class.
-    let ann = apply_typevar_bindings(&ann, tools, typevar_bindings)?;
+    let ann = apply_typevar_bindings(ann, tools, typevar_bindings)?;
 
     // Ators generic specializations can be represented as GenericAlias wrappers
     // on the Python side; unwrap them to the canonical specialized class for
@@ -542,13 +541,35 @@ pub fn build_validator_from_annotation<'py>(
         } else {
             let attr_names_opt: Option<Vec<String>> = {
                 let generic_attrs_bound = get_generic_attributes_map(py);
-                with_critical_section(generic_attrs_bound.as_any(), || {
-                    let generic_attrs = generic_attrs_bound.borrow();
-                    origin
-                        .cast::<PyType>()
-                        .ok()
-                        .and_then(|t| generic_attrs.get_attributes(t))
-                        .cloned()
+                let explicit_attr_names =
+                    with_critical_section(generic_attrs_bound.as_any(), || {
+                        let generic_attrs = generic_attrs_bound.borrow();
+                        origin
+                            .cast::<PyType>()
+                            .ok()
+                            .and_then(|t| generic_attrs.get_attributes(t))
+                            .cloned()
+                    });
+                explicit_attr_names.or_else(|| {
+                    let origin_type = origin.cast::<PyType>().ok()?;
+                    if origin_type
+                        .is_subclass(&py.get_type::<crate::class::base::AtorsBase>())
+                        .ok()?
+                    {
+                        let annotations =
+                            origin_type.getattr(intern!(py, "__annotations__")).ok()?;
+                        if annotations.is_none() {
+                            return None;
+                        }
+                        let mapping = annotations.cast_into::<PyDict>().ok()?;
+                        let mut attr_names = Vec::new();
+                        for (key, _) in mapping.iter() {
+                            let name: String = key.extract().ok()?;
+                            attr_names.push(name);
+                        }
+                        return Some(attr_names);
+                    }
+                    None
                 })
             };
             if let Some(attr_names) = attr_names_opt {
@@ -619,15 +640,20 @@ pub fn build_validator_from_annotation<'py>(
         if let Some(bindings) = typevar_bindings
             && let Some(bound_ann) = lookup_typevar_binding(bindings, &ann)?
         {
-            return build_validator_from_annotation(
-                name,
-                &bound_ann.cast_into()?,
-                type_containers,
-                tools,
-                ctx_provider,
-                typevar_bindings,
-                validation_mode,
-            );
+            if ann.is(&bound_ann) {
+                // A self-binding is a no-op for an unresolved TypeVar; leave it
+                // unconstrained instead of recursing on the same object.
+            } else {
+                return build_validator_from_annotation(
+                    name,
+                    &bound_ann.cast_into()?,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                );
+            }
         }
 
         // Constrained TypeVars (e.g. `T = TypeVar('T', int, str)`) are treated
@@ -807,6 +833,7 @@ pub fn build_function_argument_or_return_validator<'py>(
     Ok(validator)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn configure_member_builder_from_annotation<'py>(
     builder: &mut MemberBuilder,
     name: &Bound<'py, PyString>,

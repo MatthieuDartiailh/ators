@@ -1260,7 +1260,9 @@ impl TypeValidator {
                 let py = value.py();
                 let group_items = PyTuple::new(
                     py,
-                    err.into_iter().map(|e| e.into_value(py)).collect::<Vec<_>>(),
+                    err.into_iter()
+                        .map(|e| e.into_value(py))
+                        .collect::<Vec<_>>(),
                 )?
                 .unbind();
                 let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
@@ -1290,7 +1292,9 @@ impl TypeValidator {
                     return validation_error!(t.repr()?, name, object, value);
                 }
                 for (attr_name, validator) in attributes {
-                    let attr_value = value.getattr(attr_name.as_str())?;
+                    let Ok(attr_value) = value.getattr(attr_name.as_str()) else {
+                        continue;
+                    };
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
                     match validator.strict_validate(name, object, &attr_value) {

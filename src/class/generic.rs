@@ -113,49 +113,89 @@ fn ensure_typevar_slot_id<'py>(
     if !is_type_var(target)? || !is_type_var(source)? {
         return Ok(());
     }
+    if !same_typevar_slot(target, source)? {
+        return Ok(());
+    }
+
     let py = target.py();
     let slot_attr = intern!(py, "__ators_typevar_slot__");
-    let slot_id = match typevar_slot_id(source)? {
-        Some(slot) => slot,
-        None => {
-            let left_name: String = source.getattr(intern!(py, "__name__"))?.extract()?;
-            let left_module: String = source.getattr(intern!(py, "__module__"))?.extract()?;
-            let source_id = source.as_ptr().addr();
-            format!("{left_module}.{left_name}@{source_id:x}")
+    let slot_id = typevar_slot_id(source)?.or_else(|| {
+        let name: String = source
+            .getattr(intern!(py, "__name__"))
+            .ok()?
+            .extract()
+            .ok()?;
+        let module: String = source
+            .getattr(intern!(py, "__module__"))
+            .ok()?
+            .extract()
+            .ok()?;
+        let source_id = source.as_ptr().addr();
+        Some(format!("{module}.{name}@{source_id:x}"))
+    });
+    if let Some(slot_id) = slot_id {
+        if typevar_slot_id(target)?.is_none() {
+            target.setattr(slot_attr, slot_id.clone())?;
         }
-    };
-    if typevar_slot_id(target)?.is_none() {
-        target.setattr(slot_attr, slot_id)?;
+        if typevar_slot_id(source)?.is_none() {
+            source.setattr(slot_attr, slot_id)?;
+        }
     }
     Ok(())
 }
 
-pub(crate) fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
+#[allow(clippy::needless_borrow)]
+pub(crate) fn same_typevar_slot(
+    left: &Bound<'_, PyAny>,
+    right: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
     if left.is(right) {
         return Ok(true);
     }
     if !is_type_var(left)? || !is_type_var(right)? {
         return Ok(false);
     }
-    if let (Some(left_slot), Some(right_slot)) = (typevar_slot_id(left)?, typevar_slot_id(right)?) {
+
+    let left_slot = typevar_slot_id(left)?;
+    let right_slot = typevar_slot_id(right)?;
+    if let (Some(left_slot), Some(right_slot)) = (left_slot.clone(), right_slot.clone()) {
         return Ok(left_slot == right_slot);
     }
+
     let py = left.py();
     let left_name: String = left.getattr(intern!(py, "__name__"))?.extract()?;
     let right_name: String = right.getattr(intern!(py, "__name__"))?.extract()?;
     if left_name != right_name {
         return Ok(false);
     }
+
     let left_module: String = left.getattr(intern!(py, "__module__"))?.extract()?;
     let right_module: String = right.getattr(intern!(py, "__module__"))?.extract()?;
     if left_module != right_module {
         return Ok(false);
     }
+
     let left_bound = left.getattr(intern!(py, "__bound__"))?;
     let right_bound = right.getattr(intern!(py, "__bound__"))?;
     if !left_bound.is_none() || !right_bound.is_none() {
-        return Ok(left_bound.eq(&right_bound)?);
+        let matches = left_bound.eq(&right_bound)?;
+        if matches {
+            let slot_attr = intern!(py, "__ators_typevar_slot__");
+            if left_slot.is_none() && right_slot.is_some() {
+                left.setattr(slot_attr, right_slot.clone().expect("checked above"))?;
+            }
+            if right_slot.is_none() && left_slot.is_some() {
+                right.setattr(slot_attr, left_slot.clone().expect("checked above"))?;
+            }
+            if left_slot.is_none() && right_slot.is_none() {
+                let slot_id = format!("{left_module}.{left_name}@{:#x}", left.as_ptr().addr());
+                left.setattr(slot_attr, slot_id.clone())?;
+                right.setattr(slot_attr, slot_id)?;
+            }
+        }
+        return Ok(matches);
     }
+
     let left_constraints = left.getattr(intern!(py, "__constraints__"))?;
     let right_constraints = right.getattr(intern!(py, "__constraints__"))?;
     let left_constraints_tuple = left_constraints.cast::<PyTuple>()?;
@@ -163,10 +203,26 @@ pub(crate) fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny
     if left_constraints_tuple.len() != right_constraints_tuple.len() {
         return Ok(false);
     }
-    for (left_constraint, right_constraint) in left_constraints_tuple.iter().zip(right_constraints_tuple.iter()) {
+    for (left_constraint, right_constraint) in left_constraints_tuple
+        .iter()
+        .zip(right_constraints_tuple.iter())
+    {
         if !left_constraint.eq(&right_constraint)? {
             return Ok(false);
         }
+    }
+
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    if left_slot.is_none() && right_slot.is_some() {
+        left.setattr(slot_attr, right_slot.clone().expect("checked above"))?;
+    }
+    if right_slot.is_none() && left_slot.is_some() {
+        right.setattr(slot_attr, left_slot.clone().expect("checked above"))?;
+    }
+    if left_slot.is_none() && right_slot.is_none() {
+        let slot_id = format!("{left_module}.{left_name}@{:#x}", left.as_ptr().addr());
+        left.setattr(slot_attr, slot_id.clone())?;
+        right.setattr(slot_attr, slot_id)?;
     }
     Ok(true)
 }
@@ -573,6 +629,7 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 ///
 /// This resolves and validates type arguments, computes the canonical origin
 /// argument mapping, and reuses an existing specialisation when available.
+#[allow(clippy::needless_borrow)]
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: &Bound<'py, PyType>,
@@ -620,7 +677,10 @@ pub fn create_ators_specialized_subclass<'py>(
     let fully_passthrough = exposed_params
         .iter()
         .zip(params_tuple.iter())
-        .all(|(tp, p)| same_typevar_slot(&tp.bind(py), &p).unwrap_or(false));
+        .all(|(tp, p)| {
+            let tp_bound = tp.bind(py);
+            same_typevar_slot(&tp_bound, &p).unwrap_or(false)
+        });
     if fully_passthrough {
         return Ok(cls.clone().into_any());
     }
@@ -656,16 +716,58 @@ pub fn create_ators_specialized_subclass<'py>(
         .zip(params_tuple.iter())
     {
         if is_type_var(&arg)? {
-            ensure_typevar_slot_id(&arg, &exposed)?;
+            enforce_narrower_typevar_bound(&exposed, &arg)?;
         }
-        if same_typevar_slot(&exposed, &arg)? {
-            continue;
-        }
+        enforce_within_constraints(&exposed, &arg)?;
 
         if is_type_var(&arg)? {
-            enforce_narrower_typevar_bound(exposed, &arg)?;
+            // A replacement TypeVar in a partial specialization is the same
+            // logical generic slot as the exposed parameter it binds to only when
+            // the slot identity is still unresolved; if one side already has a
+            // distinct identity, keep that identity instead of collapsing two
+            // unrelated generic scopes into one slot.
+            let slot_attr = intern!(py, "__ators_typevar_slot__");
+            match (typevar_slot_id(&exposed)?, typevar_slot_id(&arg)?) {
+                (Some(exposed_slot), None) => {
+                    arg.setattr(slot_attr, exposed_slot)?;
+                }
+                (None, Some(arg_slot)) => {
+                    exposed.setattr(slot_attr, arg_slot)?;
+                }
+                (None, None) => {
+                    let name: Option<String> = arg
+                        .getattr(intern!(py, "__name__"))
+                        .ok()
+                        .and_then(|name| name.extract().ok());
+                    let module: Option<String> = arg
+                        .getattr(intern!(py, "__module__"))
+                        .ok()
+                        .and_then(|module| module.extract().ok());
+                    if let (Some(name), Some(module)) = (name, module) {
+                        let arg_id = arg.as_ptr().addr();
+                        let slot_id = format!("{module}.{name}@{arg_id:x}");
+                        exposed.setattr(slot_attr, slot_id.clone())?;
+                        arg.setattr(slot_attr, slot_id)?;
+                    }
+                }
+                _ => {}
+            }
         }
-        enforce_within_constraints(exposed, &arg)?;
+
+        if same_typevar_slot(&exposed, &arg)? {
+            if !arg.is(exposed) {
+                let mut to_replace = Vec::new();
+                for (key, value) in full_bindings.iter() {
+                    if same_typevar_slot(&value, &exposed)? {
+                        to_replace.push(key.unbind());
+                    }
+                }
+                for key in to_replace {
+                    full_bindings.set_item(key.bind(py), &arg)?;
+                }
+            }
+            continue;
+        }
 
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {
