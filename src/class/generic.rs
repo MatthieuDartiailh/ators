@@ -95,12 +95,50 @@ class AtorsGenericAlias(types.GenericAlias):
     Ok(alias_cls.clone_ref(py).into_bound(py))
 }
 
+fn typevar_slot_id<'py>(typevar: &Bound<'py, PyAny>) -> PyResult<Option<String>> {
+    let py = typevar.py();
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    if let Ok(slot) = typevar.getattr(slot_attr)
+        && !slot.is_none()
+    {
+        return Ok(Some(slot.extract::<String>()?));
+    }
+    Ok(None)
+}
+
+fn ensure_typevar_slot_id<'py>(
+    target: &Bound<'py, PyAny>,
+    source: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    if !is_type_var(target)? || !is_type_var(source)? {
+        return Ok(());
+    }
+    let py = target.py();
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    let slot_id = match typevar_slot_id(source)? {
+        Some(slot) => slot,
+        None => {
+            let left_name: String = source.getattr(intern!(py, "__name__"))?.extract()?;
+            let left_module: String = source.getattr(intern!(py, "__module__"))?.extract()?;
+            let source_id = source.as_ptr().addr();
+            format!("{left_module}.{left_name}@{source_id:x}")
+        }
+    };
+    if typevar_slot_id(target)?.is_none() {
+        target.setattr(slot_attr, slot_id)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>) -> PyResult<bool> {
     if left.is(right) {
         return Ok(true);
     }
     if !is_type_var(left)? || !is_type_var(right)? {
         return Ok(false);
+    }
+    if let (Some(left_slot), Some(right_slot)) = (typevar_slot_id(left)?, typevar_slot_id(right)?) {
+        return Ok(left_slot == right_slot);
     }
     let py = left.py();
     let left_name: String = left.getattr(intern!(py, "__name__"))?.extract()?;
@@ -110,7 +148,27 @@ pub(crate) fn same_typevar_slot(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny
     }
     let left_module: String = left.getattr(intern!(py, "__module__"))?.extract()?;
     let right_module: String = right.getattr(intern!(py, "__module__"))?.extract()?;
-    Ok(left_module == right_module)
+    if left_module != right_module {
+        return Ok(false);
+    }
+    let left_bound = left.getattr(intern!(py, "__bound__"))?;
+    let right_bound = right.getattr(intern!(py, "__bound__"))?;
+    if !left_bound.is_none() || !right_bound.is_none() {
+        return Ok(left_bound.eq(&right_bound)?);
+    }
+    let left_constraints = left.getattr(intern!(py, "__constraints__"))?;
+    let right_constraints = right.getattr(intern!(py, "__constraints__"))?;
+    let left_constraints_tuple = left_constraints.cast::<PyTuple>()?;
+    let right_constraints_tuple = right_constraints.cast::<PyTuple>()?;
+    if left_constraints_tuple.len() != right_constraints_tuple.len() {
+        return Ok(false);
+    }
+    for (left_constraint, right_constraint) in left_constraints_tuple.iter().zip(right_constraints_tuple.iter()) {
+        if !left_constraint.eq(&right_constraint)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(crate) fn lookup_typevar_binding<'py>(
@@ -328,8 +386,8 @@ pub(crate) fn get_generic_params_obj<'py>(
             .unwrap_or_else(|_| PyTuple::empty(py).into_any()),
     };
 
-    match obj.clone().cast_into::<PyTuple>() {
-        Ok(tuple) => Ok(tuple),
+    let tuple = match obj.clone().cast_into::<PyTuple>() {
+        Ok(tuple) => tuple,
         Err(_) => {
             // Some typing implementations expose an iterable but not a tuple;
             // normalize to tuple so downstream zip/len logic stays uniform.
@@ -337,9 +395,15 @@ pub(crate) fn get_generic_params_obj<'py>(
             for item in obj.try_iter()? {
                 items.push(item?);
             }
-            PyTuple::new(py, items)
+            PyTuple::new(py, items)?
+        }
+    };
+    for item in tuple.iter() {
+        if is_type_var(&item)? {
+            ensure_typevar_slot_id(&item, &item)?;
         }
     }
+    Ok(tuple)
 }
 
 /// Verify that `replacement` TypeVar has a bound that is at least as narrow
@@ -591,6 +655,9 @@ pub fn create_ators_specialized_subclass<'py>(
         .map(|p| p.bind(py))
         .zip(params_tuple.iter())
     {
+        if is_type_var(&arg)? {
+            ensure_typevar_slot_id(&arg, &exposed)?;
+        }
         if same_typevar_slot(&exposed, &arg)? {
             continue;
         }

@@ -873,16 +873,6 @@ fn configure_member_builder_from_annotation<'py>(
         ann.clone()
     };
 
-    if let Some(bindings) = typevar_bindings {
-        let ann_repr = ann.repr()?;
-        if ann_repr.to_string().contains("T") {
-            println!("DEBUG config effective_ann={} bindings={}", ann_repr, bindings.len());
-            for (k, v) in bindings.iter() {
-                println!("DEBUG config binding key={} value={}", k.repr()?, v.repr()?);
-            }
-        }
-    }
-
     let (new, build_info) = match build_validator_from_annotation(
         name,
         &ann,
