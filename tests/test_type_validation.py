@@ -427,6 +427,22 @@ def test_delayed_forward_ref_support_partial_specialization():
         holder.pair = DelayedGenericPair[str, int]()  # type: ignore
 
 
+def test_partial_specialization_keeps_owner_local_typevar_context():
+    class Holder[T: int](Ators):
+        pair: GenericPair[int, T] = member()
+
+    holder = Holder[int]()
+    holder.pair = GenericPair[int, int]()
+    with pytest.raises(TypeError):
+        holder.pair = GenericPair[str, int]()  # type: ignore
+
+    other = TypeVar("other", bound=int)
+    holder2 = Holder[other]()
+    holder2.pair = GenericPair[int, other]()
+    with pytest.raises(TypeError):
+        holder2.pair = GenericPair[str, other]()  # type: ignore
+
+
 # ---------------------------------------------------------------------------
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------

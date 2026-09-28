@@ -573,9 +573,15 @@ pub fn build_validator_from_annotation<'py>(
                 })
             };
             if let Some(attr_names) = attr_names_opt {
-                let type_ = match ann.cast::<PyType>() {
-                    Ok(type_) => type_.clone().unbind(),
-                    Err(_) => origin.cast_into::<PyType>()?.unbind(),
+                let type_ = if ann.hasattr(intern!(py, "__ators_specialized_class__"))? {
+                    ann.getattr(intern!(py, "__ators_specialized_class__"))?
+                        .cast::<PyType>()?
+                        .clone()
+                        .unbind()
+                } else if let Ok(type_) = ann.cast::<PyType>() {
+                    type_.clone().unbind()
+                } else {
+                    origin.cast_into::<PyType>()?.unbind()
                 };
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
