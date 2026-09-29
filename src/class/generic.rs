@@ -106,6 +106,16 @@ fn typevar_slot_id<'py>(typevar: &Bound<'py, PyAny>) -> PyResult<Option<String>>
     Ok(None)
 }
 
+fn synthesize_typevar_slot_id<'py>(typevar: &Bound<'py, PyAny>, prefix: &str) -> PyResult<String> {
+    let py = typevar.py();
+    let name: String = typevar.getattr(intern!(py, "__name__"))?.extract()?;
+    let module: String = typevar.getattr(intern!(py, "__module__"))?.extract()?;
+    let builtins = py.import(intern!(py, "builtins"))?;
+    let id_fn = builtins.getattr(intern!(py, "id"))?;
+    let source_id: usize = id_fn.call1((typevar.clone(),))?.extract()?;
+    Ok(format!("{prefix}:{module}.{name}@{source_id:x}"))
+}
+
 fn ensure_typevar_slot_id<'py>(
     target: &Bound<'py, PyAny>,
     source: &Bound<'py, PyAny>,
@@ -119,20 +129,8 @@ fn ensure_typevar_slot_id<'py>(
 
     let py = target.py();
     let slot_attr = intern!(py, "__ators_typevar_slot__");
-    let slot_id = typevar_slot_id(source)?.or_else(|| {
-        let name: String = source
-            .getattr(intern!(py, "__name__"))
-            .ok()?
-            .extract()
-            .ok()?;
-        let module: String = source
-            .getattr(intern!(py, "__module__"))
-            .ok()?
-            .extract()
-            .ok()?;
-        let source_id = source.as_ptr().addr();
-        Some(format!("{module}.{name}@{source_id:x}"))
-    });
+    let slot_id =
+        typevar_slot_id(source)?.or_else(|| synthesize_typevar_slot_id(source, "template").ok());
     if let Some(slot_id) = slot_id {
         if typevar_slot_id(target)?.is_none() {
             target.setattr(slot_attr, slot_id.clone())?;
@@ -158,27 +156,11 @@ pub(crate) fn same_typevar_slot(
 
     let left_slot = typevar_slot_id(left)?;
     let right_slot = typevar_slot_id(right)?;
-    if let (Some(left_slot), Some(right_slot)) = (left_slot.clone(), right_slot.clone()) {
-        return Ok(left_slot == right_slot);
-    }
 
-    if left_slot.is_none() && right_slot.is_none() {
-        return Ok(false);
+    match (left_slot, right_slot) {
+        (Some(left_slot), Some(right_slot)) => Ok(left_slot == right_slot),
+        _ => Ok(false),
     }
-
-    let py = left.py();
-    let slot_attr = intern!(py, "__ators_typevar_slot__");
-    if let Some(slot) = left_slot.clone().or_else(|| right_slot.clone()) {
-        if left_slot.is_none() {
-            left.setattr(slot_attr, &slot)?;
-        }
-        if right_slot.is_none() {
-            right.setattr(slot_attr, &slot)?;
-        }
-        return Ok(true);
-    }
-
-    Ok(false)
 }
 
 pub(crate) fn lookup_typevar_binding<'py>(
@@ -693,18 +675,41 @@ pub fn create_ators_specialized_subclass<'py>(
             // local rebindings stay tied to the same owner-scoped parameter.
             let slot_attr = intern!(py, "__ators_typevar_slot__");
             match (typevar_slot_id(&exposed)?, typevar_slot_id(&arg)?) {
+                (Some(exposed_slot), Some(arg_slot)) if exposed_slot == arg_slot => {}
+                (Some(exposed_slot), Some(arg_slot)) => {
+                    if exposed_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else if arg_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    }
+                }
                 (Some(exposed_slot), None) => {
-                    arg.setattr(slot_attr, exposed_slot)?;
+                    if exposed_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else {
+                        let fresh_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        arg.setattr(slot_attr, fresh_slot)?;
+                    }
                 }
                 (None, Some(arg_slot)) => {
-                    exposed.setattr(slot_attr, arg_slot)?;
+                    if arg_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else {
+                        exposed.setattr(slot_attr, arg_slot)?;
+                    }
                 }
                 (None, None) => {
-                    let shared_slot = format!("owner-local@{:#x}", exposed.as_ptr().addr());
-                    exposed.setattr(slot_attr, shared_slot.clone())?;
-                    arg.setattr(slot_attr, shared_slot)?;
+                    let new_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                    exposed.setattr(slot_attr, new_slot.clone())?;
+                    arg.setattr(slot_attr, new_slot)?;
                 }
-                _ => {}
             }
         }
 

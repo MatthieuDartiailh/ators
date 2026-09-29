@@ -451,6 +451,63 @@ def test_partial_specialization_keeps_owner_local_typevar_context():
         holder2.pair = GenericPair[str, other]()  # type: ignore
 
 
+def test_same_name_typevars_keep_distinct_owner_local_slots():
+    # Goal: cover the owner-local slot identity check when two distinct TypeVars
+    # intentionally share the same public name but belong to different generic
+    # scopes.  The implementation must treat them as different slots, otherwise a
+    # specialization in one owner scope can leak into the other.
+    T_left = TypeVar("T", bound=int)
+    T_right = TypeVar("T", bound=int)
+
+    class Box[T](Ators):
+        value: T = member()
+
+    class Holder[T: int](Ators):
+        boxed: Box[T] = member()
+
+    left_specialized = Holder[T_left]
+    right_specialized = Holder[T_right]
+
+    left_slot = getattr(T_left, "__ators_typevar_slot__", None)
+    right_slot = getattr(T_right, "__ators_typevar_slot__", None)
+
+    assert left_slot is not None
+    assert right_slot is not None
+    assert left_slot != right_slot
+    assert (
+        getattr(left_specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == left_slot
+    )
+    assert (
+        getattr(right_specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == right_slot
+    )
+
+
+def test_specialization_propagates_slot_when_only_one_side_is_initialized():
+    # Goal: cover the one-sided slot propagation path used during eager
+    # specialization.  One TypeVar may already carry a slot from the owner scope
+    # while the replacement is still uninitialized; the code must inherit the
+    # existing slot instead of inventing a new one.
+    T_local = TypeVar("T", bound=int)
+
+    class Box[T](Ators):
+        value: T = member()
+
+    class Holder[T: int](Ators):
+        boxed: Box[T] = member()
+
+    specialized = Holder[T_local]
+    local_slot = getattr(T_local, "__ators_typevar_slot__", None)
+
+    assert local_slot is not None
+    assert (
+        getattr(specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == local_slot
+    )
+    assert getattr(specialized.__type_params__[0], "__name__", None) == "T"
+
+
 # ---------------------------------------------------------------------------
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------
