@@ -35,10 +35,13 @@ cargo llvm-cov report --lcov --output-path coverage.lcov
 
 ### Windows cmd
 
+Use the helper script instead of re-assembling the environment by hand:
+
 ```cmd
-cargo llvm-cov show-env --cmd > env.bat
-cmd /D /V:OFF /C "call env.bat && set CARGO_TARGET_DIR=%CARGO_LLVM_COV_TARGET_DIR% && set CARGO_INCREMENTAL=1 && cargo llvm-cov clean --workspace && uv run -- maturin develop --uv && uv run -- pytest tests --cov --cov-report xml -v && cargo llvm-cov report --lcov --output-path coverage.lcov"
+python scripts/run_rust_coverage.py
 ```
+
+> On shared Windows machines, stale `CARGO_LLVM_COV*` values can recursively poison the generated `env.bat` and an uninitialized `target` directory may lack `CACHEDIR.TAG`; the helper clears the stale coverage variables and skips `cargo clean` when the target dir is not Cargo-managed.
 
 ## What this measures
 

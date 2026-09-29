@@ -90,6 +90,31 @@ def test_type_inferred_coercion(ty, init, inputs, expected):
             assert a.a == exp
 
 
+def test_container_coercion_covers_wrapped_list_set_dict_frozenset_paths():
+    class A(Ators):
+        ints: Member[list[int], Any] = member().coerce()
+        values: Member[set[int], Any] = member().coerce()
+        mapping: Member[dict[str, int], Any] = member().coerce()
+        frozen: Member[frozenset[int], Any] = member().coerce()
+        pair: Member[tuple[int, int], Any] = member().coerce()
+        var_pair: Member[tuple[int, ...], Any] = member().coerce()
+
+    a = A()
+    a.ints = ("1", "2")
+    a.values = ["1", "2"]
+    a.mapping = [("1", "2"), ("3", "4")]
+    a.frozen = ["1", "2"]
+    a.pair = ["1", "2"]
+    a.var_pair = ["1", "2", "3"]
+
+    assert a.ints == [1, 2]
+    assert a.values == {1, 2}
+    assert a.mapping == {"1": 2, "3": 4}
+    assert a.frozen == frozenset({1, 2})
+    assert a.pair == (1, 2)
+    assert a.var_pair == (1, 2, 3)
+
+
 @pytest.mark.parametrize(
     "init, inputs, called, expected",
     [
