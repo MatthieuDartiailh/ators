@@ -228,10 +228,14 @@ pub fn build_validator_from_annotation<'py>(
     // substitution and validation compares against the wrong specialized class.
     let ann = apply_typevar_bindings(ann, tools, typevar_bindings)?;
 
-    // Ators generic specializations can be represented as GenericAlias wrappers
-    // on the Python side; unwrap them to the canonical specialized class for
-    // validator inference once the TypeVar mapping has been applied.
-    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))? {
+    // Specialized Ators generic aliases are valid runtime representations of the
+    // actual specialized class, but they must retain the owner-local TypeVar
+    // information when one of their arguments still participates in the current
+    // generic scope.  Replacing them with the base class here drops that context
+    // and makes the nested validator validate against the wrong generic slot.
+    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))?
+        && !annotation_uses_local_typevar(&ann, tools)?
+    {
         ann.getattr(intern!(name.py(), "__ators_specialized_class__"))?
     } else {
         ann
@@ -573,16 +577,18 @@ pub fn build_validator_from_annotation<'py>(
                 })
             };
             if let Some(attr_names) = attr_names_opt {
-                let type_ = if ann.hasattr(intern!(py, "__ators_specialized_class__"))? {
-                    ann.getattr(intern!(py, "__ators_specialized_class__"))?
-                        .cast::<PyType>()?
-                        .clone()
-                        .unbind()
-                } else if let Ok(type_) = ann.cast::<PyType>() {
-                    type_.clone().unbind()
-                } else {
-                    origin.cast_into::<PyType>()?.unbind()
-                };
+               let type_ = if ann.hasattr(intern!(py, "__ators_specialized_class__"))?
+                   && !annotation_uses_local_typevar(&ann, tools)?
+               {
+                   ann.getattr(intern!(py, "__ators_specialized_class__"))?
+                       .cast::<PyType>()?
+                       .clone()
+                       .unbind()
+               } else if let Ok(type_) = ann.cast::<PyType>() {
+                   type_.clone().unbind()
+               } else {
+                   origin.cast_into::<PyType>()?.unbind()
+               };
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
                 for (attr_name_str, attr_type) in attr_names.into_iter().zip(args.iter()) {
