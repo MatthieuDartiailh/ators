@@ -81,7 +81,7 @@ impl Validator {
 
     #[getter]
     fn get_init_coercer(&self) -> Option<Coercer> {
-        self.coercer.clone()
+        self.init_coercer.clone()
     }
 }
 

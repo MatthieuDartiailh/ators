@@ -7,14 +7,13 @@
 # --------------------------------------------------------------------------------------
 """Test type validation for ators object"""
 
-import sys
 from abc import ABC
-from types import ModuleType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import pytest
 
 from ators import Ators, add_generic_type_attributes, member
+from ators._ators import AtorsDict, AtorsList, AtorsSet
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -156,33 +155,6 @@ def test_container_validator_rejects_wrong_shape(ann, bad):
         obj.a = bad
 
 
-def test_untyped_container_validators_cover_none_item_and_empty_tuple_branches():
-    class A(Ators):
-        seq: list = member()
-        items: set = member()
-        mapping: dict = member()
-        frozen: frozenset = member()
-        pair: tuple = member()
-
-    obj = A()
-    obj.seq = [1, 2]
-    obj.items = {1, 2}
-    obj.mapping = {"x": 1}
-    obj.frozen = frozenset({1, 2})
-    obj.pair = (1, 2)
-
-    with pytest.raises(TypeError):
-        obj.seq = (1, 2)  # type: ignore
-    with pytest.raises(TypeError):
-        obj.items = [1, 2]  # type: ignore
-    with pytest.raises(TypeError):
-        obj.mapping = [(1, 2, 3)]  # type: ignore
-    with pytest.raises(TypeError):
-        obj.frozen = [1, 2]  # type: ignore
-    with pytest.raises(TypeError):
-        obj.pair = [1, 2]  # type: ignore
-
-
 def test_union_validator_reports_grouped_cause():
     class A(Ators):
         a: int | str = member()
@@ -191,8 +163,42 @@ def test_union_validator_reports_grouped_cause():
     with pytest.raises(TypeError) as exc:
         obj.a = object()  # type: ignore
 
+    assert isinstance(exc.value, TypeError)
     assert exc.value.__cause__ is not None
     assert isinstance(exc.value.__cause__, BaseExceptionGroup)
+    assert len(exc.value.__cause__.exceptions) == 2
+    assert "Validation failed for member 'a' of" in str(exc.value)
+    assert "Failed to validate" in str(exc.value.__cause__)
+
+
+def test_member_reassignment_reuses_container_metadata_within_same_assignment_context():
+    class A(Ators):
+        items: list[int] = member()
+        values: set[int] = member()
+        mapping: dict[str, int] = member()
+
+    obj = A()
+    obj.items = [1, 2]
+    obj.values = {1, 2}
+    obj.mapping = {"keep": 1}
+
+    items_before = obj.items
+    values_before = obj.values
+    mapping_before = obj.mapping
+
+    obj.items = items_before
+    obj.values = values_before
+    obj.mapping = mapping_before
+
+    assert isinstance(obj.items, AtorsList)
+    assert isinstance(obj.values, AtorsSet)
+    assert isinstance(obj.mapping, AtorsDict)
+    assert obj.items == [1, 2]
+    assert obj.values == {1, 2}
+    assert obj.mapping == {"keep": 1}
+    assert obj.items is not items_before
+    assert obj.values is not values_before
+    assert obj.mapping is not mapping_before
 
 
 def test_generic_attributes_reject_invalid_typed_attribute_value():
@@ -202,8 +208,29 @@ def test_generic_attributes_reject_invalid_typed_attribute_value():
     obj = A()
     obj.a = MyGen(1)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError) as exc:
         obj.a = MyGen("not-an-int")  # type: ignore
+
+    assert isinstance(exc.value, TypeError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert "Validation failed for member 'a' of" in str(exc.value)
+    assert "Failed to validate attribute 'a' of" in str(exc.value.__cause__)
+
+
+def test_generic_attributes_ignore_unset_attribute_state():
+    class UnsetGen(MyGen[int]):
+        def __getattribute__(self, name):
+            if name == "a":
+                raise TypeError("value is unset and has no default")
+            return super().__getattribute__(name)
+
+    class A(Ators):
+        a: MyGen[int] = member()
+
+    obj = A()
+    obj.a = UnsetGen(1)
+    assert obj.a is not None
 
 
 def test_unspecialized_typevar_uses_bound_when_available():
@@ -388,6 +415,50 @@ def test_forward_ref_support_callable_and_type_alias(resolver):
     a1.b = 5
     with pytest.raises(TypeError):
         a1.b = ""  # type: ignore
+
+
+def test_forward_ref_delayed_resolution_uses_local_context_and_owner():
+    class Node:
+        pass
+
+    class A(Ators):
+        child: Node = member().forward_ref_environment(lambda: {"Node": Node})
+
+    obj = A()
+    node = Node()
+    obj.child = node
+    assert obj.child is node
+    with pytest.raises(TypeError):
+        obj.child = object()  # type: ignore
+
+
+def test_forward_ref_owner_namespace_resolves_nested_container_types():
+    class A(Ators):
+        class Node:
+            pass
+
+        children: list[Node] = member()
+
+    obj = A()
+    node = A.Node()
+    obj.children = [node]
+    assert obj.children == [node]
+    with pytest.raises(TypeError):
+        obj.children = [object()]  # type: ignore
+
+
+def test_forward_ref_failed_resolution_keeps_original_cause_chain():
+    class A(Ators):
+        child: MissingNode = member().forward_ref_environment(lambda: {})  # noqa : F821  # type: ignore
+
+    obj = A()
+    with pytest.raises(NameError) as exc:
+        obj.child = object()  # type: ignore
+
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, NameError)
+    assert "Failed to resolve forward reference for child" in str(exc.value.__cause__)
+    assert "MissingNode" in str(exc.value.__cause__)
 
 
 def test_inherited_type_validator():

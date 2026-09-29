@@ -105,7 +105,7 @@ def test_validate_attr_false_final_parameterized():
         a.x = 10  # type: ignore
 
     with pytest.raises(TypeError):
-        del a.x
+        del a.x  # type: ignore
 
 
 def test_validate_attr_false_final_bare():

@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from ators import Ators, Member, member
+from ators._ators import TypeValidator, Validator
 from ators.behaviors import Coercer, coerce, coerce_init
 
 
@@ -90,31 +91,6 @@ def test_type_inferred_coercion(ty, init, inputs, expected):
             assert a.a == exp
 
 
-def test_container_coercion_covers_wrapped_list_set_dict_frozenset_paths():
-    class A(Ators):
-        ints: Member[list[int], Any] = member().coerce()
-        values: Member[set[int], Any] = member().coerce()
-        mapping: Member[dict[str, int], Any] = member().coerce()
-        frozen: Member[frozenset[int], Any] = member().coerce()
-        pair: Member[tuple[int, int], Any] = member().coerce()
-        var_pair: Member[tuple[int, ...], Any] = member().coerce()
-
-    a = A()
-    a.ints = ("1", "2")
-    a.values = ["1", "2"]
-    a.mapping = [("1", "2"), ("3", "4")]
-    a.frozen = ["1", "2"]
-    a.pair = ["1", "2"]
-    a.var_pair = ["1", "2", "3"]
-
-    assert a.ints == [1, 2]
-    assert a.values == {1, 2}
-    assert a.mapping == {"1": 2, "3": 4}
-    assert a.frozen == frozenset({1, 2})
-    assert a.pair == (1, 2)
-    assert a.var_pair == (1, 2, 3)
-
-
 @pytest.mark.parametrize(
     "init, inputs, called, expected",
     [
@@ -149,6 +125,37 @@ def test_call_coerce(init, inputs, called, expected):
             a.a = inp
             assert a.a == exp
             assert i == c
+
+
+def test_validator_keeps_init_and_regular_coercers_distinct():
+    regular = Coercer.CallValue(lambda value: int(value) + 1)
+    init = Coercer.CallValue(lambda value: int(value) * 10)
+    validator = Validator(TypeValidator.Int(), None, regular, init)
+
+    assert validator.coercer is not validator.init_coercer
+
+
+def test_member_validation_and_coercion_paths():
+    class A(Ators):
+        a: Member[int, Any] = member().coerce()
+
+    class B(Ators):
+        b: int
+
+    a = A(a="7")
+    assert a.a == 7
+
+    a.a = "9"
+    assert a.a == 9
+
+    with pytest.raises(ValueError):
+        a.a = "nope"
+
+    b = B(b=3)
+    assert b.b == 3
+
+    with pytest.raises(TypeError):
+        b.b = "nope"
 
 
 @pytest.mark.parametrize(

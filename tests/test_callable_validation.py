@@ -278,7 +278,7 @@ def test_validated_positional_only_change_arg_and_default() -> None:
     def f(items: list[int], x: int = 1, /) -> int:
         ln = len(items) + x
         # With CheckOnly mode, items is a plain list, not validated on mutations
-        items.append("invalid")  # This is allowed, no wrapper enforces validation
+        items.append("invalid")  # type: ignore  # This is allowed, no wrapper enforces validation
         return ln
 
     # Test success cases - input validation is enforced
@@ -416,7 +416,7 @@ def test_validation_positional_or_keyword_change_arg() -> None:
     def f(items: list[int], x: int = 1) -> int:
         s = sum(items) + x
         # With CheckOnly mode, items is a plain list, not validated on mutations
-        items.append("invalid")  # This is allowed, no wrapper enforces validation
+        items.append("invalid")  # type: ignore  # This is allowed, no wrapper enforces validation
         return s
 
     # Test success cases - input validation is enforced
