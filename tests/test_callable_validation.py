@@ -251,6 +251,38 @@ def test_validated_varargs_and_kwargs_aggregate_errors_false() -> None:
         f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "annotation, value",
+    [
+        ("list[int]", [1, "2", 3]),
+        ("tuple[int, ...]", (1, "2", 3)),
+        ("tuple[int, int]", (1, "2")),
+        ("tuple[int, int]", (1, 2, 3)),
+        ("set[int]", {1, "2"}),
+        ("dict[str, int]", {"a": 1, "b": "2"}),
+        ("dict[str, int]", {"a": 1, 2: 3}),
+    ],
+)
+def test_validated_checkonly_container_rejects_invalid_items(
+    annotation: str, value
+) -> None:
+    """CheckOnly mode must validate item/value/key validity without wrapping containers."""
+
+    namespace = {"validated": validated}
+    exec(
+        f"@validated\ndef f(items: {annotation}) -> int:\n    return len(items)",
+        namespace,
+    )
+    func = namespace["f"]
+
+    with pytest.raises(ExceptionGroup) as exc:
+        func(value)
+
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate" in str(exc.value.exceptions[0])
+
+
 # ============================================================================
 # Positional only arguments
 # ============================================================================
