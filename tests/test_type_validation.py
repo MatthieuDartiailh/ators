@@ -411,7 +411,7 @@ def test_partial_specialization_typevar_without_required_bound_is_rejected():
         _ = BoundedPair[int, unbounded]  # type: ignore
 
 
-def test_forward_ref_support_partial_specialization():
+def test_eager_partial_specialization_keeps_owner_local_typevar_context():
     T2 = TypeVar("T2", bound=int)
     holder = ForwardRefPartialHolder[T2]()
 
@@ -420,11 +420,19 @@ def test_forward_ref_support_partial_specialization():
         holder.pair = GenericPair[str, T2]()  # type: ignore
 
 
-def test_delayed_forward_ref_support_partial_specialization():
+def test_owner_local_typevar_context_survives_inner_generic_respecialization():
     holder = DelayedForwardRefPartialHolder[int]()
     holder.pair = DelayedGenericPair[int, int]()
     with pytest.raises(TypeError):
         holder.pair = DelayedGenericPair[str, int]()  # type: ignore
+
+    class ReboundHolder[T: int](Ators):
+        pair: DelayedGenericPair[int, T] = member()
+
+    rebound = ReboundHolder[int]()
+    rebound.pair = DelayedGenericPair[int, int]()
+    with pytest.raises(TypeError):
+        rebound.pair = DelayedGenericPair[str, int]()  # type: ignore
 
 
 def test_partial_specialization_keeps_owner_local_typevar_context():

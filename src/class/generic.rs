@@ -11,10 +11,7 @@ use pyo3::{
     ffi::{PyType_IsSubtype, c_str},
     intern, pyfunction,
     sync::PyOnceLock,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyTuple, PyTupleMethods,
-        PyType, PyTypeMethods,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
 };
 
 use crate::{
@@ -60,6 +57,8 @@ class AtorsGenericAlias(types.GenericAlias):
 			return self.__ators_specialized_class__.__type_params__
 		if name == "__ators_specialized_class__":
 			return _get_ators_specialized_class_for_alias(self)
+		if name in {"__annotations__", "__dict__"}:
+			return getattr(self.__ators_specialized_class__, name)
 		return super().__getattribute__(name)
 
 	def __call__(self, *args, **kwargs):
@@ -163,69 +162,23 @@ pub(crate) fn same_typevar_slot(
         return Ok(left_slot == right_slot);
     }
 
-    let py = left.py();
-    let left_name: String = left.getattr(intern!(py, "__name__"))?.extract()?;
-    let right_name: String = right.getattr(intern!(py, "__name__"))?.extract()?;
-    if left_name != right_name {
-        return Ok(false);
-    }
-
-    let left_module: String = left.getattr(intern!(py, "__module__"))?.extract()?;
-    let right_module: String = right.getattr(intern!(py, "__module__"))?.extract()?;
-    if left_module != right_module {
-        return Ok(false);
-    }
-
-    let left_bound = left.getattr(intern!(py, "__bound__"))?;
-    let right_bound = right.getattr(intern!(py, "__bound__"))?;
-    if !left_bound.is_none() || !right_bound.is_none() {
-        let matches = left_bound.eq(&right_bound)?;
-        if matches {
-            let slot_attr = intern!(py, "__ators_typevar_slot__");
-            if left_slot.is_none() && right_slot.is_some() {
-                left.setattr(slot_attr, right_slot.clone().expect("checked above"))?;
-            }
-            if right_slot.is_none() && left_slot.is_some() {
-                right.setattr(slot_attr, left_slot.clone().expect("checked above"))?;
-            }
-            if left_slot.is_none() && right_slot.is_none() {
-                let slot_id = format!("{left_module}.{left_name}@{:#x}", left.as_ptr().addr());
-                left.setattr(slot_attr, slot_id.clone())?;
-                right.setattr(slot_attr, slot_id)?;
-            }
-        }
-        return Ok(matches);
-    }
-
-    let left_constraints = left.getattr(intern!(py, "__constraints__"))?;
-    let right_constraints = right.getattr(intern!(py, "__constraints__"))?;
-    let left_constraints_tuple = left_constraints.cast::<PyTuple>()?;
-    let right_constraints_tuple = right_constraints.cast::<PyTuple>()?;
-    if left_constraints_tuple.len() != right_constraints_tuple.len() {
-        return Ok(false);
-    }
-    for (left_constraint, right_constraint) in left_constraints_tuple
-        .iter()
-        .zip(right_constraints_tuple.iter())
-    {
-        if !left_constraint.eq(&right_constraint)? {
-            return Ok(false);
-        }
-    }
-
-    let slot_attr = intern!(py, "__ators_typevar_slot__");
-    if left_slot.is_none() && right_slot.is_some() {
-        left.setattr(slot_attr, right_slot.clone().expect("checked above"))?;
-    }
-    if right_slot.is_none() && left_slot.is_some() {
-        right.setattr(slot_attr, left_slot.clone().expect("checked above"))?;
-    }
     if left_slot.is_none() && right_slot.is_none() {
-        let slot_id = format!("{left_module}.{left_name}@{:#x}", left.as_ptr().addr());
-        left.setattr(slot_attr, slot_id.clone())?;
-        right.setattr(slot_attr, slot_id)?;
+        return Ok(false);
     }
-    Ok(true)
+
+    let py = left.py();
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    if let Some(slot) = left_slot.clone().or_else(|| right_slot.clone()) {
+        if left_slot.is_none() {
+            left.setattr(slot_attr, &slot)?;
+        }
+        if right_slot.is_none() {
+            right.setattr(slot_attr, &slot)?;
+        }
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 pub(crate) fn lookup_typevar_binding<'py>(
@@ -245,6 +198,14 @@ pub(crate) fn lookup_typevar_binding<'py>(
 
 /// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
 fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if is_type_var(arg)? {
+        // Different owner-local TypeVars are not interchangeable just because they
+        // share the same name or constraints.  The logical generic slot is the
+        // identity boundary here, so a matching specialization must preserve the
+        // same slot across nested generic respecializations.
+        return same_typevar_slot(typevar, arg);
+    }
+
     let py = typevar.py();
 
     let bound = typevar.getattr(intern!(py, "__bound__"))?;
@@ -673,14 +634,16 @@ pub fn create_ators_specialized_subclass<'py>(
         }
     }
 
-    // If all type var are the type var involved in the definition of the class,
-    // we can skip the specialization and return the class itself.
+    // A pass-through specialization is only a true no-op when the argument is the
+    // exact same TypeVar object from the defining generic scope.  A distinct owner-
+    // local TypeVar that shares the same logical slot is still a real specialization
+    // and must create a subclass so the binding metadata survives on the class.
     let fully_passthrough = exposed_params
         .iter()
         .zip(params_tuple.iter())
         .all(|(tp, p)| {
             let tp_bound = tp.bind(py);
-            same_typevar_slot(&tp_bound, &p).unwrap_or(false)
+            p.is(tp_bound)
         });
     if fully_passthrough {
         return Ok(cls.clone().into_any());
@@ -720,13 +683,14 @@ pub fn create_ators_specialized_subclass<'py>(
             enforce_narrower_typevar_bound(&exposed, &arg)?;
         }
         enforce_within_constraints(&exposed, &arg)?;
-
         if is_type_var(&arg)? {
-            // A replacement TypeVar in a partial specialization is the same
-            // logical generic slot as the exposed parameter it binds to only when
-            // the slot identity is still unresolved; if one side already has a
-            // distinct identity, keep that identity instead of collapsing two
-            // unrelated generic scopes into one slot.
+            // A replacement TypeVar is the same logical generic slot as the
+            // exposed parameter it binds to during a specialization.  If we
+            // synthesize a new slot when both are unresolved, a direct binding like
+            // `Holder[T2]` gets treated as a different generic scope and nested
+            // annotations lose the owner-local context.  Keep the binding pair on a
+            // shared slot so unrelated `T` names remain distinct while legitimate
+            // local rebindings stay tied to the same owner-scoped parameter.
             let slot_attr = intern!(py, "__ators_typevar_slot__");
             match (typevar_slot_id(&exposed)?, typevar_slot_id(&arg)?) {
                 (Some(exposed_slot), None) => {
@@ -736,20 +700,9 @@ pub fn create_ators_specialized_subclass<'py>(
                     exposed.setattr(slot_attr, arg_slot)?;
                 }
                 (None, None) => {
-                    let name: Option<String> = arg
-                        .getattr(intern!(py, "__name__"))
-                        .ok()
-                        .and_then(|name| name.extract().ok());
-                    let module: Option<String> = arg
-                        .getattr(intern!(py, "__module__"))
-                        .ok()
-                        .and_then(|module| module.extract().ok());
-                    if let (Some(name), Some(module)) = (name, module) {
-                        let arg_id = arg.as_ptr().addr();
-                        let slot_id = format!("{module}.{name}@{arg_id:x}");
-                        exposed.setattr(slot_attr, slot_id.clone())?;
-                        arg.setattr(slot_attr, slot_id)?;
-                    }
+                    let shared_slot = format!("owner-local@{:#x}", exposed.as_ptr().addr());
+                    exposed.setattr(slot_attr, shared_slot.clone())?;
+                    arg.setattr(slot_attr, shared_slot)?;
                 }
                 _ => {}
             }
@@ -803,7 +756,6 @@ pub fn create_ators_specialized_subclass<'py>(
         }
     }
     let unresolved_tuple = PyTuple::new(py, unresolved.iter())?;
-
     // Compute the full argument tuple for all origin params.  This is the
     // canonical cache key: using the full args (relative to the origin) means
     // that `A[int, str]` and `A[int][str]` always resolve to the same class.

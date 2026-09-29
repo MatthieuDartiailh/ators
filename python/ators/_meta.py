@@ -15,7 +15,6 @@ from typing import Any, dataclass_transform
 
 from ._ators import (
     PicklePolicy,
-    create_ators_specialized_alias as _create_ators_specialized_alias,
     create_ators_subclass as _create_ators_subclass,
     drop_class_info as _drop_class_info,
     get_ators_abstract_methods as _get_ators_abstract_methods,
@@ -103,9 +102,6 @@ class AtorsMeta(type):
     def __type_params__(cls) -> tuple[Any, ...]:
         tps = _get_ators_type_params(cls)
         return () if tps is None else tps
-
-    def __getitem__(self, params):
-        return _create_ators_specialized_alias(self, params)
 
     def __del__(cls):
         _drop_class_info(cls)

@@ -152,14 +152,13 @@ fn resolve_typevar_metadata_by_name<'py>(
     }
 
     if rebuilt {
-        let params = PyTuple::new(py, resolved_args.iter())?;
-        match origin.call_method("__class_getitem__", (params.clone(),), None) {
-            Ok(rebuilt_ann) => return Ok(rebuilt_ann),
-            Err(_) => {
-                let alias = origin.getattr(intern!(py, "__getitem__"))?;
-                return alias.call1((params,));
-            }
-        }
+        let rebuilt_ann = if resolved_args.len() == 1 {
+            origin.get_item(resolved_args[0].clone())?
+        } else {
+            let params = PyTuple::new(py, resolved_args.iter())?;
+            origin.get_item(params)?
+        };
+        return Ok(rebuilt_ann);
     }
 
     Ok(ann.clone())
@@ -197,14 +196,13 @@ pub(crate) fn apply_typevar_bindings<'py>(
     }
 
     if rebuilt {
-        let params = PyTuple::new(py, resolved_args.iter())?;
-        match origin.call_method("__class_getitem__", (params.clone(),), None) {
-            Ok(rebuilt_ann) => return Ok(rebuilt_ann),
-            Err(_) => {
-                let alias = origin.getattr(intern!(py, "__getitem__"))?;
-                return alias.call1((params,));
-            }
-        }
+        let rebuilt_ann = if resolved_args.len() == 1 {
+            origin.get_item(resolved_args[0].clone())?
+        } else {
+            let params = PyTuple::new(py, resolved_args.iter())?;
+            origin.get_item(params)?
+        };
+        return Ok(rebuilt_ann);
     }
 
     Ok(ann.clone())
@@ -233,9 +231,7 @@ pub fn build_validator_from_annotation<'py>(
     // information when one of their arguments still participates in the current
     // generic scope.  Replacing them with the base class here drops that context
     // and makes the nested validator validate against the wrong generic slot.
-    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))?
-        && !annotation_uses_local_typevar(&ann, tools)?
-    {
+    let ann = if ann.hasattr(intern!(name.py(), "__ators_specialized_class__"))? {
         ann.getattr(intern!(name.py(), "__ators_specialized_class__"))?
     } else {
         ann
@@ -577,18 +573,16 @@ pub fn build_validator_from_annotation<'py>(
                 })
             };
             if let Some(attr_names) = attr_names_opt {
-               let type_ = if ann.hasattr(intern!(py, "__ators_specialized_class__"))?
-                   && !annotation_uses_local_typevar(&ann, tools)?
-               {
-                   ann.getattr(intern!(py, "__ators_specialized_class__"))?
-                       .cast::<PyType>()?
-                       .clone()
-                       .unbind()
-               } else if let Ok(type_) = ann.cast::<PyType>() {
-                   type_.clone().unbind()
-               } else {
-                   origin.cast_into::<PyType>()?.unbind()
-               };
+                let type_ = if ann.hasattr(intern!(py, "__ators_specialized_class__"))? {
+                    ann.getattr(intern!(py, "__ators_specialized_class__"))?
+                        .cast::<PyType>()?
+                        .clone()
+                        .unbind()
+                } else if let Ok(type_) = ann.cast::<PyType>() {
+                    type_.clone().unbind()
+                } else {
+                    origin.cast_into::<PyType>()?.unbind()
+                };
                 let mut attributes = Vec::new();
                 let mut requires_owner = false;
                 for (attr_name_str, attr_type) in attr_names.into_iter().zip(args.iter()) {

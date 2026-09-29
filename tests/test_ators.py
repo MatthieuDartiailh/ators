@@ -186,6 +186,7 @@ def test_atorsref_rejects_non_ators_inputs():
 
 def test_atorsref_repr_valid_instance():
     """Test repr of AtorsRef with valid instance."""
+
     class A(Ators):
         a: int
 
@@ -196,11 +197,14 @@ def test_atorsref_repr_valid_instance():
     repr_str = repr(ref)
     assert "AtorsRef(target=" in repr_str
     # The default object repr includes the class name and address
-    assert "<test_ators.test_atorsref_repr_valid_instance.<locals>.A object at" in repr_str
+    assert (
+        "<test_ators.test_atorsref_repr_valid_instance.<locals>.A object at" in repr_str
+    )
 
 
 def test_atorsref_repr_invalid_instance():
     """Test repr of AtorsRef after instance is garbage collected."""
+
     class A(Ators):
         a: int
         self_ref: object
