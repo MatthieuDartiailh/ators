@@ -71,6 +71,8 @@ type MyInt = int
         (tuple, [()], [1, ""], False),
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)], False),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")], False),
+        (list, [[], [1], [1, "a"]], [1, ()], False),
+        (list[int], [[], [1]], [1, (), [1, "a"]], False),
         (
             frozenset,
             [frozenset(), frozenset((1,)), frozenset({1, "a"})],

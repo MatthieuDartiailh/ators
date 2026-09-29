@@ -12,7 +12,6 @@ use crate::get_type_mutability_map;
 use crate::utils::{Mutability, TupleBuilder, err_with_cause};
 use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
-use pyo3::types::PyStringMethods;
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
@@ -22,7 +21,7 @@ use pyo3::{
     sync::OnceLockExt,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
-        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PySetMethods, PyString, PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{
@@ -1204,7 +1203,7 @@ impl TypeValidator {
                         }
                         ValidationMode::CheckAndWrap => {
                             // For CheckAndWrap mode, create a copy
-                            PyDict::from_sequence(v).map(|d| d.into_any())
+                            PyDictMethods::copy(v).map(|d| d.into_any())
                         }
                     }
                 } else {
