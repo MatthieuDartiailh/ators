@@ -705,6 +705,13 @@ pub fn build_validator_from_annotation<'py>(
                 requires_owner: false,
             },
         ))
+    } else if ann.is_none() {
+        Ok((
+            Validator::new(TypeValidator::None {}, None, None, None),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyBool>()) {
         Ok((
             Validator::new(TypeValidator::Bool {}, None, None, None),

@@ -378,6 +378,32 @@ def test_non_class_constraints_use_python_issubclass_fallback_for_constraint_mis
         _ = ConstrainedSequenceHolder[mismatched]  # type: ignore
 
 
+def test_unconstrained_typevar_without_bound_or_constraints_is_rejected():
+    class ConstrainedHolder[T: (int, str)](Ators):
+        value: T = member()
+
+    unconstrained = TypeVar("unconstrained")
+    with pytest.raises(TypeError, match="must define constraints or a bound compatible"):
+        _ = ConstrainedHolder[unconstrained]  # type: ignore
+
+
+def test_same_named_typevars_create_distinct_specializations_without_slot_collision():
+    T1 = TypeVar("T", bound=int)
+    T2 = TypeVar("T", bound=int)
+
+    class Holder[T: int](Ators):
+        value: T = member()
+
+    left = Holder[T1]
+    right = Holder[T2]
+
+    assert left is not right
+    assert (
+        getattr(left.__type_params__[0], "__ators_typevar_slot__", None)
+        != getattr(right.__type_params__[0], "__ators_typevar_slot__", None)
+    )
+
+
 def test_module_shadowed_typevar_rebuilds_with_nested_type_alias_resolution():
     module_name = "shadowed_typevar_typealias_module"
     module = ModuleType(module_name)

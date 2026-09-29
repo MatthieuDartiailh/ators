@@ -60,6 +60,7 @@ type MyInt = int
     [
         (object, [1, object()], [], False),
         (Any, [1, object()], [], False),
+        (None, [None], [1], False),
         (bool, [False, True], [""], False),
         (int, [0, 1, -1], [1.0, ""], False),
         (MyInt, [0, 1, -1], [1.0, ""], False),
@@ -201,6 +202,22 @@ def test_member_reassignment_reuses_container_metadata_within_same_assignment_co
     assert obj.items is not items_before
     assert obj.values is not values_before
     assert obj.mapping is not mapping_before
+
+
+def test_nested_generic_container_assignment_uses_owner_context():
+    class A(Ators):
+        items: list[MyGen[int]] = member()
+
+    obj = A()
+    good = [MyGen(1)]
+    obj.items = good
+
+    assert isinstance(obj.items, AtorsList)
+    assert obj.items == good
+    assert obj.items[0].a == 1
+
+    with pytest.raises(TypeError):
+        obj.items = [MyGen("bad")]  # type: ignore[list-item]
 
 
 def test_generic_attributes_reject_invalid_typed_attribute_value():

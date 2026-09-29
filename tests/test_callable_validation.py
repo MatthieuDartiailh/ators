@@ -283,6 +283,30 @@ def test_validated_checkonly_container_rejects_invalid_items(
     assert "Failed to validate" in str(exc.value.exceptions[0])
 
 
+def test_validated_checkonly_container_preserves_plain_container_objects() -> None:
+    @validated
+    def f(
+        items: list[int], values: set[int], mapping: dict[str, int]
+    ) -> tuple[list[int], set[int], dict[str, int]]:
+        return items, values, mapping
+
+    items = [1, 2]
+    values = {1, 2}
+    mapping = {"keep": 1}
+
+    result_items, result_values, result_mapping = f(items, values, mapping)
+    assert result_items is items
+    assert result_values is values
+    assert result_mapping is mapping
+
+    with pytest.raises(ExceptionGroup):
+        f([1, "2"], values, mapping)  # type: ignore[list-item]
+    with pytest.raises(ExceptionGroup):
+        f(items, {1, "2"}, mapping)  # type: ignore[set-item]
+    with pytest.raises(ExceptionGroup):
+        f(items, values, {"keep": "2"})  # type: ignore[dict-item]
+
+
 # ============================================================================
 # Positional only arguments
 # ============================================================================
