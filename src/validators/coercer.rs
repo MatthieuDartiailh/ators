@@ -226,7 +226,6 @@ impl Coercer {
                         "Cannot coerce a value to a subclass validator - expected a type object"
                     )
                 ),
-                TypeValidator::Instance { types } => types.coerce(value),
                 TypeValidator::ForwardValidator { late_validator } => self.coerce_value(
                     is_init_coercion,
                     late_validator.get_validator(py)?.get(),

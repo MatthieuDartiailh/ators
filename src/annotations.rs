@@ -497,7 +497,6 @@ pub fn build_validator_from_annotation<'py>(
             ))
         } else if origin.is(&tools.types.union_) {
             // FIXME: low priority
-            // merge Typed/Instance together if relevant
             let mut members = Vec::new();
             let mut requires_owner = false;
             for member_ann in args.iter() {

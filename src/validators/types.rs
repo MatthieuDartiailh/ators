@@ -25,7 +25,6 @@ use pyo3::{
     },
 };
 use std::{
-    convert::Infallible,
     ops::{Deref, DerefMut},
     sync::OnceLock,
 };
@@ -87,61 +86,9 @@ impl<'py> IntoPyObject<'py> for &BoxedValidator {
     }
 }
 
-#[derive(Debug)]
-/// Struct storing a tuple of types for the TypeValidator::Instance variant
-pub(crate) struct TypesTuple(Py<PyTuple>);
-
-impl TypesTuple {
-    /// Coerce the value to the first type in the tuple
-    pub fn coerce<'py>(&self, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let py = value.py();
-        let type_ = self.0.bind(py).get_item(0)?;
-        type_.call1((value,))
-    }
-
-    /// Iterate over the types in the tuple
-    pub fn iter<'py>(&self, py: Python<'py>) -> impl Iterator<Item = Bound<'py, PyType>> {
-        self.0
-            .bind(py)
-            .iter()
-            .map(|o| o.cast_into::<PyType>().expect("Known tuple of types"))
-    }
-}
-
-impl FromPyObject<'_, '_> for TypesTuple {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
-        let py = ob.py();
-        if let Ok(ty) = ob.cast::<PyType>() {
-            Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
-        } else if let Ok(s) = ob.cast::<PyTuple>()
-            && s.len() > 0
-            && s.iter().all(|item| item.is_instance_of::<PyType>())
-        {
-            Ok(TypesTuple(s.to_owned().unbind()))
-        } else {
-            Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Expected a 'type' or 'tuple[type, ...]' for a TypeValidator.Instance, got {}",
-                ob.get_type().name()?
-            )))
-        }
-    }
-}
-
-impl<'py> IntoPyObject<'py> for &TypesTuple {
-    type Target = PyTuple;
-    type Output = Bound<'py, PyTuple>;
-    type Error = Infallible;
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        Ok(self.0.clone_ref(py).into_bound(py))
-    }
-}
-
 /// Validator struct used to resolve forward references in TypeValidator::ForwardValidator
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
-
 pub struct LateResolvedValidator {
     validator_cell: OnceLock<PyResult<Py<TypeValidator>>>,
     forward_ref: Py<PyAny>,
@@ -328,12 +275,6 @@ pub enum TypeValidator {
     Typed { type_: Py<PyType> },
     #[pyo3(constructor = (type_))]
     Subclass { type_: Py<PyType> },
-    #[pyo3(constructor = (types))]
-    // TypesTuple is build from a Python object and we do not need to expose
-    // it directly since it is not needed to build an Instance variant from the
-    // Python side.
-    #[allow(private_interfaces)]
-    Instance { types: TypesTuple },
     #[pyo3(constructor = (members))]
     Union { members: Vec<Validator> },
     #[pyo3(constructor = (type_, attributes))]
@@ -1240,14 +1181,6 @@ impl TypeValidator {
                     )))
                 }
             }
-            Self::Instance { types } => {
-                let t = types.0.bind(value.py());
-                if value.is_instance(t)? {
-                    Ok(value.clone())
-                } else {
-                    validation_error!(t.repr()?, name, object, value)
-                }
-            }
             Self::Union { members } => {
                 let mut err = Vec::with_capacity(members.len());
                 for v in members.iter() {
@@ -1463,34 +1396,6 @@ impl TypeValidator {
                 // objects, so we return Undecidable.
                 Mutability::Undecidable
             }
-            Self::Instance { types } => {
-                types
-                    .iter(py)
-                    .fold(Mutability::Immutable, |acc: Mutability, e| {
-                        let mm = get_type_mutability_map(py);
-                        match (
-                            acc,
-                            with_critical_section(mm.as_any(), || {
-                                mm.borrow().get_type_mutability(&e)
-                            }),
-                        ) {
-                            // If one item is mutable the tuple is seen as mutable
-                            (Mutability::Mutable, _) => Mutability::Mutable,
-                            // If one item is undecidable, the tuple is mutable if the
-                            // new item is otherwise it remains undecidable
-                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
-                            (Mutability::Undecidable, Mutability::Undecidable) => {
-                                Mutability::Undecidable
-                            }
-                            (Mutability::Undecidable, Mutability::Immutable) => {
-                                Mutability::Undecidable
-                            }
-                            // If all previous items are immutable everything depend on
-                            // the last visited one.
-                            (Mutability::Immutable, im) => im,
-                        }
-                    })
-            }
             Self::ForwardValidator { late_validator } => late_validator.is_type_mutable(py),
             Self::GenericAttributes {
                 type_,
@@ -1575,9 +1480,6 @@ impl Clone for TypeValidator {
             },
             Self::Subclass { type_ } => Self::Subclass {
                 type_: type_.clone_ref(py),
-            },
-            Self::Instance { types } => Self::Instance {
-                types: TypesTuple(types.0.clone_ref(py)),
             },
             Self::Union { members } => Self::Union {
                 members: members.to_vec(),
