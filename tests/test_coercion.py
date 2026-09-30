@@ -34,14 +34,27 @@ from ators.behaviors import Coercer, coerce, coerce_init
         # str: int -> "1", bytes -> "b'...'"
         (str, False, [1, b"abc"], ["1", "b'abc'"]),
         (str, True, [1, b"abc"], ["1", TypeError("")]),
+        # bytes-like objects coerce to bytes, and tuple edge cases cover empty/failure
+        (bytes, False, [bytearray(b"abc"), b"def"], [b"abc", b"def"]),
+        (bytes, True, [bytearray(b"abc"), object()], [b"abc", TypeError("")]),
         # complex: string or complex -> complex object
         (complex, False, ["1+2j", 3 + 4j], [complex("1+2j"), complex(3 + 4j)]),
         (complex, True, ["1+2j", "3 + 4j"], [complex("1+2j"), TypeError("")]),
-        # fixed-length tuple: sequence coerced and items coerced
-        (tuple[int, int], False, [["1", "2"], (3, 4)], [(1, 2), (3, 4)]),
+        # fixed-length tuple: sequence coerced and items coerced, including empty tuple rejection
+        (
+            tuple[int, int],
+            False,
+            [["1", "2"], (), ("3", "4")],
+            [(1, 2), TypeError(""), (3, 4)],
+        ),
         (tuple[int, int], True, [["1", "2"], (3, "4")], [(1, 2), TypeError("")]),
         # var-tuple (tuple[int, ...])
-        (tuple[int, ...], False, [["1", "2", "3"], (4, "5")], [(1, 2, 3), (4, 5)]),
+        (
+            tuple[int, ...],
+            False,
+            [(), ("1", "2"), ("1", "bad")],
+            [(), (1, 2), ValueError("")],
+        ),
         (
             tuple[int, ...],
             True,

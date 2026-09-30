@@ -466,6 +466,23 @@ def test_forward_ref_owner_namespace_resolves_nested_container_types():
         obj.children = [object()]  # type: ignore
 
 
+def test_forward_ref_explicit_local_namespace_takes_precedence_over_unresolved_owner():
+    class LocalNode:
+        pass
+
+    class A(Ators):
+        child: MissingNode = member().forward_ref_environment(
+            lambda: {"MissingNode": LocalNode}
+        )
+
+    obj = A()
+    node = LocalNode()
+    obj.child = node
+    assert obj.child is node
+    with pytest.raises(TypeError):
+        obj.child = object()  # type: ignore
+
+
 class RedundantOwnerNamespace(Ators):
     child: Node = member().forward_ref_environment(lambda: {"Node": Node})
 
