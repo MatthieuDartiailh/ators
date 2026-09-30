@@ -64,6 +64,21 @@ from ators.behaviors import Coercer, coerce, coerce_init
             [{1: "2", "3": 4}, [(5, "6")]],
             [{"1": 2, "3": 4}, TypeError("")],
         ),
+        # set/frozenset coercion from sequence input
+        (set[int], False, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
+        (set[int], True, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
+        (
+            frozenset[int],
+            False,
+            [("1", "2"), {"bad": 1}],
+            [frozenset({1, 2}), TypeError("")],
+        ),
+        (
+            frozenset[int],
+            True,
+            [("1", "2"), {"bad": 1}],
+            [frozenset({1, 2}), TypeError("")],
+        ),
         # Union: first matching member is used
         (int | complex, False, ["1", "1j", "a"], [1, 1j, TypeError("")]),
         (int | complex, True, ["1j", "a"], [1j, TypeError("")]),

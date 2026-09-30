@@ -383,7 +383,9 @@ def test_unconstrained_typevar_without_bound_or_constraints_is_rejected():
         value: T = member()
 
     unconstrained = TypeVar("unconstrained")
-    with pytest.raises(TypeError, match="must define constraints or a bound compatible"):
+    with pytest.raises(
+        TypeError, match="must define constraints or a bound compatible"
+    ):
         _ = ConstrainedHolder[unconstrained]  # type: ignore
 
 
@@ -398,9 +400,8 @@ def test_same_named_typevars_create_distinct_specializations_without_slot_collis
     right = Holder[T2]
 
     assert left is not right
-    assert (
-        getattr(left.__type_params__[0], "__ators_typevar_slot__", None)
-        != getattr(right.__type_params__[0], "__ators_typevar_slot__", None)
+    assert getattr(left.__type_params__[0], "__ators_typevar_slot__", None) != getattr(
+        right.__type_params__[0], "__ators_typevar_slot__", None
     )
 
 
