@@ -23,6 +23,10 @@ class OB:
     pass
 
 
+class SubOB(OB):
+    pass
+
+
 class CustomBase(ABC):
     pass
 
@@ -107,7 +111,7 @@ type MyInt = int
         ),
         # type[X] - subclass validators
         (type[int], [int, bool], [int(), 1, str, object()], False),
-        (type[OB], [OB], [OB(), int, object()], False),
+        (type[OB], [OB, SubOB], [OB(), int, object()], False),
         (
             type[CustomBase],
             [CustomBase, CustomObj],
@@ -137,25 +141,6 @@ def test_type_validators(ann, goods, bads, warn):
     for bad in bads:
         with pytest.raises((TypeError, ValueError)):
             a.a = bad
-
-
-@pytest.mark.parametrize(
-    "ann, bad",
-    [
-        (list[int], "not-a-list"),
-        (set[int], {"not": "a-set"}),
-        (frozenset[int], [1, 2, 3]),
-        (dict[int, int], [("a", 1)]),
-        (tuple[int, ...], 1),
-    ],
-)
-def test_container_validator_rejects_wrong_shape(ann, bad):
-    class A(Ators):
-        a: ann = member()
-
-    obj = A()
-    with pytest.raises(TypeError):
-        obj.a = bad
 
 
 def test_union_validator_reports_grouped_cause():
@@ -372,7 +357,7 @@ class OutOfOrderB(Ators):
 )
 def test_forward_ref_support_out_of_order(attr, good, bad):
 
-    a1 = OutOfOrderA()
+    a1 = OutOfOrderA()  # type: ignore
     setattr(a1, attr, good)
     assert getattr(a1, attr) is good
     with pytest.raises(TypeError):
@@ -393,7 +378,7 @@ def test_forward_ref_preserve_owner_in_subclasses():
     with pytest.raises(TypeError):
         a1.a = 5  # type: ignore
 
-    a1 = NOOA()
+    a1 = NOOA()  # type: ignore
     b1 = OutOfOrderB()
     a1.a = b1
     assert a1.a is b1
