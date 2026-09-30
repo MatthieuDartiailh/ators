@@ -23,11 +23,12 @@ from ._ators import (
     get_ators_origin as _get_origin,
     get_ators_type_params as _get_ators_type_params,
     maybe_freeze_instance_after_call as _maybe_freeze_instance_after_call,
+    member,
 )
 
 
 @dataclass_transform(
-    field_descriptors=("member",), kw_only_default=True, frozen_default=False
+    field_specifiers=(member,), kw_only_default=True, frozen_default=False
 )
 class AtorsMeta(type):
     """The metaclass for classes derived from Ators.
