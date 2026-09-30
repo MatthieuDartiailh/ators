@@ -466,6 +466,51 @@ def test_forward_ref_owner_namespace_resolves_nested_container_types():
         obj.children = [object()]  # type: ignore
 
 
+class RedundantOwnerNamespace(Ators):
+    child: Node = member().forward_ref_environment(lambda: {"Node": Node})
+
+
+class ConflictingOwnerNamespace(Ators):
+    child: Node = member().forward_ref_environment(lambda: {"Node": int})
+
+
+class Node:
+    pass
+
+
+def test_forward_ref_redundant_provider_namespace_warns():
+
+    obj = RedundantOwnerNamespace()
+    node = Node()
+    with pytest.warns(UserWarning, match="redundant"):
+        obj.child = node
+    assert obj.child is node
+
+
+def test_forward_ref_conflicting_owner_and_provider_namespaces_raise():
+
+    obj = ConflictingOwnerNamespace()
+    with pytest.raises(TypeError) as e:
+        obj.child = Node()
+    assert "Conflicting namespaces for forward reference" in str(e.value.__cause__)
+
+
+def test_nested_generic_owner_namespace_resolves_local_specialization():
+    class Outer:
+        class Inner:
+            pass
+
+        class Box[T](Ators):
+            item: T = member()
+
+    obj = Outer.Box[Outer.Inner]()
+    node = Outer.Inner()
+    obj.item = node
+    assert obj.item is node
+    with pytest.raises(TypeError):
+        obj.item = object()  # type: ignore
+
+
 def test_forward_ref_failed_resolution_keeps_original_cause_chain():
     class A(Ators):
         child: MissingNode = member().forward_ref_environment(lambda: {})  # noqa : F821  # type: ignore

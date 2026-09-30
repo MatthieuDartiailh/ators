@@ -17,7 +17,7 @@ use pyo3::{
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    pyclass, pymethods,
+    intern, pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
@@ -142,6 +142,56 @@ impl LateResolvedValidator {
                     }
                 }
             }
+
+            if let Some(owner) = &self.owner {
+                let owner_bound = owner.bind(py);
+                let forward_name = match forward_ref.getattr("__forward_arg__") {
+                    Ok(name) => Some(name.extract::<String>()?),
+                    Err(_) => None,
+                };
+
+                if let Some(name) = forward_name
+                    && locals.contains(name.as_str())?
+                {
+                    let explicit = locals
+                        .get_item(name.as_str())?
+                        .expect("Key is known to exist");
+                    let owner_kwargs = PyDict::new(py);
+                    owner_kwargs.set_item("owner", owner_bound)?;
+                    let owner_value: Option<Bound<'py, PyAny>> =
+                        match evaluate_forward_ref.call((forward_ref,), Some(&owner_kwargs)) {
+                            Ok(value) => Some(value),
+                            Err(_) => None,
+                        };
+
+                    if let Some(owner_value) = owner_value {
+                        if explicit.eq(&owner_value)? {
+                            let warnings = py
+                                .import(intern!(py, "warnings"))?
+                                .getattr(intern!(py, "warn"))?;
+                            warnings.call1((
+                                format!(
+                                    "Forward reference environment for '{}' is redundant \
+                                    with the owner namespace: both resolve to the same object.",
+                                    name,
+                                ),
+                                py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                            ))?;
+                        } else {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Conflicting namespaces for forward reference '{}' in {}: \
+                                the owner namespace resolves it to {}, \
+                                while the explicit environment provides {}.",
+                                name,
+                                owner_bound.repr()?,
+                                owner_value.repr()?,
+                                explicit.repr()?,
+                            )));
+                        }
+                    }
+                }
+            }
+
             if !locals.is_empty() {
                 kwargs.set_item("locals", locals)?;
             }
