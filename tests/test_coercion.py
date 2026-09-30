@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test coercion behavior for ators object"""
 
+from collections import UserDict
 from typing import Any
 
 import pytest
@@ -19,6 +20,9 @@ from ators.behaviors import Coercer, coerce, coerce_init
 @pytest.mark.parametrize(
     "ty, init, inputs, expected",
     [
+        # None
+        (type(None), False, [None], [None, TypeError("")]),
+        (type(None), True, [None], [None, TypeError("")]),
         # ints
         (int, False, ["1", "2"], [1, 2]),
         (int, True, ["1", "2"], [1, TypeError("")]),
@@ -68,14 +72,14 @@ from ators.behaviors import Coercer, coerce, coerce_init
         (
             dict[str, int],
             False,
-            [{1: "2", "3": 4}, [(5, "6")]],
-            [{"1": 2, "3": 4}, {"5": 6}],
+            [{1: "2", "3": 4}, UserDict({1: "2", "3": 4}), [(5, "6")]],
+            [{"1": 2, "3": 4}, {"1": 2, "3": 4}, {"5": 6}],
         ),
         (
             dict[str, int],
             True,
-            [{1: "2", "3": 4}, [(5, "6")]],
-            [{"1": 2, "3": 4}, TypeError("")],
+            [{1: "2", "3": 4}, UserDict({1: "2", "3": 4}), [(5, "6")]],
+            [{"1": 2, "3": 4}, {"1": 2, "3": 4}, TypeError("")],
         ),
         # set/frozenset coercion from sequence input
         (set[int], False, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
@@ -117,6 +121,94 @@ def test_type_inferred_coercion(ty, init, inputs, expected):
         else:
             a.a = inp
             assert a.a == exp
+
+
+def test_type_inferred_coercion_none_and_mapping_like_dict_edges():
+    class A(Ators):
+        none_value: Member[type(None), Any] = member().coerce()
+        mapping_value: Member[dict[str, int], Any] = member().coerce()
+
+    a = A()
+    a.none_value = None
+    assert a.none_value is None
+    with pytest.raises(TypeError):
+        a.none_value = 1  # type: ignore[arg-type]
+
+    a.mapping_value = UserDict({1: "2", "3": 4})
+    assert a.mapping_value == {"1": 2, "3": 4}
+
+
+def test_nested_tuple_coercion_preserves_original_cause():
+    class A(Ators):
+        value: Member[tuple[tuple[int, int], int], Any] = member().coerce()
+
+    a = A()
+    with pytest.raises(ValueError) as exc:
+        a.value = (("1", "2"), "bad")
+
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+
+def test_nested_container_coercion_preserves_original_cause():
+    class TupleBox(Ators):
+        value: Member[tuple[tuple[int, int], int], Any] = member().coerce()
+
+    class ListBox(Ators):
+        value: Member[list[tuple[int, int]], Any] = member().coerce()
+
+    class SetBox(Ators):
+        value: Member[set[tuple[int, int]], Any] = member().coerce()
+
+    class DictBox(Ators):
+        value: Member[dict[str, int], Any] = member().coerce()
+
+    tuple_box = TupleBox()
+    with pytest.raises(ValueError) as exc:
+        tuple_box.value = (("1", "2"), "bad")
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+    list_box = ListBox()
+    with pytest.raises(ValueError) as exc:
+        list_box.value = [("1", "2"), ("3", "bad")]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+    set_box = SetBox()
+    with pytest.raises(TypeError) as exc:
+        set_box.value = {("1", "2"), ("3", "bad")}
+    assert exc.value.__cause__ is not None
+    assert "Sequence" in str(exc.value.__cause__)
+
+    dict_box = DictBox()
+    with pytest.raises(ValueError) as exc:
+        dict_box.value = [("a", "x"), ("b", 2)]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
+
+
+def test_dict_coercion_branch_coverage_for_mapping_and_iterable_fallback():
+    class CustomMapping(UserDict):
+        pass
+
+    class A(Ators):
+        value: Member[dict[str, int], Any] = member().coerce()
+
+    a = A()
+    mapping = CustomMapping({"a": "1", "b": "2"})
+    a.value = mapping
+    assert a.value == {"a": 1, "b": 2}
+
+    with pytest.raises(ValueError) as exc:
+        a.value = [("a", "x"), ("b", 2)]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
+
+    with pytest.raises(ValueError) as exc:
+        a.value = [("a", "x"), ("b", object())]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
 
 
 @pytest.mark.parametrize(
