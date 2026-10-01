@@ -185,6 +185,42 @@ def test_validated_async_function_return_validation() -> None:
     assert "str" in error_msg
 
 
+def test_validated_async_iterator_preserves_stop_iteration_value() -> None:
+    @validated
+    async def ok() -> int:
+        return 1
+
+    iterator = ok().__await__()
+    with pytest.raises(StopIteration) as exc:
+        next(iterator)
+    assert exc.value.value == 1
+
+    @validated
+    async def bad() -> int:
+        return "nope"  # type: ignore[return-value]
+
+    with pytest.raises(TypeError, match="Failed to validate return value"):
+        next(bad().__await__())
+
+
+def test_validated_async_iterator_forwards_send_throw_and_close() -> None:
+    @validated
+    async def ok() -> int:
+        return 1
+
+    iterator = ok().__await__()
+    with pytest.raises(StopIteration) as exc:
+        iterator.send(None)
+    assert exc.value.value == 1
+
+    iterator = ok().__await__()
+    assert iterator.close() is None
+
+    iterator = ok().__await__()
+    with pytest.raises(ValueError, match="boom"):
+        iterator.throw(ValueError("boom"))
+
+
 def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
     @validated(aggregate_errors=True)
     def f(*, x: int, **rest: int) -> int:

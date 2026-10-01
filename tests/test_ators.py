@@ -27,6 +27,13 @@ from ators._ators import get_tracked_class_info_size
 from ators.behaviors import DelAttr, PreSetAttr
 
 
+def test_metaclass_reject_explicit_slots():
+    with pytest.raises(TypeError, match="__slots__ not supported in Ators subclasses"):
+
+        class A(Ators):
+            __slots__ = ("x",)
+
+
 def test_member_slot_do_not_overlap():
     class A(Ators):
         a = member()
