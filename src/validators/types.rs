@@ -159,10 +159,7 @@ impl LateResolvedValidator {
                     let owner_kwargs = PyDict::new(py);
                     owner_kwargs.set_item("owner", owner_bound)?;
                     let owner_value: Option<Bound<'py, PyAny>> =
-                        match evaluate_forward_ref.call((forward_ref,), Some(&owner_kwargs)) {
-                            Ok(value) => Some(value),
-                            Err(_) => None,
-                        };
+                        evaluate_forward_ref.call((forward_ref,), Some(&owner_kwargs)).ok();
 
                     if let Some(owner_value) = owner_value {
                         if explicit.eq(&owner_value)? {
