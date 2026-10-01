@@ -197,7 +197,7 @@ def test_validated_async_iterator_preserves_stop_iteration_value() -> None:
 
     @validated
     async def bad() -> int:
-        return "nope"  # type: ignore[return-value]
+        return "nope"  # type: ignore
 
     with pytest.raises(TypeError, match="Failed to validate return value"):
         next(bad().__await__())

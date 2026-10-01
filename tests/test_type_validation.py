@@ -76,6 +76,13 @@ type MyInt = int
         (tuple, [()], [1, ""], False),
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)], False),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")], False),
+        (tuple[int | list[int], ...], [(), (1,), (1, [2, 3], 1)], [1, ("a",)], False),
+        (
+            tuple[int, list[int], int],
+            [(1, [2, 3], 1)],
+            [1, (), (1,), (1, 2, 3), (1, "a", 1)],
+            False,
+        ),
         (list, [[], [1], [1, "a"]], [1, ()], False),
         (list[int], [[], [1]], [1, (), [1, "a"]], False),
         (
@@ -203,6 +210,48 @@ def test_nested_generic_container_assignment_uses_owner_context():
 
     with pytest.raises(TypeError):
         obj.items = [MyGen("bad")]  # type: ignore[list-item]
+
+
+@pytest.mark.parametrize(
+    "ann, bad_value, expected_context",
+    [
+        (
+            list[tuple[int, int]],
+            [(1, "bad")],
+            "Failed to validate item 0 for the member",
+        ),
+        (
+            set[tuple[int, int]],
+            {(1, "bad")},
+            "Failed to validate item 0 for the member",
+        ),
+        (dict[str, tuple[int, int]], {"key": (1, "bad")}, "Failed to validate value"),
+        (
+            tuple[tuple[int, int], ...],
+            ((1, "bad"),),
+            "Failed to validate item 0 for the member",
+        ),
+        (
+            tuple[tuple[int, int], tuple[int, int]],
+            ((1, "bad"), (2, 3)),
+            "Failed to validate item 0 for the member",
+        ),
+    ],
+)
+def test_nested_container_validation_preserves_cause_chain(
+    ann, bad_value, expected_context
+):
+    class A(Ators):
+        values: ann = member()
+
+    obj = A()
+    with pytest.raises(TypeError) as exc:
+        obj.values = bad_value  # type: ignore[arg-type]
+
+    assert isinstance(exc.value, TypeError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert expected_context in str(exc.value.__cause__)
 
 
 def test_generic_attributes_reject_invalid_typed_attribute_value():
