@@ -79,7 +79,7 @@ from ators.behaviors import Coercer, coerce, coerce_init
             dict[str, int],
             True,
             [{1: "2", "3": 4}, UserDict({1: "2", "3": 4}), [(5, "6")]],
-            [{"1": 2, "3": 4}, {"1": 2, "3": 4}, TypeError("")],
+            [{"1": 2, "3": 4}, TypeError(""), TypeError("")],
         ),
         # set/frozenset coercion from sequence input
         (set[int], False, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
