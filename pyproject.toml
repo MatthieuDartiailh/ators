@@ -11,7 +11,7 @@
   dynamic = ["version"]
 
 [dependency-groups]
-  test = ["pytest", "pytest-cov"]
+  test = ["pytest", "pytest-cov", "pytest-asyncio"]
   bench = ["pytest", "pytest-benchmark", "pyperf", "atom", "rich"]
   ci-bench = ["pytest", "pytest-codspeed", "atom"]
   docs = [

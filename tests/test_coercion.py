@@ -7,17 +7,22 @@
 # --------------------------------------------------------------------------------------
 """Test coercion behavior for ators object"""
 
+from collections import UserDict
 from typing import Any
 
 import pytest
 
 from ators import Ators, Member, member
+from ators._ators import TypeValidator, Validator
 from ators.behaviors import Coercer, coerce, coerce_init
 
 
 @pytest.mark.parametrize(
     "ty, init, inputs, expected",
     [
+        # None
+        (type(None), False, [None, 1], [None, TypeError("")]),
+        (type(None), True, [None, 1], [None, TypeError("")]),
         # ints
         (int, False, ["1", "2"], [1, 2]),
         (int, True, ["1", "2"], [1, TypeError("")]),
@@ -33,14 +38,27 @@ from ators.behaviors import Coercer, coerce, coerce_init
         # str: int -> "1", bytes -> "b'...'"
         (str, False, [1, b"abc"], ["1", "b'abc'"]),
         (str, True, [1, b"abc"], ["1", TypeError("")]),
+        # bytes-like objects coerce to bytes, and tuple edge cases cover empty/failure
+        (bytes, False, [bytearray(b"abc"), b"def"], [b"abc", b"def"]),
+        (bytes, True, [bytearray(b"abc"), object()], [b"abc", TypeError("")]),
         # complex: string or complex -> complex object
         (complex, False, ["1+2j", 3 + 4j], [complex("1+2j"), complex(3 + 4j)]),
         (complex, True, ["1+2j", "3 + 4j"], [complex("1+2j"), TypeError("")]),
-        # fixed-length tuple: sequence coerced and items coerced
-        (tuple[int, int], False, [["1", "2"], (3, 4)], [(1, 2), (3, 4)]),
+        # fixed-length tuple: sequence coerced and items coerced, including empty tuple rejection
+        (
+            tuple[int, int],
+            False,
+            [["1", "2"], (), ("3", "4")],
+            [(1, 2), TypeError(""), (3, 4)],
+        ),
         (tuple[int, int], True, [["1", "2"], (3, "4")], [(1, 2), TypeError("")]),
         # var-tuple (tuple[int, ...])
-        (tuple[int, ...], False, [["1", "2", "3"], (4, "5")], [(1, 2, 3), (4, 5)]),
+        (
+            tuple[int, ...],
+            False,
+            [(), ("1", "2"), ("1", "bad")],
+            [(), (1, 2), ValueError("")],
+        ),
         (
             tuple[int, ...],
             True,
@@ -54,14 +72,29 @@ from ators.behaviors import Coercer, coerce, coerce_init
         (
             dict[str, int],
             False,
-            [{1: "2", "3": 4}, [(5, "6")]],
-            [{"1": 2, "3": 4}, {"5": 6}],
+            [{1: "2", "3": 4}, UserDict({1: "2", "3": 4}), [(5, "6")]],
+            [{"1": 2, "3": 4}, {"1": 2, "3": 4}, {"5": 6}],
         ),
         (
             dict[str, int],
             True,
-            [{1: "2", "3": 4}, [(5, "6")]],
-            [{"1": 2, "3": 4}, TypeError("")],
+            [{1: "2", "3": 4}, UserDict({1: "2", "3": 4}), [(5, "6")]],
+            [{"1": 2, "3": 4}, TypeError(""), TypeError("")],
+        ),
+        # set/frozenset coercion from sequence input
+        (set[int], False, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
+        (set[int], True, [("1", "2"), {"bad": 1}], [{1, 2}, TypeError("")]),
+        (
+            frozenset[int],
+            False,
+            [("1", "2"), {"bad": 1}],
+            [frozenset({1, 2}), TypeError("")],
+        ),
+        (
+            frozenset[int],
+            True,
+            [("1", "2"), {"bad": 1}],
+            [frozenset({1, 2}), TypeError("")],
         ),
         # Union: first matching member is used
         (int | complex, False, ["1", "1j", "a"], [1, 1j, TypeError("")]),
@@ -88,6 +121,79 @@ def test_type_inferred_coercion(ty, init, inputs, expected):
         else:
             a.a = inp
             assert a.a == exp
+
+
+def test_nested_tuple_coercion_preserves_original_cause():
+    class A(Ators):
+        value: Member[tuple[tuple[int, int], int], Any] = member().coerce()
+
+    a = A()
+    with pytest.raises(ValueError) as exc:
+        a.value = (("1", "2"), "bad")
+
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+
+def test_nested_container_coercion_preserves_original_cause():
+    class TupleBox(Ators):
+        value: Member[tuple[tuple[int, int], int], Any] = member().coerce()
+
+    class ListBox(Ators):
+        value: Member[list[tuple[int, int]], Any] = member().coerce()
+
+    class SetBox(Ators):
+        value: Member[set[tuple[int, int]], Any] = member().coerce()
+
+    class DictBox(Ators):
+        value: Member[dict[str, int], Any] = member().coerce()
+
+    tuple_box = TupleBox()
+    with pytest.raises(ValueError) as exc:
+        tuple_box.value = (("1", "2"), "bad")
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+    list_box = ListBox()
+    with pytest.raises(ValueError) as exc:
+        list_box.value = [("1", "2"), ("3", "bad")]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
+
+    set_box = SetBox()
+    with pytest.raises(TypeError) as exc:
+        set_box.value = {("1", "2"), ("3", "bad")}
+    assert exc.value.__cause__ is not None
+    assert "Sequence" in str(exc.value.__cause__)
+
+    dict_box = DictBox()
+    with pytest.raises(ValueError) as exc:
+        dict_box.value = [("a", "x"), ("b", 2)]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
+
+
+def test_dict_coercion_branch_coverage_for_mapping_and_iterable_fallback():
+    class CustomMapping(UserDict):
+        pass
+
+    class A(Ators):
+        value: Member[dict[str, int], Any] = member().coerce()
+
+    a = A()
+    mapping = CustomMapping({"a": "1", "b": "2"})
+    a.value = mapping
+    assert a.value == {"a": 1, "b": 2}
+
+    with pytest.raises(ValueError) as exc:
+        a.value = [("a", "x"), ("b", 2)]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
+
+    with pytest.raises(ValueError) as exc:
+        a.value = [("a", "x"), ("b", object())]
+    assert exc.value.__cause__ is not None
+    assert "invalid literal for int() with base 10: 'x'" in str(exc.value.__cause__)
 
 
 @pytest.mark.parametrize(
@@ -124,6 +230,37 @@ def test_call_coerce(init, inputs, called, expected):
             a.a = inp
             assert a.a == exp
             assert i == c
+
+
+def test_validator_keeps_init_and_regular_coercers_distinct():
+    regular = Coercer.CallValue(lambda value: int(value) + 1)
+    init = Coercer.CallValue(lambda value: int(value) * 10)
+    validator = Validator(TypeValidator.Int(), None, regular, init)
+
+    assert validator.coercer is not validator.init_coercer
+
+
+def test_member_validation_and_coercion_paths():
+    class A(Ators):
+        a: Member[int, Any] = member().coerce()
+
+    class B(Ators):
+        b: int
+
+    a = A(a="7")
+    assert a.a == 7
+
+    a.a = "9"
+    assert a.a == 9
+
+    with pytest.raises(ValueError):
+        a.a = "nope"
+
+    b = B(b=3)
+    assert b.b == 3
+
+    with pytest.raises(TypeError):
+        b.b = "nope"
 
 
 @pytest.mark.parametrize(

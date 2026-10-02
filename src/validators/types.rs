@@ -12,21 +12,19 @@ use crate::get_type_mutability_map;
 use crate::utils::{Mutability, TupleBuilder, err_with_cause};
 use pyo3::Borrowed;
 use pyo3::sync::critical_section::with_critical_section;
-use pyo3::types::PyStringMethods;
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
         PyBool_Check, PyBytes_Check, PyComplex_Check, PyFloat_Check, PyLong_Check, PyUnicode_Check,
     },
-    pyclass, pymethods,
+    intern, pyclass, pymethods,
     sync::OnceLockExt,
     types::{
         PyAnyMethods, PyDict, PyDictMethods, PyFrozenSetMethods, PyList, PyListMethods, PySet,
-        PySetMethods, PyString, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
+        PySetMethods, PyString, PyStringMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods,
     },
 };
 use std::{
-    convert::Infallible,
     ops::{Deref, DerefMut},
     sync::OnceLock,
 };
@@ -88,61 +86,9 @@ impl<'py> IntoPyObject<'py> for &BoxedValidator {
     }
 }
 
-#[derive(Debug)]
-/// Struct storing a tuple of types for the TypeValidator::Instance variant
-pub(crate) struct TypesTuple(Py<PyTuple>);
-
-impl TypesTuple {
-    /// Coerce the value to the first type in the tuple
-    pub fn coerce<'py>(&self, value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let py = value.py();
-        let type_ = self.0.bind(py).get_item(0)?;
-        type_.call1((value,))
-    }
-
-    /// Iterate over the types in the tuple
-    pub fn iter<'py>(&self, py: Python<'py>) -> impl Iterator<Item = Bound<'py, PyType>> {
-        self.0
-            .bind(py)
-            .iter()
-            .map(|o| o.cast_into::<PyType>().expect("Known tuple of types"))
-    }
-}
-
-impl FromPyObject<'_, '_> for TypesTuple {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
-        let py = ob.py();
-        if let Ok(ty) = ob.cast::<PyType>() {
-            Ok(TypesTuple(PyTuple::new(py, [ty])?.into()))
-        } else if let Ok(s) = ob.cast::<PyTuple>()
-            && s.len() > 0
-            && s.iter().all(|item| item.is_instance_of::<PyType>())
-        {
-            Ok(TypesTuple(s.to_owned().unbind()))
-        } else {
-            Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "Expected a 'type' or 'tuple[type, ...]' for a TypeValidator.Instance, got {}",
-                ob.get_type().name()?
-            )))
-        }
-    }
-}
-
-impl<'py> IntoPyObject<'py> for &TypesTuple {
-    type Target = PyTuple;
-    type Output = Bound<'py, PyTuple>;
-    type Error = Infallible;
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        Ok(self.0.clone_ref(py).into_bound(py))
-    }
-}
-
 /// Validator struct used to resolve forward references in TypeValidator::ForwardValidator
 #[pyclass(module = "ators._ators", frozen, from_py_object)]
 #[derive(Debug)]
-
 pub struct LateResolvedValidator {
     validator_cell: OnceLock<PyResult<Py<TypeValidator>>>,
     forward_ref: Py<PyAny>,
@@ -196,6 +142,54 @@ impl LateResolvedValidator {
                     }
                 }
             }
+
+            if let Some(owner) = &self.owner {
+                let owner_bound = owner.bind(py);
+                let forward_name = match forward_ref.getattr("__forward_arg__") {
+                    Ok(name) => Some(name.extract::<String>()?),
+                    Err(_) => None,
+                };
+
+                if let Some(name) = forward_name
+                    && locals.contains(name.as_str())?
+                {
+                    let explicit = locals
+                        .get_item(name.as_str())?
+                        .expect("Key is known to exist");
+                    let owner_kwargs = PyDict::new(py);
+                    owner_kwargs.set_item("owner", owner_bound)?;
+                    let owner_value: Option<Bound<'py, PyAny>> = evaluate_forward_ref
+                        .call((forward_ref,), Some(&owner_kwargs))
+                        .ok();
+
+                    if let Some(owner_value) = owner_value {
+                        if explicit.eq(&owner_value)? {
+                            let warnings = py
+                                .import(intern!(py, "warnings"))?
+                                .getattr(intern!(py, "warn"))?;
+                            warnings.call1((
+                                format!(
+                                    "Forward reference environment for '{}' is redundant \
+                                    with the owner namespace: both resolve to the same object.",
+                                    name,
+                                ),
+                                py.get_type::<pyo3::exceptions::PyUserWarning>(),
+                            ))?;
+                        } else {
+                            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                                "Conflicting namespaces for forward reference '{}' in {}: \
+                                the owner namespace resolves it to {}, \
+                                while the explicit environment provides {}.",
+                                name,
+                                owner_bound.repr()?,
+                                owner_value.repr()?,
+                                explicit.repr()?,
+                            )));
+                        }
+                    }
+                }
+            }
+
             if !locals.is_empty() {
                 kwargs.set_item("locals", locals)?;
             }
@@ -329,12 +323,6 @@ pub enum TypeValidator {
     Typed { type_: Py<PyType> },
     #[pyo3(constructor = (type_))]
     Subclass { type_: Py<PyType> },
-    #[pyo3(constructor = (types))]
-    // TypesTuple is build from a Python object and we do not need to expose
-    // it directly since it is not needed to build an Instance variant from the
-    // Python side.
-    #[allow(private_interfaces)]
-    Instance { types: TypesTuple },
     #[pyo3(constructor = (members))]
     Union { members: Vec<Validator> },
     #[pyo3(constructor = (type_, attributes))]
@@ -1204,7 +1192,7 @@ impl TypeValidator {
                         }
                         ValidationMode::CheckAndWrap => {
                             // For CheckAndWrap mode, create a copy
-                            PyDict::from_sequence(v).map(|d| d.into_any())
+                            PyDictMethods::copy(v).map(|d| d.into_any())
                         }
                     }
                 } else {
@@ -1241,14 +1229,6 @@ impl TypeValidator {
                     )))
                 }
             }
-            Self::Instance { types } => {
-                let t = types.0.bind(value.py());
-                if value.is_instance(t)? {
-                    Ok(value.clone())
-                } else {
-                    validation_error!(t.repr()?, name, object, value)
-                }
-            }
             Self::Union { members } => {
                 let mut err = Vec::with_capacity(members.len());
                 for v in members.iter() {
@@ -1257,16 +1237,34 @@ impl TypeValidator {
                         Err(e) => err.push(e),
                     }
                 }
-                let eg = pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Value {} is not valid for any member of the union for {:?}",
-                    value.repr()?,
-                    members
+                let py = value.py();
+                let group_items = PyTuple::new(
+                    py,
+                    err.into_iter()
+                        .map(|e| e.into_value(py))
+                        .collect::<Vec<_>>(),
+                )?
+                .unbind();
+                let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
+                    format!("Failed to validate {} against union members", value.repr()?),
+                    group_items,
                 ));
-                Err(crate::utils::err_with_cause(
-                    value.py(),
-                    eg,
-                    pyo3::exceptions::PyBaseExceptionGroup::new_err(err),
-                ))
+                let outer = if let Some(member_name) = name {
+                    let target = match object {
+                        Some(obj) => obj.repr()?,
+                        None => value.repr()?,
+                    };
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for member '{}' of {}",
+                        member_name, target
+                    ))
+                } else {
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Validation failed for {}",
+                        value.repr()?
+                    ))
+                };
+                Err(crate::utils::err_with_cause(py, outer, group))
             }
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());
@@ -1274,7 +1272,50 @@ impl TypeValidator {
                     return validation_error!(t.repr()?, name, object, value);
                 }
                 for (attr_name, validator) in attributes {
-                    let attr_value = value.getattr(attr_name.as_str())?;
+                    let attr_value = match value.getattr(attr_name.as_str()) {
+                        Ok(attr_value) => attr_value,
+                        Err(err)
+                            if err.is_instance_of::<pyo3::exceptions::PyAttributeError>(
+                                value.py(),
+                            ) || (err
+                                .is_instance_of::<pyo3::exceptions::PyTypeError>(value.py())
+                                && (err
+                                    .to_string()
+                                    .contains("value is unset and has no default")
+                                    || err
+                                        .to_string()
+                                        .contains("Failed to get default value for member"))) =>
+                        {
+                            continue;
+                        }
+                        Err(err) => {
+                            if let Some(m) = name
+                                && let Some(o) = object
+                            {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {} for the member {} of {}.",
+                                        attr_name,
+                                        value.repr()?,
+                                        m,
+                                        o.repr()?
+                                    )),
+                                    err,
+                                ));
+                            } else {
+                                return Err(crate::utils::err_with_cause(
+                                    value.py(),
+                                    pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "Failed to validate attribute '{}' of {}.",
+                                        attr_name,
+                                        value.repr()?
+                                    )),
+                                    err,
+                                ));
+                            }
+                        }
+                    };
                     // Coercing the attribute of generic type to the expected form
                     // does not make sense in general, so we use strict_validate here
                     match validator.strict_validate(name, object, &attr_value) {
@@ -1403,34 +1444,6 @@ impl TypeValidator {
                 // objects, so we return Undecidable.
                 Mutability::Undecidable
             }
-            Self::Instance { types } => {
-                types
-                    .iter(py)
-                    .fold(Mutability::Immutable, |acc: Mutability, e| {
-                        let mm = get_type_mutability_map(py);
-                        match (
-                            acc,
-                            with_critical_section(mm.as_any(), || {
-                                mm.borrow().get_type_mutability(&e)
-                            }),
-                        ) {
-                            // If one item is mutable the tuple is seen as mutable
-                            (Mutability::Mutable, _) => Mutability::Mutable,
-                            // If one item is undecidable, the tuple is mutable if the
-                            // new item is otherwise it remains undecidable
-                            (Mutability::Undecidable, Mutability::Mutable) => Mutability::Mutable,
-                            (Mutability::Undecidable, Mutability::Undecidable) => {
-                                Mutability::Undecidable
-                            }
-                            (Mutability::Undecidable, Mutability::Immutable) => {
-                                Mutability::Undecidable
-                            }
-                            // If all previous items are immutable everything depend on
-                            // the last visited one.
-                            (Mutability::Immutable, im) => im,
-                        }
-                    })
-            }
             Self::ForwardValidator { late_validator } => late_validator.is_type_mutable(py),
             Self::GenericAttributes {
                 type_,
@@ -1515,9 +1528,6 @@ impl Clone for TypeValidator {
             },
             Self::Subclass { type_ } => Self::Subclass {
                 type_: type_.clone_ref(py),
-            },
-            Self::Instance { types } => Self::Instance {
-                types: TypesTuple(types.0.clone_ref(py)),
             },
             Self::Union { members } => Self::Union {
                 members: members.to_vec(),

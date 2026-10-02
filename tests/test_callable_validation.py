@@ -185,6 +185,120 @@ def test_validated_async_function_return_validation() -> None:
     assert "str" in error_msg
 
 
+def test_validated_async_iterator_preserves_stop_iteration_value() -> None:
+    @validated
+    async def ok() -> int:
+        return 1
+
+    iterator = ok().__await__()
+    with pytest.raises(StopIteration) as exc:
+        next(iterator)
+    assert exc.value.value == 1
+
+    @validated
+    async def bad() -> int:
+        return "nope"  # type: ignore
+
+    with pytest.raises(TypeError, match="Failed to validate return value"):
+        next(bad().__await__())
+
+
+def test_validated_async_iterator_forwards_send_throw_and_close() -> None:
+    @validated
+    async def ok() -> int:
+        return 1
+
+    iterator = ok().__await__()
+    with pytest.raises(StopIteration) as exc:
+        iterator.send(None)
+    assert exc.value.value == 1
+
+    iterator = ok().__await__()
+    assert iterator.close() is None
+
+    iterator = ok().__await__()
+    with pytest.raises(ValueError, match="boom"):
+        iterator.throw(ValueError("boom"))
+
+
+@pytest.mark.asyncio
+async def test_validated_async_generator_send_value_after_creation() -> None:
+    """Test async generator send() with value after yielding."""
+
+    @validated
+    async def async_gen_with_send():
+        received = yield 1
+        yield received or 0
+
+    gen = async_gen_with_send()
+    val1 = await gen.asend(None)
+    assert val1 == 1
+    # Send a value back into the generator
+    val2 = await gen.asend(42)
+    assert val2 == 42
+
+
+@pytest.mark.asyncio
+async def test_validated_async_generator_throw_exception() -> None:
+    """Test async generator throw() with custom exception."""
+
+    @validated
+    async def async_gen_throws():
+        try:
+            yield 1
+            yield 2
+        except ValueError as e:
+            yield f"caught: {e}"
+
+    gen = async_gen_throws()
+    val1 = await gen.asend(None)
+    assert val1 == 1
+
+    # Throw an exception into the generator
+    val2 = await gen.athrow(ValueError("test error"))
+    assert val2 == "caught: test error"
+
+
+@pytest.mark.asyncio
+async def test_validated_async_generator_close() -> None:
+    """Test async generator close() with cleanup."""
+    cleanup_called = []
+
+    @validated
+    async def async_gen_with_cleanup():
+        try:
+            yield 1
+            yield 2
+        finally:
+            cleanup_called.append(True)
+
+    gen = async_gen_with_cleanup()
+    await gen.asend(None)
+    await gen.aclose()
+    assert len(cleanup_called) == 1
+
+
+@pytest.mark.asyncio
+async def test_validated_async_iterator_send_none_then_value() -> None:
+    """Test async iterator protocol: send(None) initialization, then send(value)."""
+
+    @validated
+    async def counting_gen():
+        total = 0
+        while True:
+            val = yield total
+            if val is not None:
+                total += val
+
+    gen = counting_gen()
+    # Must start with send(None)
+    assert await gen.asend(None) == 0
+    # Now send actual values
+    assert await gen.asend(5) == 5
+    assert await gen.asend(3) == 8
+    assert await gen.asend(2) == 10
+
+
 def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
     @validated(aggregate_errors=True)
     def f(*, x: int, **rest: int) -> int:
@@ -251,6 +365,62 @@ def test_validated_varargs_and_kwargs_aggregate_errors_false() -> None:
         f(1, "2", ok=3, ko="4")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "annotation, value",
+    [
+        ("list[int]", [1, "2", 3]),
+        ("tuple[int, ...]", (1, "2", 3)),
+        ("tuple[int, int]", (1, "2")),
+        ("tuple[int, int]", (1, 2, 3)),
+        ("set[int]", {1, "2"}),
+        ("dict[str, int]", {"a": 1, "b": "2"}),
+        ("dict[str, int]", {"a": 1, 2: 3}),
+    ],
+)
+def test_validated_checkonly_container_rejects_invalid_items(
+    annotation: str, value
+) -> None:
+    """CheckOnly mode must validate item/value/key validity without wrapping containers."""
+
+    namespace = {"validated": validated}
+    exec(
+        f"@validated\ndef f(items: {annotation}) -> int:\n    return len(items)",
+        namespace,
+    )
+    func = namespace["f"]
+
+    with pytest.raises(ExceptionGroup) as exc:
+        func(value)
+
+    assert len(exc.value.exceptions) == 1
+    assert isinstance(exc.value.exceptions[0], TypeError)
+    assert "Failed to validate" in str(exc.value.exceptions[0])
+
+
+def test_validated_checkonly_container_preserves_plain_container_objects() -> None:
+    @validated
+    def f(
+        items: list[int], values: set[int], mapping: dict[str, int]
+    ) -> tuple[list[int], set[int], dict[str, int]]:
+        return items, values, mapping
+
+    items = [1, 2]
+    values = {1, 2}
+    mapping = {"keep": 1}
+
+    result_items, result_values, result_mapping = f(items, values, mapping)
+    assert result_items is items
+    assert result_values is values
+    assert result_mapping is mapping
+
+    with pytest.raises(ExceptionGroup):
+        f([1, "2"], values, mapping)  # type: ignore[list-item]
+    with pytest.raises(ExceptionGroup):
+        f(items, {1, "2"}, mapping)  # type: ignore[set-item]
+    with pytest.raises(ExceptionGroup):
+        f(items, values, {"keep": "2"})  # type: ignore[dict-item]
+
+
 # ============================================================================
 # Positional only arguments
 # ============================================================================
@@ -278,7 +448,7 @@ def test_validated_positional_only_change_arg_and_default() -> None:
     def f(items: list[int], x: int = 1, /) -> int:
         ln = len(items) + x
         # With CheckOnly mode, items is a plain list, not validated on mutations
-        items.append("invalid")  # This is allowed, no wrapper enforces validation
+        items.append("invalid")  # type: ignore  # This is allowed, no wrapper enforces validation
         return ln
 
     # Test success cases - input validation is enforced
@@ -416,7 +586,7 @@ def test_validation_positional_or_keyword_change_arg() -> None:
     def f(items: list[int], x: int = 1) -> int:
         s = sum(items) + x
         # With CheckOnly mode, items is a plain list, not validated on mutations
-        items.append("invalid")  # This is allowed, no wrapper enforces validation
+        items.append("invalid")  # type: ignore  # This is allowed, no wrapper enforces validation
         return s
 
     # Test success cases - input validation is enforced
@@ -1338,7 +1508,7 @@ def test_validated_list_mutation_validation_error() -> None:
     assert result == [1, 2, 3, 999]
 
     # Now test with invalid input
-    invalid_list = [1, "invalid", 3]  # type: ignore
+    invalid_list = [1, "invalid", 3]
 
     with pytest.raises(ExceptionGroup) as exc:
         append_invalid(invalid_list)

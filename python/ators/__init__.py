@@ -21,6 +21,7 @@ from ._ators import (
     PicklePolicy,
     add_generic_type_attributes,
     atorsref,
+    create_ators_specialized_alias as _create_ators_specialized_alias,
     disable_notifications,
     enable_notifications,
     event,
@@ -78,6 +79,10 @@ class Ators(_Base, metaclass=_Meta):
     Subclasses declare members in the class body and receive validated,
     slotted storage plus optional freezing and observation support.
     """
+
+    @classmethod
+    def __class_getitem__(cls, params):
+        return _create_ators_specialized_alias(cls, params)
 
     def __reduce_ex__(self, proto):
         """An implementation of the reduce protocol.

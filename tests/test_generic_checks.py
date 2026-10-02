@@ -7,12 +7,14 @@
 # --------------------------------------------------------------------------------------
 """Tests for generic-aware runtime subclass / instance checks."""
 
+import sys
 import typing
+from types import ModuleType
 from typing import Any, TypeVar
 
 import pytest
 
-from ators import Ators
+from ators import Ators, member
 
 # ---------------------------------------------------------------------------
 # Generic Ators class fixture (PEP-695 syntax, Python 3.14+)
@@ -210,3 +212,500 @@ def test_arity_mismatch_raises_at_specialisation():
     """Passing the wrong number of type args raises TypeError at specialisation."""
     with pytest.raises(TypeError):
         G[int, str, float]  # 3 args for a 2-param class  # type: ignore
+
+
+class GenericBox[T](Ators):
+    item: T = member()
+
+
+class BoundGenericBox[T: int](Ators):
+    item: T = member()
+
+
+class GenericListBox[T](Ators):
+    items: list[T] = member()
+
+
+class GenericPair[T, U](Ators):
+    first: T = member()
+    second: U = member()
+
+
+class BoundedPair[T: int, U: int](Ators):
+    first: T = member()
+    second: U = member()
+
+
+class ForwardRefPartialHolder[T: int](Ators):
+    pair: GenericPair[int, T] = member()
+
+
+class DelayedForwardRefPartialHolder[T: int](Ators):
+    pair: DelayedGenericPair[int, T] = member()
+
+
+class DelayedGenericPair[T, U](Ators):
+    first: T = member()
+    second: U = member()
+
+
+def test_generic_specialization_is_cached_class():
+    int_box = GenericBox[int]
+    assert int_box is GenericBox[int]
+    assert int_box is not GenericBox[str]
+
+
+def test_specialized_class_exposes_generic_metadata():
+    int_box = GenericBox[int]
+    assert int_box.__origin__ is GenericBox
+    assert int_box.__args__ == (int,)
+    assert typing.get_origin(int_box) is GenericBox
+    assert typing.get_args(int_box) == (int,)
+
+
+def test_specialized_alias_subclasscheck_rejects_mismatched_specialization():
+    assert issubclass(GenericBox[int], GenericBox)
+    assert issubclass(GenericBox[int], GenericBox[int])
+    assert not issubclass(GenericBox[int], GenericBox[str])
+    assert not issubclass(GenericBox[str], GenericBox[int])
+
+
+def test_specialized_alias_metadata_stays_consistent_across_runtime_introspection():
+    alias = GenericBox[int]
+    assert alias.__origin__ is GenericBox
+    assert alias.__args__ == (int,)
+    assert alias.__type_params__ == ()
+    assert alias.__annotations__["item"] is int
+    assert "__annotations__" in alias.__dict__
+
+
+def test_partial_specialization_preserves_unresolved_typevar_order_for_alias_metadata():
+    T = TypeVar("T", bound=int)
+    partial = GenericPair[int, T]
+
+    assert partial.__type_params__ == (T,)
+    assert partial.__args__ == (int, T)
+    assert partial.__origin__ is GenericPair
+
+
+def test_specialized_alias_exposes_runtime_metadata_and_alias_checks():
+    alias = GenericBox[int]
+
+    assert alias.__annotations__["item"] is int
+    assert "__annotations__" in alias.__dict__
+    assert isinstance(alias(), alias)
+    assert issubclass(type(alias()), alias)
+    assert issubclass(alias, GenericBox)
+
+
+def test_specialized_alias_can_be_used_as_runtime_base_class():
+    class Child(GenericBox[int]):
+        pass
+
+    child = Child()
+    child.item = 1
+    assert isinstance(child, GenericBox)
+    assert not isinstance(child, GenericBox[int])
+    assert issubclass(Child, GenericBox)
+
+    with pytest.raises(TypeError):
+        child.item = "not-int"
+
+
+def test_legacy_generic_alias_uses_parameters_fallback_for_specialization():
+    T = TypeVar("T")
+
+    class LegacyBox(Ators, typing.Generic[T]):
+        item: T = member()
+
+    alias = LegacyBox[int]
+    assert LegacyBox.__parameters__ == (T,)
+    assert alias.__annotations__["item"] is int
+    assert isinstance(alias(), alias)
+
+
+def test_full_and_stepwise_specialization_are_identical():
+    U = TypeVar("U")
+    direct = GenericPair[int, str]
+    stepwise = GenericPair[int, U][str]
+    assert direct is stepwise
+
+
+def test_partial_specialization_typevar_bound_must_be_narrower():
+    narrower = TypeVar("narrower", bound=bool)
+    _ = BoundedPair[int, narrower]
+
+    wider = TypeVar("wider", bound=str)
+    with pytest.raises(TypeError, match="not narrower"):
+        _ = BoundedPair[int, wider]  # type: ignore
+
+
+def test_partial_specialization_typevar_without_required_bound_is_rejected():
+    unbounded = TypeVar("unbounded")
+    with pytest.raises(TypeError, match="must define a bound"):
+        _ = BoundedPair[int, unbounded]  # type: ignore
+
+
+def test_non_class_bounds_use_python_issubclass_fallback_for_narrower_typevar():
+    with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
+
+        class SequenceHolder[T: typing.Sequence[int]](Ators):
+            value: T = member()
+
+    same = TypeVar("same", bound=typing.Sequence[int])
+    with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
+        _ = SequenceHolder[same]
+
+    wider = TypeVar("wider", bound=typing.Sequence[str])
+    with pytest.raises(TypeError, match="not narrower"):
+        _ = SequenceHolder[wider]  # type: ignore
+
+
+def test_non_class_constraints_use_python_issubclass_fallback_for_constraint_mismatch():
+    with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
+
+        class ConstrainedSequenceHolder[
+            T: (typing.Sequence[int], typing.Sequence[str])
+        ](Ators):
+            value: T = member()
+
+    matching = TypeVar("matching", bound=typing.Sequence[str])
+    with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
+        _ = ConstrainedSequenceHolder[matching]
+
+    mismatched = TypeVar("mismatched", bound=typing.Sequence[float])
+    with pytest.raises(TypeError, match="not within the constraints"):
+        _ = ConstrainedSequenceHolder[mismatched]  # type: ignore
+
+
+def test_unconstrained_typevar_without_bound_or_constraints_is_rejected():
+    class ConstrainedHolder[T: (int, str)](Ators):
+        value: T = member()
+
+    unconstrained = TypeVar("unconstrained")
+    with pytest.raises(
+        TypeError, match="must define constraints or a bound compatible"
+    ):
+        _ = ConstrainedHolder[unconstrained]  # type: ignore
+
+
+def test_same_named_typevars_create_distinct_specializations_without_slot_collision():
+    T1 = TypeVar("T", bound=int)
+    T2 = TypeVar("T", bound=int)
+
+    class Holder[T: int](Ators):
+        value: T = member()
+
+    left = Holder[T1]
+    right = Holder[T2]
+
+    assert left is not right
+    assert getattr(left.__type_params__[0], "__ators_typevar_slot__", None) != getattr(
+        right.__type_params__[0], "__ators_typevar_slot__", None
+    )
+
+
+def test_module_shadowed_typevar_rebuilds_with_nested_type_alias_resolution():
+    module_name = "shadowed_typevar_typealias_module"
+    module = ModuleType(module_name)
+    sys.modules[module_name] = module
+    try:
+        exec(
+            """
+from typing import TypeVar
+from ators import Ators, member
+
+T = TypeVar('T', bound=int)
+
+type AliasT = tuple[int, T]
+
+class Pair[T, U](Ators):
+    left: T = member()
+    right: U = member()
+
+class Holder[T](Ators):
+    alias: AliasT = member()
+    pair: Pair[int, T] = member()
+""",
+            module.__dict__,
+        )
+
+        holder = module.Holder[int]()
+        holder.alias = (1, 2)
+        holder.pair = module.Pair[int, int]()
+
+        with pytest.raises(TypeError):
+            holder.alias = ("bad", 2)
+
+        with pytest.raises(TypeError):
+            holder.pair = module.Pair[str, int]()
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_eager_partial_specialization_keeps_owner_local_typevar_context():
+    T2 = TypeVar("T2", bound=int)
+    holder = ForwardRefPartialHolder[T2]()  # type: ignore
+
+    holder.pair = GenericPair[int, T2]()  # type: ignore
+    with pytest.raises(TypeError):
+        holder.pair = GenericPair[str, T2]()  # type: ignore
+
+
+def test_owner_local_typevar_context_survives_inner_generic_respecialization():
+    holder = DelayedForwardRefPartialHolder[int]()
+    holder.pair = DelayedGenericPair[int, int]()
+    with pytest.raises(TypeError):
+        holder.pair = DelayedGenericPair[str, int]()  # type: ignore
+
+    class ReboundHolder[T: int](Ators):
+        pair: DelayedGenericPair[int, T] = member()
+
+    rebound = ReboundHolder[int]()
+    rebound.pair = DelayedGenericPair[int, int]()
+    with pytest.raises(TypeError):
+        rebound.pair = DelayedGenericPair[str, int]()  # type: ignore
+
+
+def test_partial_specialization_keeps_owner_local_typevar_context():
+    class Holder[T: int](Ators):
+        pair: GenericPair[int, T] = member()
+
+    holder = Holder[int]()
+    holder.pair = GenericPair[int, int]()
+    with pytest.raises(TypeError):
+        holder.pair = GenericPair[str, int]()  # type: ignore
+
+    other = TypeVar("other", bound=int)
+    holder2 = Holder[other]()  # type: ignore
+    holder2.pair = GenericPair[int, other]()  # type: ignore
+    with pytest.raises(TypeError):
+        holder2.pair = GenericPair[str, other]()  # type: ignore
+
+
+def test_same_name_typevars_keep_distinct_owner_local_slots():
+    T_left = TypeVar("T", bound=int)  # type: ignore
+    T_right = TypeVar("T", bound=int)  # type: ignore
+
+    class Box[T](Ators):
+        value: T = member()
+
+    class Holder[T: int](Ators):
+        boxed: Box[T] = member()
+
+    left_specialized = Holder[T_left]
+    right_specialized = Holder[T_right]
+
+    left_slot = getattr(T_left, "__ators_typevar_slot__", None)
+    right_slot = getattr(T_right, "__ators_typevar_slot__", None)
+
+    assert left_slot is not None
+    assert right_slot is not None
+    assert left_slot != right_slot
+    assert (
+        getattr(left_specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == left_slot
+    )
+    assert (
+        getattr(right_specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == right_slot
+    )
+
+
+def test_specialization_propagates_slot_when_only_one_side_is_initialized():
+    T_local = TypeVar("T", bound=int)  # type: ignore
+
+    class Box[T](Ators):
+        value: T = member()
+
+    class Holder[T: int](Ators):
+        boxed: Box[T] = member()
+
+    specialized = Holder[T_local]
+    local_slot = getattr(T_local, "__ators_typevar_slot__", None)
+
+    assert local_slot is not None
+    assert (
+        getattr(specialized.__type_params__[0], "__ators_typevar_slot__", None)
+        == local_slot
+    )
+    assert getattr(specialized.__type_params__[0], "__name__", None) == "T"
+
+
+def test_module_shadowed_typevar_bound_is_used_in_generic_class_resolution():
+    global T
+    T = TypeVar("T", bound=int)  # type: ignore
+
+    class ShadowBoundHolder[T](Ators):
+        value: T = member()
+
+    holder = ShadowBoundHolder[int]()
+    holder.value = 1
+    with pytest.raises(TypeError):
+        holder.value = "a"  # type: ignore
+
+
+def test_module_shadowed_typevar_constraints_are_used_in_generic_class_resolution():
+    global T
+    T = TypeVar("T", int, str)  # type: ignore
+
+    class ShadowConstrainedHolder[T](Ators):
+        value: T = member()
+
+    holder = ShadowConstrainedHolder[int]()
+    holder.value = 1
+    with pytest.raises(TypeError):
+        holder.value = 1.5  # type: ignore
+
+
+# Generic specialization edge cases for Rust error paths
+def test_generic_specialization_with_union_type_parameters() -> None:
+    """Test generic specialization with union type parameters."""
+
+    class Container[T](Ators):
+        value: T = member()
+
+    # Test specialization with union type
+    cont = Container[int | str]()
+    cont.value = 42
+    assert cont.value == 42
+    cont.value = "hello"
+    assert cont.value == "hello"
+    with pytest.raises((TypeError, ValueError)):
+        cont.value = []  # type: ignore
+
+
+def test_generic_specialization_with_nested_container_types() -> None:
+    """Test generic specialization with complex nested container types."""
+
+    class Storage[T](Ators):
+        data: list[T] = member()
+
+    # Specialize with list type
+    store = Storage[list[int]]()
+    store.data = [[], [1, 2, 3]]
+    assert store.data == [[], [1, 2, 3]]
+
+    # Should reject non-list values
+    with pytest.raises((TypeError, ValueError)):
+        store.data = [[1], "invalid"]  # type: ignore
+
+
+def test_generic_with_multiple_constraints_in_member() -> None:
+    """Test generic type with constrained TypeVar in member field."""
+
+    class Holder[TCons: (int, str)](Ators):
+        value: TCons = member()
+
+    holder = Holder()
+    holder.value = 42  # type: ignore
+    assert holder.value == 42
+    holder.value = "text"  # type: ignore
+    assert holder.value == "text"
+
+    with pytest.raises((TypeError, ValueError)):
+        holder.value = []  # type: ignore
+
+
+def test_generic_specialization_caching_with_same_named_types() -> None:
+    """Test that generic specialization cache doesn't collide with identically-named types."""
+
+    class GenericBox[T](Ators):
+        item: T = member()
+
+    # Create specializations with same name but different instances
+    box1 = GenericBox[int]()
+    box1.item = 42
+
+    box2 = GenericBox[str]()
+    box2.item = "text"
+
+    # Verify they remain independent
+    assert box1.item == 42
+    assert box2.item == "text"
+
+    with pytest.raises((TypeError, ValueError)):
+        box1.item = "wrong"  # type: ignore
+
+    with pytest.raises((TypeError, ValueError)):
+        box2.item = 123  # type: ignore
+
+
+def test_generic_with_optional_type_parameter() -> None:
+    """Test generic specialization with Optional type parameter."""
+
+    class MaybeBox[T](Ators):
+        value: T | None = member()
+
+    # Test with int | None
+    box = MaybeBox[int]()
+    box.value = None
+    assert box.value is None
+    box.value = 42
+    assert box.value == 42
+
+    with pytest.raises((TypeError, ValueError)):
+        box.value = "invalid"  # type: ignore
+
+
+def test_nested_generic_alias_rebuilds_shadowed_module_typevar_metadata():
+    module_name = "shadowed_typevar_module"
+    module = ModuleType(module_name)
+    sys.modules[module_name] = module
+    try:
+        exec(
+            """
+from typing import TypeVar
+from ators import Ators, member
+
+T = TypeVar('T', bound=int)
+
+class ShadowPair[T, U](Ators):
+    first: T = member()
+    second: U = member()
+
+class ShadowPairHolder[T](Ators):
+    pair: ShadowPair[int, T] = member()
+""",
+            module.__dict__,
+        )
+
+        holder = module.ShadowPairHolder[int]()
+        holder.pair = module.ShadowPair[int, int]()
+        with pytest.raises(TypeError):
+            holder.pair = module.ShadowPair[str, int]()
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_forward_ref_with_generic_typevar_resolution():
+    """Forward refs in generics resolve with TypeVar bindings, not just module scope."""
+
+    # Generic class with member using TypeVar
+    class Holder[T](Ators):
+        value: T
+
+    # Specialize with int
+    IntHolder = Holder[int]
+    ih = IntHolder()
+
+    # Validate int path works
+    ih.value = 42
+    assert ih.value == 42
+
+    # Validate rejection of non-int
+    with pytest.raises(TypeError) as exc_info:
+        ih.value = "string"
+    assert "int" in str(exc_info.value)
+
+    # Specialize with str - different type validation
+    StrHolder = Holder[str]
+    sh = StrHolder()
+    sh.value = "hello"
+    assert sh.value == "hello"
+
+    with pytest.raises(TypeError):
+        sh.value = 42
+
+    # This exercises LateResolvedValidator::validate() with TypeVar binding
+    # Rust: types.rs lines 135-150 (TypeVar resolution in forward refs)
