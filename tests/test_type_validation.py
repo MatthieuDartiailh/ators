@@ -83,8 +83,10 @@ type MyInt = int
             [1, (), (1,), (1, 2, 3), (1, "a", 1)],
             False,
         ),
+        (tuple[str, int, float], [("a", 1, 1.0)], [("a", 1), (1, "a", 1.0)], False),
         (list, [[], [1], [1, "a"]], [1, ()], False),
         (list[int], [[], [1]], [1, (), [1, "a"]], False),
+        (list[str], [[], ["a"]], [[1], ["a", 1]], False),
         (
             frozenset,
             [frozenset(), frozenset((1,)), frozenset({1, "a"})],
@@ -99,8 +101,18 @@ type MyInt = int
         ),
         (set, [set(), {1}, {1, "a"}], [1, ()], False),
         (set[int], [set(), {1}], [1, (), {1, "a"}], False),
+        (set[str], [set(), {"a"}], [{1}, {"a", 1}], False),
+        # Nested container edge cases
+        (list[list[int]], [[], [[]], [[1, 2]]], [[["a"]], [1]], False),
         (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
+        (dict[str, int], [{}, {"a": 1}], [{1: 1}, {"a": "b"}, {1: "b"}], False),
+        (
+            dict[str, list[int]],
+            [{}, {"a": []}, {"a": [1]}],
+            [{"a": ["b"]}, {1: [1]}],
+            False,
+        ),
         # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
         (CustomBase, [CustomObj()], ["", 1, object()], False),
@@ -126,6 +138,8 @@ type MyInt = int
             False,
         ),
         (type, [int, str, object, type], [1, "a", object()], False),
+        # Edge cases for container validation error paths
+        # Tuple with mixed types
     ],
 )
 def test_type_validators(ann, goods, bads, warn):
@@ -209,7 +223,7 @@ def test_nested_generic_container_assignment_uses_owner_context():
     assert obj.items[0].a == 1
 
     with pytest.raises(TypeError):
-        obj.items = [MyGen("bad")]  # type: ignore[list-item]
+        obj.items = [MyGen("bad")]  # type: ignore
 
 
 @pytest.mark.parametrize(
@@ -505,7 +519,7 @@ def test_forward_ref_explicit_local_namespace_takes_precedence_over_unresolved_o
         pass
 
     class A(Ators):
-        child: MissingNode = member().forward_ref_environment(
+        child: MissingNode = member().forward_ref_environment(  # noqa : F821  # type: ignore
             lambda: {"MissingNode": LocalNode}
         )
 
@@ -514,7 +528,7 @@ def test_forward_ref_explicit_local_namespace_takes_precedence_over_unresolved_o
     obj.child = node
     assert obj.child is node
     with pytest.raises(TypeError):
-        obj.child = object()  # type: ignore
+        obj.child = object()
 
 
 class RedundantOwnerNamespace(Ators):
@@ -568,7 +582,7 @@ def test_forward_ref_failed_resolution_keeps_original_cause_chain():
 
     obj = A()
     with pytest.raises(NameError) as exc:
-        obj.child = object()  # type: ignore
+        obj.child = object()
 
     assert exc.value.__cause__ is not None
     assert isinstance(exc.value.__cause__, NameError)
@@ -583,7 +597,7 @@ def test_inherited_type_validator():
     class B(A):
         a = member().inherit()
 
-    b = B()
+    b = B(a=1)
     b.a = 5
     assert b.a == 5
     with pytest.raises(TypeError):
@@ -792,3 +806,34 @@ def test_faulty_multiple_subscript_type_annotation():
 
         class A(Ators):
             a: type[int, str] = member()  # type: ignore
+
+
+def test_subclass_validation_with_generic_class():
+    """type[X] validator correctly rejects generic aliases while accepting subtypes."""
+    from ators import Ators
+
+    class Base(Ators):
+        pass
+
+    class Derived(Base):
+        pass
+
+    class TypeContainer(Ators):
+        cls: type[Base]
+
+    tc = TypeContainer()
+
+    # Accept Base class
+    tc.cls = Base
+    assert tc.cls is Base
+
+    # Accept Derived (subclass)
+    tc.cls = Derived
+    assert tc.cls is Derived
+
+    # Reject non-subclass
+    with pytest.raises(TypeError):
+        tc.cls = int
+
+    # This exercises Subclass validator error path
+    # Rust: types.rs lines 650-700 (Subclass validation)

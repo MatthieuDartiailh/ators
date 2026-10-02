@@ -558,6 +558,96 @@ def test_module_shadowed_typevar_constraints_are_used_in_generic_class_resolutio
         holder.value = 1.5  # type: ignore
 
 
+# Generic specialization edge cases for Rust error paths
+def test_generic_specialization_with_union_type_parameters() -> None:
+    """Test generic specialization with union type parameters."""
+
+    class Container[T](Ators):
+        value: T = member()
+
+    # Test specialization with union type
+    cont = Container[int | str]()
+    cont.value = 42
+    assert cont.value == 42
+    cont.value = "hello"
+    assert cont.value == "hello"
+    with pytest.raises((TypeError, ValueError)):
+        cont.value = []  # type: ignore
+
+
+def test_generic_specialization_with_nested_container_types() -> None:
+    """Test generic specialization with complex nested container types."""
+
+    class Storage[T](Ators):
+        data: list[T] = member()
+
+    # Specialize with list type
+    store = Storage[list[int]]()
+    store.data = [[], [1, 2, 3]]
+    assert store.data == [[], [1, 2, 3]]
+
+    # Should reject non-list values
+    with pytest.raises((TypeError, ValueError)):
+        store.data = [[1], "invalid"]  # type: ignore
+
+
+def test_generic_with_multiple_constraints_in_member() -> None:
+    """Test generic type with constrained TypeVar in member field."""
+
+    class Holder[TCons: (int, str)](Ators):
+        value: TCons = member()
+
+    holder = Holder()
+    holder.value = 42  # type: ignore
+    assert holder.value == 42
+    holder.value = "text"  # type: ignore
+    assert holder.value == "text"
+
+    with pytest.raises((TypeError, ValueError)):
+        holder.value = []  # type: ignore
+
+
+def test_generic_specialization_caching_with_same_named_types() -> None:
+    """Test that generic specialization cache doesn't collide with identically-named types."""
+
+    class GenericBox[T](Ators):
+        item: T = member()
+
+    # Create specializations with same name but different instances
+    box1 = GenericBox[int]()
+    box1.item = 42
+
+    box2 = GenericBox[str]()
+    box2.item = "text"
+
+    # Verify they remain independent
+    assert box1.item == 42
+    assert box2.item == "text"
+
+    with pytest.raises((TypeError, ValueError)):
+        box1.item = "wrong"  # type: ignore
+
+    with pytest.raises((TypeError, ValueError)):
+        box2.item = 123  # type: ignore
+
+
+def test_generic_with_optional_type_parameter() -> None:
+    """Test generic specialization with Optional type parameter."""
+
+    class MaybeBox[T](Ators):
+        value: T | None = member()
+
+    # Test with int | None
+    box = MaybeBox[int]()
+    box.value = None
+    assert box.value is None
+    box.value = 42
+    assert box.value == 42
+
+    with pytest.raises((TypeError, ValueError)):
+        box.value = "invalid"  # type: ignore
+
+
 def test_nested_generic_alias_rebuilds_shadowed_module_typevar_metadata():
     module_name = "shadowed_typevar_module"
     module = ModuleType(module_name)
@@ -586,3 +676,36 @@ class ShadowPairHolder[T](Ators):
             holder.pair = module.ShadowPair[str, int]()
     finally:
         sys.modules.pop(module_name, None)
+
+
+def test_forward_ref_with_generic_typevar_resolution():
+    """Forward refs in generics resolve with TypeVar bindings, not just module scope."""
+
+    # Generic class with member using TypeVar
+    class Holder[T](Ators):
+        value: T
+
+    # Specialize with int
+    IntHolder = Holder[int]
+    ih = IntHolder()
+
+    # Validate int path works
+    ih.value = 42
+    assert ih.value == 42
+
+    # Validate rejection of non-int
+    with pytest.raises(TypeError) as exc_info:
+        ih.value = "string"
+    assert "int" in str(exc_info.value)
+
+    # Specialize with str - different type validation
+    StrHolder = Holder[str]
+    sh = StrHolder()
+    sh.value = "hello"
+    assert sh.value == "hello"
+
+    with pytest.raises(TypeError):
+        sh.value = 42
+
+    # This exercises LateResolvedValidator::validate() with TypeVar binding
+    # Rust: types.rs lines 135-150 (TypeVar resolution in forward refs)

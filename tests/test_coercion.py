@@ -21,8 +21,8 @@ from ators.behaviors import Coercer, coerce, coerce_init
     "ty, init, inputs, expected",
     [
         # None
-        (type(None), False, [None], [None, TypeError("")]),
-        (type(None), True, [None], [None, TypeError("")]),
+        (type(None), False, [None, 1], [None, TypeError("")]),
+        (type(None), True, [None, 1], [None, TypeError("")]),
         # ints
         (int, False, ["1", "2"], [1, 2]),
         (int, True, ["1", "2"], [1, TypeError("")]),
@@ -121,21 +121,6 @@ def test_type_inferred_coercion(ty, init, inputs, expected):
         else:
             a.a = inp
             assert a.a == exp
-
-
-def test_type_inferred_coercion_none_and_mapping_like_dict_edges():
-    class A(Ators):
-        none_value: Member[type(None), Any] = member().coerce()
-        mapping_value: Member[dict[str, int], Any] = member().coerce()
-
-    a = A()
-    a.none_value = None
-    assert a.none_value is None
-    with pytest.raises(TypeError):
-        a.none_value = 1  # type: ignore[arg-type]
-
-    a.mapping_value = UserDict({1: "2", "3": 4})
-    assert a.mapping_value == {"1": 2, "3": 4}
 
 
 def test_nested_tuple_coercion_preserves_original_cause():

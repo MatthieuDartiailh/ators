@@ -221,6 +221,84 @@ def test_validated_async_iterator_forwards_send_throw_and_close() -> None:
         iterator.throw(ValueError("boom"))
 
 
+@pytest.mark.asyncio
+async def test_validated_async_generator_send_value_after_creation() -> None:
+    """Test async generator send() with value after yielding."""
+
+    @validated
+    async def async_gen_with_send():
+        received = yield 1
+        yield received or 0
+
+    gen = async_gen_with_send()
+    val1 = await gen.asend(None)
+    assert val1 == 1
+    # Send a value back into the generator
+    val2 = await gen.asend(42)
+    assert val2 == 42
+
+
+@pytest.mark.asyncio
+async def test_validated_async_generator_throw_exception() -> None:
+    """Test async generator throw() with custom exception."""
+
+    @validated
+    async def async_gen_throws():
+        try:
+            yield 1
+            yield 2
+        except ValueError as e:
+            yield f"caught: {e}"
+
+    gen = async_gen_throws()
+    val1 = await gen.asend(None)
+    assert val1 == 1
+
+    # Throw an exception into the generator
+    val2 = await gen.athrow(ValueError("test error"))
+    assert val2 == "caught: test error"
+
+
+@pytest.mark.asyncio
+async def test_validated_async_generator_close() -> None:
+    """Test async generator close() with cleanup."""
+    cleanup_called = []
+
+    @validated
+    async def async_gen_with_cleanup():
+        try:
+            yield 1
+            yield 2
+        finally:
+            cleanup_called.append(True)
+
+    gen = async_gen_with_cleanup()
+    await gen.asend(None)
+    await gen.aclose()
+    assert len(cleanup_called) == 1
+
+
+@pytest.mark.asyncio
+async def test_validated_async_iterator_send_none_then_value() -> None:
+    """Test async iterator protocol: send(None) initialization, then send(value)."""
+
+    @validated
+    async def counting_gen():
+        total = 0
+        while True:
+            val = yield total
+            if val is not None:
+                total += val
+
+    gen = counting_gen()
+    # Must start with send(None)
+    assert await gen.asend(None) == 0
+    # Now send actual values
+    assert await gen.asend(5) == 5
+    assert await gen.asend(3) == 8
+    assert await gen.asend(2) == 10
+
+
 def test_validated_keyword_only_and_varkw_aggregate_errors() -> None:
     @validated(aggregate_errors=True)
     def f(*, x: int, **rest: int) -> int:
@@ -1430,7 +1508,7 @@ def test_validated_list_mutation_validation_error() -> None:
     assert result == [1, 2, 3, 999]
 
     # Now test with invalid input
-    invalid_list = [1, "invalid", 3]  # type: ignore
+    invalid_list = [1, "invalid", 3]
 
     with pytest.raises(ExceptionGroup) as exc:
         append_invalid(invalid_list)
