@@ -158,8 +158,9 @@ impl LateResolvedValidator {
                         .expect("Key is known to exist");
                     let owner_kwargs = PyDict::new(py);
                     owner_kwargs.set_item("owner", owner_bound)?;
-                    let owner_value: Option<Bound<'py, PyAny>> =
-                        evaluate_forward_ref.call((forward_ref,), Some(&owner_kwargs)).ok();
+                    let owner_value: Option<Bound<'py, PyAny>> = evaluate_forward_ref
+                        .call((forward_ref,), Some(&owner_kwargs))
+                        .ok();
 
                     if let Some(owner_value) = owner_value {
                         if explicit.eq(&owner_value)? {
