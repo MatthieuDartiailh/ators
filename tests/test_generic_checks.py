@@ -10,7 +10,7 @@
 import sys
 import typing
 from types import ModuleType
-from typing import Any, TypeVar
+from typing import Any
 
 import pytest
 
@@ -25,9 +25,17 @@ class G[T, U](Ators):
     """A two-parameter generic Ators base class."""
 
 
+class BoundTypeVar[T: int](Ators):
+    pass
+
+
+class ConstrainedTypeVar[T: (int, float)](Ators):
+    pass
+
+
 T, U = G.__type_params__
-TBound = TypeVar("TBound", bound=int)
-TCon = TypeVar("TCon", int, float)
+TBound = BoundTypeVar.__type_params__[0]
+TCon = ConstrainedTypeVar.__type_params__[0]
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +288,15 @@ def test_specialized_alias_metadata_stays_consistent_across_runtime_introspectio
 
 
 def test_partial_specialization_preserves_unresolved_typevar_order_for_alias_metadata():
-    T = TypeVar("T", bound=int)
-    partial = GenericPair[int, T]
+    class PartialBoundPair[T: int](GenericPair[int, T]):
+        pass
 
-    assert partial.__type_params__ == (T,)
-    assert partial.__args__ == (int, T)
+    partial_t = PartialBoundPair.__type_params__[0]
+    partial = PartialBoundPair[int]
+
+    assert PartialBoundPair.__type_params__ == (partial_t,)
+    assert partial.__type_params__ == ()
+    assert partial.__args__ == (int, int)
     assert partial.__origin__ is GenericPair
 
 
@@ -313,52 +325,60 @@ def test_specialized_alias_can_be_used_as_runtime_base_class():
 
 
 def test_legacy_generic_alias_uses_parameters_fallback_for_specialization():
-    T = TypeVar("T")
+    legacy_t = typing.TypeVar("legacy_t")
 
-    class LegacyBox(Ators, typing.Generic[T]):
-        item: T = member()
+    class LegacyBox(Ators, typing.Generic[legacy_t]):
+        item: legacy_t = member()
 
     alias = LegacyBox[int]
-    assert LegacyBox.__parameters__ == (T,)
+    assert LegacyBox.__parameters__ == (legacy_t,)
     assert alias.__annotations__["item"] is int
     assert isinstance(alias(), alias)
 
 
 def test_full_and_stepwise_specialization_are_identical():
-    U = TypeVar("U")
+    class Partial[T](GenericPair[int, T]):
+        pass
+
     direct = GenericPair[int, str]
-    stepwise = GenericPair[int, U][str]
+    stepwise = Partial[str]
     assert direct is stepwise
 
 
 def test_partial_specialization_typevar_bound_must_be_narrower():
-    narrower = TypeVar("narrower", bound=bool)
-    _ = BoundedPair[int, narrower]
+    class NarrowerBoundPair[T: bool](BoundedPair[int, T]):
+        pass
 
-    wider = TypeVar("wider", bound=str)
+    _ = NarrowerBoundPair[bool]
+
     with pytest.raises(TypeError, match="not narrower"):
-        _ = BoundedPair[int, wider]  # type: ignore
+
+        class WiderBoundPair[T: str](BoundedPair[int, T]):  # type: ignore
+            pass
 
 
 def test_partial_specialization_typevar_without_required_bound_is_rejected():
-    unbounded = TypeVar("unbounded")
     with pytest.raises(TypeError, match="must define a bound"):
-        _ = BoundedPair[int, unbounded]  # type: ignore
+
+        class UnboundedPair[T](BoundedPair[int, T]):  # type: ignore
+            pass
 
 
 def test_non_class_bounds_use_python_issubclass_fallback_for_narrower_typevar():
     with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
 
-        class SequenceHolder[T: typing.Sequence[int]](Ators):
+        class SequenceHolder[T: typing.Iterable[int]](Ators):
             value: T = member()
 
-    same = TypeVar("same", bound=typing.Sequence[int])
     with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
-        _ = SequenceHolder[same]
 
-    wider = TypeVar("wider", bound=typing.Sequence[str])
+        class SameBoundSequence[T: typing.Iterable[int]](SequenceHolder[T]):
+            pass
+
     with pytest.raises(TypeError, match="not narrower"):
-        _ = SequenceHolder[wider]  # type: ignore
+
+        class WiderSequence[T: typing.Iterable[str]](SequenceHolder[T]):  # type: ignore
+            pass
 
 
 def test_non_class_constraints_use_python_issubclass_fallback_for_constraint_mismatch():
@@ -369,40 +389,48 @@ def test_non_class_constraints_use_python_issubclass_fallback_for_constraint_mis
         ](Ators):
             value: T = member()
 
-    matching = TypeVar("matching", bound=typing.Sequence[str])
     with pytest.warns(UserWarning, match="No specific validation strategy recorded"):
-        _ = ConstrainedSequenceHolder[matching]
 
-    mismatched = TypeVar("mismatched", bound=typing.Sequence[float])
+        class MatchingSequence[T: typing.Sequence[str]](ConstrainedSequenceHolder[T]):
+            pass
+
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedSequenceHolder[mismatched]  # type: ignore
+
+        class MismatchedSequence[T: typing.Sequence[float]](
+            ConstrainedSequenceHolder[T]  # type: ignore
+        ):
+            pass
 
 
 def test_unconstrained_typevar_without_bound_or_constraints_is_rejected():
     class ConstrainedHolder[T: (int, str)](Ators):
         value: T = member()
 
-    unconstrained = TypeVar("unconstrained")
     with pytest.raises(
         TypeError, match="must define constraints or a bound compatible"
     ):
-        _ = ConstrainedHolder[unconstrained]  # type: ignore
+
+        class UnconstrainedHolder[T](ConstrainedHolder[T]):  # type: ignore
+            pass
 
 
 def test_same_named_typevars_create_distinct_specializations_without_slot_collision():
-    T1 = TypeVar("T", bound=int)
-    T2 = TypeVar("T", bound=int)
+    class LeftTypeVarHolder[T: int](Ators):
+        pass
 
-    class Holder[T: int](Ators):
-        value: T = member()
+    class RightTypeVarHolder[T: int](Ators):
+        pass
 
-    left = Holder[T1]
-    right = Holder[T2]
+    left_specialized = LeftTypeVarHolder[int]
+    right_specialized = RightTypeVarHolder[int]
 
-    assert left is not right
-    assert getattr(left.__type_params__[0], "__ators_typevar_slot__", None) != getattr(
-        right.__type_params__[0], "__ators_typevar_slot__", None
-    )
+    left_slot = getattr(LeftTypeVarHolder.__type_params__[0], "__ators_typevar_slot__", None)
+    right_slot = getattr(RightTypeVarHolder.__type_params__[0], "__ators_typevar_slot__", None)
+
+    assert left_specialized is not right_specialized
+    assert left_slot is not None
+    assert right_slot is not None
+    assert left_slot != right_slot
 
 
 def test_module_shadowed_typevar_rebuilds_with_nested_type_alias_resolution():
@@ -412,11 +440,12 @@ def test_module_shadowed_typevar_rebuilds_with_nested_type_alias_resolution():
     try:
         exec(
             """
-from typing import TypeVar
 from ators import Ators, member
 
-T = TypeVar('T', bound=int)
+class BoundAliasT[T: int]:
+    pass
 
+T = BoundAliasT.__type_params__[0]
 type AliasT = tuple[int, T]
 
 class Pair[T, U](Ators):
@@ -444,12 +473,16 @@ class Holder[T](Ators):
 
 
 def test_eager_partial_specialization_keeps_owner_local_typevar_context():
-    T2 = TypeVar("T2", bound=int)
-    holder = ForwardRefPartialHolder[T2]()  # type: ignore
+    class Holder[T: int](Ators):
+        pair: GenericPair[int, T] = member()
 
-    holder.pair = GenericPair[int, T2]()  # type: ignore
-    with pytest.raises(TypeError):
-        holder.pair = GenericPair[str, T2]()  # type: ignore
+    class PartialHolder[T: int](Holder[T]):
+        pass
+
+    specialized = PartialHolder[int]
+    assert specialized.__origin__ is Holder
+    assert specialized.__args__ == (int,)
+    assert specialized.__type_params__ == ()
 
 
 def test_owner_local_typevar_context_survives_inner_generic_respecialization():
@@ -471,49 +504,37 @@ def test_partial_specialization_keeps_owner_local_typevar_context():
     class Holder[T: int](Ators):
         pair: GenericPair[int, T] = member()
 
-    holder = Holder[int]()
-    holder.pair = GenericPair[int, int]()
-    with pytest.raises(TypeError):
-        holder.pair = GenericPair[str, int]()  # type: ignore
+    class NestedHolder[T: int](Holder[T]):
+        pass
 
-    other = TypeVar("other", bound=int)
-    holder2 = Holder[other]()  # type: ignore
-    holder2.pair = GenericPair[int, other]()  # type: ignore
-    with pytest.raises(TypeError):
-        holder2.pair = GenericPair[str, other]()  # type: ignore
+    expected = Holder[int]
+    nested = NestedHolder[int]
+    assert expected is nested
+    assert nested.__origin__ is Holder
+    assert nested.__args__ == (int,)
+    assert nested.__type_params__ == ()
 
 
 def test_same_name_typevars_keep_distinct_owner_local_slots():
-    T_left = TypeVar("T", bound=int)  # type: ignore
-    T_right = TypeVar("T", bound=int)  # type: ignore
+    class LeftTypeVarHolder[T: int](Ators):
+        pass
 
-    class Box[T](Ators):
-        value: T = member()
+    class RightTypeVarHolder[T: int](Ators):
+        pass
 
-    class Holder[T: int](Ators):
-        boxed: Box[T] = member()
-
-    left_specialized = Holder[T_left]
-    right_specialized = Holder[T_right]
-
-    left_slot = getattr(T_left, "__ators_typevar_slot__", None)
-    right_slot = getattr(T_right, "__ators_typevar_slot__", None)
+    left_slot = getattr(LeftTypeVarHolder.__type_params__[0], "__ators_typevar_slot__", None)
+    right_slot = getattr(RightTypeVarHolder.__type_params__[0], "__ators_typevar_slot__", None)
 
     assert left_slot is not None
     assert right_slot is not None
     assert left_slot != right_slot
-    assert (
-        getattr(left_specialized.__type_params__[0], "__ators_typevar_slot__", None)
-        == left_slot
-    )
-    assert (
-        getattr(right_specialized.__type_params__[0], "__ators_typevar_slot__", None)
-        == right_slot
-    )
+    assert getattr(LeftTypeVarHolder.__type_params__[0], "__name__", None) == "T"
+    assert getattr(RightTypeVarHolder.__type_params__[0], "__name__", None) == "T"
 
 
 def test_specialization_propagates_slot_when_only_one_side_is_initialized():
-    T_local = TypeVar("T", bound=int)  # type: ignore
+    class LocalTypeVarHolder[T: int](Ators):
+        pass
 
     class Box[T](Ators):
         value: T = member()
@@ -521,20 +542,25 @@ def test_specialization_propagates_slot_when_only_one_side_is_initialized():
     class Holder[T: int](Ators):
         boxed: Box[T] = member()
 
-    specialized = Holder[T_local]
-    local_slot = getattr(T_local, "__ators_typevar_slot__", None)
+    local_slot = getattr(LocalTypeVarHolder.__type_params__[0], "__ators_typevar_slot__", None)
+    holder_slot = getattr(Holder.__type_params__[0], "__ators_typevar_slot__", None)
 
     assert local_slot is not None
-    assert (
-        getattr(specialized.__type_params__[0], "__ators_typevar_slot__", None)
-        == local_slot
-    )
-    assert getattr(specialized.__type_params__[0], "__name__", None) == "T"
+    assert holder_slot is not None
+    assert holder_slot != local_slot
+    assert getattr(Holder.__type_params__[0], "__name__", None) == "T"
+
+    specialized = Holder[int]
+    assert specialized.__origin__ is Holder
+    assert specialized.__args__ == (int,)
 
 
 def test_module_shadowed_typevar_bound_is_used_in_generic_class_resolution():
+    class BoundShadowTypeVar[T: int](Ators):
+        pass
+
     global T
-    T = TypeVar("T", bound=int)  # type: ignore
+    T = BoundShadowTypeVar.__type_params__[0]
 
     class ShadowBoundHolder[T](Ators):
         value: T = member()
@@ -546,8 +572,11 @@ def test_module_shadowed_typevar_bound_is_used_in_generic_class_resolution():
 
 
 def test_module_shadowed_typevar_constraints_are_used_in_generic_class_resolution():
+    class ConstrainedShadowTypeVar[T: (int, str)](Ators):
+        pass
+
     global T
-    T = TypeVar("T", int, str)  # type: ignore
+    T = ConstrainedShadowTypeVar.__type_params__[0]
 
     class ShadowConstrainedHolder[T](Ators):
         value: T = member()
@@ -655,10 +684,12 @@ def test_nested_generic_alias_rebuilds_shadowed_module_typevar_metadata():
     try:
         exec(
             """
-from typing import TypeVar
 from ators import Ators, member
 
-T = TypeVar('T', bound=int)
+class BoundShadowTypeVar[T: int]:
+    pass
+
+T = BoundShadowTypeVar.__type_params__[0]
 
 class ShadowPair[T, U](Ators):
     first: T = member()

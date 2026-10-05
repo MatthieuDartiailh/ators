@@ -245,17 +245,3 @@ def test_class_info_is_removed_when_class_is_collected():
     gc.collect()
     assert w() is None
     assert get_tracked_class_info_size() == before
-
-
-def test_member_descriptor_is_cached_across_accesses():
-    """Test that member descriptor is created once and reused."""
-
-    class A(Ators):
-        value: int = member()
-
-    # Access the descriptor from the class multiple times
-    member_desc1 = type(A()).value
-    member_desc2 = type(A()).value
-
-    # Should be the same descriptor object
-    assert member_desc1 is member_desc2

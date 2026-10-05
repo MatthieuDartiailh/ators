@@ -37,6 +37,36 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 
+fn specialized_base_origin<'py>(
+    py: pyo3::Python<'py>,
+    bases: &Bound<'py, PyTuple>,
+) -> PyResult<Option<(Py<PyType>, Vec<Py<PyAny>>)>> {
+    for base in bases.iter() {
+        let Ok(base_ty) = base.cast::<PyType>() else {
+            continue;
+        };
+        let Ok(info) = get_class_info(&base_ty) else {
+            continue;
+        };
+        let Some(generic) = info.generic() else {
+            continue;
+        };
+        let Some(origin) = generic.origin() else {
+            continue;
+        };
+        let args = generic
+            .args()
+            .iter()
+            .map(|arg| arg.clone_ref(py))
+            .collect::<Vec<_>>();
+        if args.is_empty() {
+            continue;
+        }
+        return Ok(Some((origin.clone_ref(py), args)));
+    }
+    Ok(None)
+}
+
 fn mro_from_bases<'py>(bases: &Bound<'py, PyTuple>) -> PyResult<Vec<Bound<'py, PyType>>> {
     // Collect the MRO of all the base classes
     let mut inputs: Vec<Vec<Bound<'py, PyType>>> = bases
@@ -734,7 +764,7 @@ pub fn create_ators_subclass<'py>(
     let cls_result = py
         .import(intern!(py, "builtins"))?
         .getattr(intern!(py, "type"))?
-        .call_method1(intern!(py, "__new__"), (meta, name.clone(), bases, dct))?;
+        .call_method1(intern!(py, "__new__"), (meta, name.clone(), bases.clone(), dct))?;
     let cls = match cls_result.cast_into::<PyType>() {
         Ok(c) => c,
         Err(err) => {
@@ -851,15 +881,30 @@ pub fn create_ators_subclass<'py>(
     // Initialize specialization cache once for generic classes so it always
     // lives on the origin (non-specialized) class.
     let generic_params = get_generic_params_obj(&cls)?;
+    let inherited_origin_and_args = if !generic_params.is_empty() {
+        specialized_base_origin(py, &bases)?
+    } else {
+        None
+    };
     let generic = if !generic_params.is_empty() {
         let typevar_bindings = PyDict::new(py);
         for param in generic_params.iter() {
             typevar_bindings.set_item(&param, &param)?;
         }
+        let (origin, args) = match inherited_origin_and_args {
+            Some((origin, args)) => (Some(origin.clone_ref(py)), args),
+            None => (None, Vec::new()),
+        };
+        if let Some(origin) = origin.as_ref() {
+            let origin_params = get_generic_params_obj(origin.bind(py))?;
+            for (origin_param, arg) in origin_params.iter().zip(args.iter()) {
+                typevar_bindings.set_item(origin_param, arg.bind(py))?;
+            }
+        }
         Some(AtorsGenericInfo::new(
             generic_params.iter().map(|p| p.unbind()).collect(),
-            None,
-            Vec::new(),
+            origin,
+            args,
             Some(typevar_bindings.unbind()),
             Some(PyDict::new(py).unbind()),
         ))

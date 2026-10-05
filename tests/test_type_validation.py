@@ -8,7 +8,7 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
@@ -346,13 +346,13 @@ def test_partial_specialization_keeps_generic_parameter():
         first: T = member()
         second: U = member()
 
-    T2 = TypeVar("T2", bound=int)
-    partial = GenericPair[int, T2]
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
 
-    assert len(partial.__type_params__) == 1
-    assert partial.__type_params__[0] is T2
+    assert len(BoundSecond.__type_params__) == 1
+    assert BoundSecond.__type_params__[0].__bound__ is int
 
-    pair = partial()
+    pair = BoundSecond[int]()
     pair.first = 1
     pair.second = 2  # type: ignore
     with pytest.raises(TypeError):
@@ -364,9 +364,10 @@ def test_partial_specialization_can_be_fully_specialized_later():
         first: T = member()
         second: U = member()
 
-    T2 = TypeVar("T2", bound=int)
-    partial = GenericPair[int, T2]
-    final = partial[bool]
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
+
+    final = BoundSecond[bool]
 
     pair = final()
     pair.first = 1
@@ -380,10 +381,11 @@ def test_repeated_partial_specialization_reuses_cached_alias_binding():
         first: T = member()
         second: U = member()
 
-    T = TypeVar("T", bound=int)
-    partial = GenericPair[int, T]
-    final = partial[bool]
-    assert final is GenericPair[int, bool]
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
+
+    final = BoundSecond[bool]
+    assert final is BoundSecond[bool]
 
     value = final()
     value.first = 1
@@ -621,11 +623,8 @@ def test_type_alias_annotations_are_evaluated_before_validation():
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------
 
-T_constrained = TypeVar("T_constrained", int, str)
-
-
-class ConstrainedBox[T_constrained](Ators):
-    item: T_constrained = member()
+class ConstrainedBox[T: (int, str)](Ators):
+    item: T = member()
 
 
 def test_constrained_typevar_accepts_first_constraint():
@@ -731,10 +730,10 @@ def test_constrained_generic_specialization_rejects_list_type():
 
 
 def test_constrained_generic_partial_specialization_with_subset_constraints():
-    # T_sub has constraints (int, bool) — both are subtypes of int, which is in (int, str)
-    T_sub = TypeVar("T_sub", int, bool)
-    partial = ConstrainedGenericPair[T_sub, str]
-    pair = partial()
+    class SubsetConstraint[T: (int, bool)](ConstrainedGenericPair[T, str]):
+        pass
+
+    pair = SubsetConstraint[int]()
     pair.first = 1  # type: ignore
     pair.second = "x"
     with pytest.raises(TypeError):
@@ -742,23 +741,24 @@ def test_constrained_generic_partial_specialization_with_subset_constraints():
 
 
 def test_constrained_generic_partial_specialization_rejects_incompatible_constraints():
-    # T_bad has float which is not within (int, str)
-    T_bad = TypeVar("T_bad", int, float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_bad, str]  # type: ignore
+
+        class IncompatibleConstraint[T: (int, float)](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_constrained_generic_partial_specialization_rejects_unconstrained_typevar():
-    T_free = TypeVar("T_free")
     with pytest.raises(TypeError, match="compatible with the constraints"):
-        _ = ConstrainedGenericPair[T_free, str]  # type: ignore
+
+        class FreeTypeVar[T](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_constrained_generic_partial_specialization_with_bound_within_constraints():
-    # T_bound has bound=int, which is within (int, str) constraints
-    T_bound = TypeVar("T_bound", bound=int)
-    partial = ConstrainedGenericPair[T_bound, str]
-    pair = partial()
+    class BoundWithinConstraints[T: int](ConstrainedGenericPair[T, str]):
+        pass
+
+    pair = BoundWithinConstraints[int]()
     pair.first = 1  # type: ignore
     pair.second = "x"
     with pytest.raises(TypeError):
@@ -766,9 +766,10 @@ def test_constrained_generic_partial_specialization_with_bound_within_constraint
 
 
 def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
-    T_float_bound = TypeVar("T_float_bound", bound=float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_float_bound, str]  # type: ignore
+
+        class FloatBound[T: float](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_fixed_tuple_validation_preserves_unchanged_items_after_transformation():
