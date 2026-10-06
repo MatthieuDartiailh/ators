@@ -5,7 +5,7 @@
 #
 # The full license is in the file LICENSE, distributed with this software.
 # --------------------------------------------------------------------------------------
-"""Tests for abstractmethod support in AtorsMeta."""
+"""Tests for metaclass behavior: general functionality and abstract method support."""
 
 from abc import abstractmethod
 
@@ -14,7 +14,122 @@ import pytest
 from ators import Ators, member
 
 # -------------------------------------------------------------------------------------
-# A. Class creation tracking
+# A. Basic metaclass functionality
+# -------------------------------------------------------------------------------------
+
+
+def test_metaclass_with_abstract_method():
+    """Test metaclass handling of abstract methods."""
+
+    # Ators already handles abstract methods via its metaclass
+    class Base(Ators):
+        @abstractmethod
+        def process(self):
+            pass
+
+    # Cannot instantiate abstract class
+    with pytest.raises(TypeError):
+        Base()  # type: ignore
+
+    class Concrete(Base):
+        def process(self):
+            return "done"
+
+    # Concrete implementation can be instantiated
+    obj = Concrete()
+    assert obj.process() == "done"
+
+
+def test_metaclass_mro_with_multiple_inheritance():
+    """Test metaclass MRO (Method Resolution Order) with multiple inheritance."""
+
+    class Mixin1:
+        value1 = "mixin1"
+
+    class Mixin2:
+        value2 = "mixin2"
+
+    class Combined(Mixin1, Mixin2, Ators):
+        data: int = member()
+
+    obj = Combined()
+    assert hasattr(obj, "value1")
+    assert hasattr(obj, "value2")
+    assert obj.value1 == "mixin1"
+    assert obj.value2 == "mixin2"
+
+
+def test_metaclass_slot_creation_with_inheritance():
+    """Test that metaclass properly creates slots in inheritance hierarchy."""
+
+    class Base(Ators):
+        x: int = member()
+
+    class Derived(Base):
+        y: str = member()
+
+    obj = Derived()
+    obj.x = 42
+    obj.y = "text"
+
+    assert obj.x == 42
+    assert obj.y == "text"
+
+    # Cannot add new attributes (slots prevent it)
+    with pytest.raises(AttributeError):
+        obj.new_attr = "value"
+
+
+def test_metaclass_handles_property_descriptors():
+    """Test metaclass interaction with property descriptors."""
+
+    class PropClass(Ators):
+        _internal: int = member()
+
+        @property
+        def value(self):
+            return self._internal * 2
+
+    obj = PropClass()
+    obj._internal = 21
+    assert obj.value == 42
+
+
+def test_metaclass_with_classmethod():
+    """Test metaclass handling of classmethods."""
+
+    class WithClassMethod(Ators):
+        data: int = member()
+
+        @classmethod
+        def create(cls, value):
+            obj = cls()
+            obj.data = value
+            return obj
+
+    obj = WithClassMethod.create(99)
+    assert obj.data == 99
+
+
+def test_metaclass_with_staticmethod():
+    """Test metaclass handling of staticmethods."""
+
+    class WithStaticMethod(Ators):
+        data: int = member()
+
+        @staticmethod
+        def process(x: int) -> int:
+            return x * 2
+
+    assert WithStaticMethod.process(21) == 42
+
+    obj = WithStaticMethod()
+    obj.data = 10
+    assert obj.data == 10
+
+
+# -------------------------------------------------------------------------------------
+# B. Abstract method tracking
 # -------------------------------------------------------------------------------------
 
 
@@ -46,7 +161,7 @@ def test_multiple_abstract_methods_are_tracked():
 
 
 # -------------------------------------------------------------------------------------
-# B. Inheritance resolution
+# C. Abstract method inheritance resolution
 # -------------------------------------------------------------------------------------
 
 
@@ -166,7 +281,7 @@ def test_multiple_inheritance_all_overridden():
 
 
 # -------------------------------------------------------------------------------------
-# C. Instantiation enforcement
+# D. Instantiation enforcement
 # -------------------------------------------------------------------------------------
 
 
@@ -176,7 +291,7 @@ def test_instantiation_fails_with_unresolved_abstract():
         def foo(self): ...
 
     with pytest.raises(TypeError, match="Can't instantiate abstract class A"):
-        A()
+        A()  # type: ignore
 
 
 def test_instantiation_error_includes_method_name():
@@ -185,7 +300,7 @@ def test_instantiation_error_includes_method_name():
         def foo(self): ...
 
     with pytest.raises(TypeError, match="foo"):
-        A()
+        A()  # type: ignore
 
 
 def test_instantiation_error_includes_sorted_method_names():
@@ -197,7 +312,7 @@ def test_instantiation_error_includes_sorted_method_names():
         def alpha(self): ...
 
     with pytest.raises(TypeError) as exc_info:
-        A()
+        A()  # type: ignore
     assert "alpha, zoo" in str(exc_info.value)
 
 
@@ -227,11 +342,11 @@ def test_instantiation_fails_if_any_abstract_remains():
             return 1
 
     with pytest.raises(TypeError, match="bar"):
-        Partial()
+        Partial()  # type: ignore
 
 
 # -------------------------------------------------------------------------------------
-# D. Wrapper/decorator cases
+# E. Decorator cases
 # -------------------------------------------------------------------------------------
 
 
@@ -305,7 +420,7 @@ def test_property_abstractmethod_removed_by_concrete_override():
 
 
 # -------------------------------------------------------------------------------------
-# E. Introspection consistency
+# F. Introspection consistency
 # -------------------------------------------------------------------------------------
 
 
@@ -350,7 +465,7 @@ def test_abstractmethods_deep_inheritance_chain():
 
 
 # -------------------------------------------------------------------------------------
-# F. Regression: non-abstract classes are unchanged
+# G. Regressions: non-abstract classes and mixed cases
 # -------------------------------------------------------------------------------------
 
 
@@ -371,7 +486,7 @@ def test_abstract_class_with_members_tracks_both():
 
     assert A.__abstractmethods__ == frozenset({"process"})
     with pytest.raises(TypeError):
-        A(x=1)
+        A(x=1)  # type: ignore
 
     class B(A):
         def process(self):

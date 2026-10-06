@@ -235,3 +235,29 @@ def test_list_reassignment_to_other_member_still_validates():
 
     with pytest.raises(TypeError):
         obj.strs = obj.ints  # type: ignore
+
+
+def test_deeply_nested_container_error_context():
+    """Error messages show full nesting context for deeply nested containers."""
+    from ators import Ators
+
+    class C(Ators):
+        # 5 levels deep: dict > list > tuple > dict > list
+        data: dict[str, list[tuple[int, dict[str, list[int]]]]]
+
+    c = C()
+
+    # Valid: all types correct
+    c.data = {"outer": [(1, {"inner": [1, 2, 3]})]}
+    assert c.data["outer"][0][0] == 1
+
+    # Invalid: wrong type at deepest level
+    with pytest.raises(TypeError) as exc_info:
+        c.data = {"outer": [(1, {"inner": ["not_int"]})]}  # Should be int
+
+    error = str(exc_info.value)
+    # Should mention the top-level member
+    assert "data" in error
+
+    # This exercises error chain building through nested validation
+    # Rust: types.rs lines 250-350 (nested container error paths)

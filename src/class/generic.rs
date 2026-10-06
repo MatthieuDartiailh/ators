@@ -11,13 +11,11 @@ use pyo3::{
     ffi::{PyType_IsSubtype, c_str},
     intern, pyfunction,
     sync::PyOnceLock,
-    types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyTuple, PyTupleMethods,
-        PyType, PyTypeMethods,
-    },
+    types::{PyAnyMethods, PyDict, PyDictMethods, PyTuple, PyTupleMethods, PyType, PyTypeMethods},
 };
 
 use crate::{
+    annotations::{apply_typevar_bindings, get_type_tools},
     class::info::{
         AtorsGenericInfo, class_key, get_ators_specialized_class_for_alias, get_class_info,
         get_class_info_store, insert_definitive_class_info, insert_pending_specialization_bindings,
@@ -59,6 +57,8 @@ class AtorsGenericAlias(types.GenericAlias):
 			return self.__ators_specialized_class__.__type_params__
 		if name == "__ators_specialized_class__":
 			return _get_ators_specialized_class_for_alias(self)
+		if name in {"__annotations__", "__dict__"}:
+			return getattr(self.__ators_specialized_class__, name)
 		return super().__getattribute__(name)
 
 	def __call__(self, *args, **kwargs):
@@ -95,8 +95,99 @@ class AtorsGenericAlias(types.GenericAlias):
     Ok(alias_cls.clone_ref(py).into_bound(py))
 }
 
+fn typevar_slot_id<'py>(typevar: &Bound<'py, PyAny>) -> PyResult<Option<String>> {
+    let py = typevar.py();
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    if let Ok(slot) = typevar.getattr(slot_attr)
+        && !slot.is_none()
+    {
+        return Ok(Some(slot.extract::<String>()?));
+    }
+    Ok(None)
+}
+
+fn synthesize_typevar_slot_id<'py>(typevar: &Bound<'py, PyAny>, prefix: &str) -> PyResult<String> {
+    let py = typevar.py();
+    let name: String = typevar.getattr(intern!(py, "__name__"))?.extract()?;
+    let module: String = typevar.getattr(intern!(py, "__module__"))?.extract()?;
+    let builtins = py.import(intern!(py, "builtins"))?;
+    let id_fn = builtins.getattr(intern!(py, "id"))?;
+    let source_id: usize = id_fn.call1((typevar.clone(),))?.extract()?;
+    Ok(format!("{prefix}:{module}.{name}@{source_id:x}"))
+}
+
+fn ensure_typevar_slot_id<'py>(
+    target: &Bound<'py, PyAny>,
+    source: &Bound<'py, PyAny>,
+) -> PyResult<()> {
+    if !is_type_var(target)? || !is_type_var(source)? {
+        return Ok(());
+    }
+    if !same_typevar_slot(target, source)? {
+        return Ok(());
+    }
+
+    let py = target.py();
+    let slot_attr = intern!(py, "__ators_typevar_slot__");
+    let slot_id =
+        typevar_slot_id(source)?.or_else(|| synthesize_typevar_slot_id(source, "template").ok());
+    if let Some(slot_id) = slot_id {
+        if typevar_slot_id(target)?.is_none() {
+            target.setattr(slot_attr, slot_id.clone())?;
+        }
+        if typevar_slot_id(source)?.is_none() {
+            source.setattr(slot_attr, slot_id)?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::needless_borrow)]
+pub(crate) fn same_typevar_slot(
+    left: &Bound<'_, PyAny>,
+    right: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    if left.is(right) {
+        return Ok(true);
+    }
+    if !is_type_var(left)? || !is_type_var(right)? {
+        return Ok(false);
+    }
+
+    let left_slot = typevar_slot_id(left)?;
+    let right_slot = typevar_slot_id(right)?;
+
+    match (left_slot, right_slot) {
+        (Some(left_slot), Some(right_slot)) => Ok(left_slot == right_slot),
+        _ => Ok(false),
+    }
+}
+
+pub(crate) fn lookup_typevar_binding<'py>(
+    bindings: &Bound<'py, PyDict>,
+    key: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if let Some(bound_ann) = bindings.get_item(key)? {
+        return Ok(Some(bound_ann));
+    }
+    for (binding_key, value) in bindings.iter() {
+        if same_typevar_slot(&binding_key, key)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
 /// Return `true` when `arg` satisfies the bound and/or constraints of `typevar`.
 fn typevar_matches_arg(typevar: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if is_type_var(arg)? {
+        // Different owner-local TypeVars are not interchangeable just because they
+        // share the same name or constraints.  The logical generic slot is the
+        // identity boundary here, so a matching specialization must preserve the
+        // same slot across nested generic respecializations.
+        return same_typevar_slot(typevar, arg);
+    }
+
     let py = typevar.py();
 
     let bound = typevar.getattr(intern!(py, "__bound__"))?;
@@ -295,8 +386,8 @@ pub(crate) fn get_generic_params_obj<'py>(
             .unwrap_or_else(|_| PyTuple::empty(py).into_any()),
     };
 
-    match obj.clone().cast_into::<PyTuple>() {
-        Ok(tuple) => Ok(tuple),
+    let tuple = match obj.clone().cast_into::<PyTuple>() {
+        Ok(tuple) => tuple,
         Err(_) => {
             // Some typing implementations expose an iterable but not a tuple;
             // normalize to tuple so downstream zip/len logic stays uniform.
@@ -304,9 +395,15 @@ pub(crate) fn get_generic_params_obj<'py>(
             for item in obj.try_iter()? {
                 items.push(item?);
             }
-            PyTuple::new(py, items)
+            PyTuple::new(py, items)?
+        }
+    };
+    for item in tuple.iter() {
+        if is_type_var(&item)? {
+            ensure_typevar_slot_id(&item, &item)?;
         }
     }
+    Ok(tuple)
 }
 
 /// Verify that `replacement` TypeVar has a bound that is at least as narrow
@@ -476,6 +573,7 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 ///
 /// This resolves and validates type arguments, computes the canonical origin
 /// argument mapping, and reuses an existing specialisation when available.
+#[allow(clippy::needless_borrow)]
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: &Bound<'py, PyType>,
@@ -518,12 +616,17 @@ pub fn create_ators_specialized_subclass<'py>(
         }
     }
 
-    // If all type var are the type var involved in the definition of the class,
-    // we can skip the specialization and return the class itself.
+    // A pass-through specialization is only a true no-op when the argument is the
+    // exact same TypeVar object from the defining generic scope.  A distinct owner-
+    // local TypeVar that shares the same logical slot is still a real specialization
+    // and must create a subclass so the binding metadata survives on the class.
     let fully_passthrough = exposed_params
         .iter()
         .zip(params_tuple.iter())
-        .all(|(tp, p)| tp.is(&p));
+        .all(|(tp, p)| {
+            let tp_bound = tp.bind(py);
+            p.is(tp_bound)
+        });
     if fully_passthrough {
         return Ok(cls.clone().into_any());
     }
@@ -558,18 +661,76 @@ pub fn create_ators_specialized_subclass<'py>(
         .map(|p| p.bind(py))
         .zip(params_tuple.iter())
     {
-        if exposed.is(&arg) {
+        if is_type_var(&arg)? {
+            enforce_narrower_typevar_bound(&exposed, &arg)?;
+        }
+        enforce_within_constraints(&exposed, &arg)?;
+        if is_type_var(&arg)? {
+            // A replacement TypeVar is the same logical generic slot as the
+            // exposed parameter it binds to during a specialization.  If we
+            // synthesize a new slot when both are unresolved, a direct binding like
+            // `Holder[T2]` gets treated as a different generic scope and nested
+            // annotations lose the owner-local context.  Keep the binding pair on a
+            // shared slot so unrelated `T` names remain distinct while legitimate
+            // local rebindings stay tied to the same owner-scoped parameter.
+            let slot_attr = intern!(py, "__ators_typevar_slot__");
+            match (typevar_slot_id(&exposed)?, typevar_slot_id(&arg)?) {
+                (Some(exposed_slot), Some(arg_slot)) if exposed_slot == arg_slot => {}
+                (Some(exposed_slot), Some(arg_slot)) => {
+                    if exposed_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else if arg_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    }
+                }
+                (Some(exposed_slot), None) => {
+                    if exposed_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else {
+                        let fresh_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        arg.setattr(slot_attr, fresh_slot)?;
+                    }
+                }
+                (None, Some(arg_slot)) => {
+                    if arg_slot.starts_with("template:") {
+                        let shared_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                        exposed.setattr(slot_attr, shared_slot.clone())?;
+                        arg.setattr(slot_attr, shared_slot)?;
+                    } else {
+                        exposed.setattr(slot_attr, arg_slot)?;
+                    }
+                }
+                (None, None) => {
+                    let new_slot = synthesize_typevar_slot_id(&arg, "bound")?;
+                    exposed.setattr(slot_attr, new_slot.clone())?;
+                    arg.setattr(slot_attr, new_slot)?;
+                }
+            }
+        }
+
+        if same_typevar_slot(&exposed, &arg)? {
+            if !arg.is(exposed) {
+                let mut to_replace = Vec::new();
+                for (key, value) in full_bindings.iter() {
+                    if same_typevar_slot(&value, &exposed)? {
+                        to_replace.push(key.unbind());
+                    }
+                }
+                for key in to_replace {
+                    full_bindings.set_item(key.bind(py), &arg)?;
+                }
+            }
             continue;
         }
 
-        if is_type_var(&arg)? {
-            enforce_narrower_typevar_bound(exposed, &arg)?;
-        }
-        enforce_within_constraints(exposed, &arg)?;
-
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {
-            if value.is(exposed) {
+            if same_typevar_slot(&value, &exposed)? {
                 to_replace.push(key.unbind());
             }
         }
@@ -591,19 +752,22 @@ pub fn create_ators_specialized_subclass<'py>(
             .unwrap_or(origin_param.clone());
         // Remaining type params must preserve first-seen order while dropping
         // duplicates introduced by transitive substitutions.
-        if is_type_var(&value)? && !unresolved.iter().any(|p: &Bound<'_, PyAny>| p.is(&value)) {
+        if is_type_var(&value)?
+            && !unresolved
+                .iter()
+                .any(|p: &Bound<'_, PyAny>| same_typevar_slot(p, &value).unwrap_or(false))
+        {
             unresolved.push(value);
         }
     }
     let unresolved_tuple = PyTuple::new(py, unresolved.iter())?;
-
     // Compute the full argument tuple for all origin params.  This is the
     // canonical cache key: using the full args (relative to the origin) means
     // that `A[int, str]` and `A[int][str]` always resolve to the same class.
     let typevar_bindings = full_bindings;
     let full_args = origin_params
         .iter()
-        .map(|tp| Ok(typevar_bindings.get_item(&tp)?.unwrap_or(tp)))
+        .map(|tp| Ok(lookup_typevar_binding(&typevar_bindings, &tp)?.unwrap_or(tp)))
         .collect::<PyResult<Vec<Bound<'_, PyAny>>>>()?;
     let full_args_tuple = PyTuple::new(py, full_args.iter())?;
 
@@ -630,11 +794,24 @@ pub fn create_ators_specialized_subclass<'py>(
         return Ok(cached);
     }
 
-    // `__annotations__` is guaranteed by Python to be a mapping; cast
-    // directly rather than copying through `builtins.dict`.
-    let annotations = cls
-        .getattr(intern!(py, "__annotations__"))?
-        .cast_into::<PyMapping>()?;
+    // `__annotations__` must be rewritten against the pending TypeVar mapping
+    // before the specialized subclass is created; otherwise the member
+    // validators retain the origin's unbound annotation and keep validating
+    // against the wrong generic slot.
+    let raw_annotations = cls.getattr(intern!(py, "__annotations__"))?;
+    let tools = get_type_tools(py)?;
+    let annotations = if raw_annotations.is_none() {
+        PyDict::new(py)
+    } else {
+        let raw_mapping = raw_annotations.cast_into::<PyDict>()?;
+        let specialized_annotations = PyDict::new(py);
+        for item in raw_mapping.iter() {
+            let (name, value) = item;
+            let resolved = apply_typevar_bindings(&value, &tools, Some(&typevar_bindings))?;
+            specialized_annotations.set_item(name, resolved)?;
+        }
+        specialized_annotations
+    };
 
     let namespace = PyDict::new(py);
     namespace.set_item(
@@ -666,13 +843,23 @@ pub fn create_ators_specialized_subclass<'py>(
         .collect::<PyResult<Vec<String>>>()?
         .join(", ");
     let specialized_name = format!("{base_name}[{rendered}]");
+    let origin_qualname: String = origin.getattr(intern!(py, "__qualname__"))?.extract()?;
+    let specialized_qualname = origin_qualname
+        .rsplit_once('.')
+        .filter(|(_, suffix)| {
+            let unparameterized = suffix.rfind('[').map_or(*suffix, |idx| &suffix[..idx]);
+            unparameterized == base_name
+        })
+        .map(|(prefix, _)| format!("{prefix}.{specialized_name}"))
+        .unwrap_or_else(|| specialized_name.clone());
+    namespace.set_item(intern!(py, "__qualname__"), &specialized_qualname)?;
 
     let kwargs = PyDict::new(py);
     kwargs.set_item(intern!(py, "frozen"), cls_info.frozen())?;
 
     let typevar_bindings_py = typevar_bindings.unbind();
     let origin_module: String = cls.getattr(intern!(py, "__module__"))?.extract()?;
-    let specialized_fqname = format!("{origin_module}.{specialized_name}");
+    let specialized_fqname = format!("{origin_module}.{specialized_qualname}");
     insert_pending_specialization_bindings(
         py,
         specialized_fqname,

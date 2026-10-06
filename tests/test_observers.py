@@ -223,3 +223,79 @@ def test_observer_not_called_when_value_unchanged():
     # Setting a different value triggers again
     a.a = 2
     assert len(calls) == 2
+
+
+def test_observer_exception_in_callback():
+    """Test that observer exception is raised to caller."""
+
+    def failing_callback(change):
+        raise ValueError("callback error")
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A()
+    observe(a, "a", failing_callback)
+
+    # Setting value should propagate the callback exception
+    with pytest.raises(ExceptionGroup) as exc:
+        a.a = 42
+
+    # Verify the exception group contains the callback error
+    assert any(isinstance(e, ValueError) for e in exc.value.exceptions)
+
+
+def test_multiple_observer_exceptions_grouped():
+    """Test that multiple observer exceptions are grouped."""
+    calls = []
+
+    def failing_callback1(change):
+        calls.append("callback1")
+        raise ValueError("error1")
+
+    def failing_callback2(change):
+        calls.append("callback2")
+        raise RuntimeError("error2")
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A()
+    observe(a, "a", failing_callback1)
+    observe(a, "a", failing_callback2)
+
+    # Both callbacks should be called, and both exceptions grouped
+    with pytest.raises(ExceptionGroup) as exc:
+        a.a = 99
+
+    assert len(calls) == 2
+    assert len(exc.value.exceptions) == 2
+    assert any(isinstance(e, ValueError) for e in exc.value.exceptions)
+    assert any(isinstance(e, RuntimeError) for e in exc.value.exceptions)
+
+
+def test_observer_with_type_validated_member():
+    """Test observer notification on type-validated member."""
+    calls = []
+
+    def callback(change):
+        calls.append(change)
+
+    class A(Ators, observable=True):
+        value: int = member()
+
+    a = A()
+    observe(a, "value", callback)
+
+    # Valid value change
+    a.value = 42
+    assert len(calls) == 1
+    assert calls[0].object is a
+    assert calls[0].member_name == "value"
+
+    # Invalid type should raise before observer is called
+    with pytest.raises((TypeError, ValueError)):
+        a.value = "invalid"
+
+    # Observer should not be called for failed validation
+    assert len(calls) == 1
