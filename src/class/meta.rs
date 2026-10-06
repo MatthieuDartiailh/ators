@@ -37,6 +37,9 @@ use crate::{
     validators::{Coercer, ValueValidator},
 };
 
+/// Retrieve the origin and arguments of the first specialized generic base
+/// class found in the given tuple of bases.
+#[allow(clippy::type_complexity)]
 fn specialized_base_origin<'py>(
     py: pyo3::Python<'py>,
     bases: &Bound<'py, PyTuple>,
@@ -45,7 +48,7 @@ fn specialized_base_origin<'py>(
         let Ok(base_ty) = base.cast::<PyType>() else {
             continue;
         };
-        let Ok(info) = get_class_info(&base_ty) else {
+        let Ok(info) = get_class_info(base_ty) else {
             continue;
         };
         let Some(generic) = info.generic() else {
@@ -764,7 +767,10 @@ pub fn create_ators_subclass<'py>(
     let cls_result = py
         .import(intern!(py, "builtins"))?
         .getattr(intern!(py, "type"))?
-        .call_method1(intern!(py, "__new__"), (meta, name.clone(), bases.clone(), dct))?;
+        .call_method1(
+            intern!(py, "__new__"),
+            (meta, name.clone(), bases.clone(), dct),
+        )?;
     let cls = match cls_result.cast_into::<PyType>() {
         Ok(c) => c,
         Err(err) => {
