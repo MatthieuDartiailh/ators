@@ -25,6 +25,18 @@ class _ObservableNotifyingMapOwner(Ators, observable=True):
     items: NotifyingMap[str, int] = member()
 
 
+class _BareObservableNotifyingMapOwner(Ators, observable=True):
+    items: NotifyingMap = member()
+
+
+def test_bare_notifying_map_annotation_in_valid_position():
+    obj = _BareObservableNotifyingMapOwner(items={"a": 1, "b": "two"})
+
+    assert list(obj.items.items()) == [("a", 1), ("b", "two")]
+    obj.items.add("c", 3)
+    assert list(obj.items.items()) == [("a", 1), ("b", "two"), ("c", 3)]
+
+
 def test_notifying_map_add_move_remove_preserve_order():
     obj = _ObservableNotifyingMapOwner(items={})
 

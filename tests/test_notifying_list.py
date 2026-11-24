@@ -28,6 +28,18 @@ class _ObservableNotifyingListOwner(Ators, observable=True):
     items: NotifyingList[int] = member()
 
 
+class _BareObservableNotifyingListOwner(Ators, observable=True):
+    items: NotifyingList = member()
+
+
+def test_bare_notifying_list_annotation_in_valid_position():
+    obj = _BareObservableNotifyingListOwner(items=[1, "two", 3])
+
+    assert list(obj.items) == [1, "two", 3]
+    obj.items.append("four")
+    assert list(obj.items) == [1, "two", 3, "four"]
+
+
 def test_notifying_list_annotation_creates_notifying_container():
     obj = _ObservableNotifyingListOwner(items=[1, 2, 3])
 
