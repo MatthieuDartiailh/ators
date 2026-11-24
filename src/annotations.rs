@@ -636,12 +636,7 @@ pub fn build_validator_from_annotation<'py>(
                 (None, false)
             };
             Ok((
-                Validator::new(
-                    TypeValidator::NotifyingList { item },
-                    None,
-                    None,
-                    None,
-                ),
+                Validator::new(TypeValidator::NotifyingList { item }, None, None, None),
                 ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(py.get_type::<NotifyingMap>()) {
@@ -680,12 +675,7 @@ pub fn build_validator_from_annotation<'py>(
                 (None, false)
             };
             Ok((
-                Validator::new(
-                    TypeValidator::NotifyingMap { key, value },
-                    None,
-                    None,
-                    None,
-                ),
+                Validator::new(TypeValidator::NotifyingMap { key, value }, None, None, None),
                 ValidatorBuildInfo {
                     requires_owner: key_requires_owner || value_requires_owner,
                 },
@@ -1304,9 +1294,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
                     "NotifyingMap can only be used in observable classes",
                 ));
             }
-        } else if let Some(container_name) =
-            find_nested_notifying_container(&ann, &tools)?
-        {
+        } else if let Some(container_name) = find_nested_notifying_container(&ann, &tools)? {
             return Err(notifying_guard_error(
                 py,
                 &attr_key,

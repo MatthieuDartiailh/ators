@@ -535,8 +535,7 @@ impl NotifyingList {
 
         if index.is_instance_of::<PySlice>() {
             let slice_index = index.cast::<PySlice>()?;
-            let (removed_indices, start, stop, _step) =
-                Self::slice_indices(&py_list, &slice_index)?;
+            let (removed_indices, start, stop, _step) = Self::slice_indices(py_list, slice_index)?;
             let removed_items: Vec<_> = removed_indices
                 .iter()
                 .map(|idx| py_list.get_item(*idx))
@@ -602,8 +601,7 @@ impl NotifyingList {
 
         if index.is_instance_of::<PySlice>() {
             let slice_index = index.cast::<PySlice>()?;
-            let (removed_indices, start, stop, _step) =
-                Self::slice_indices(&py_list, &slice_index)?;
+            let (removed_indices, start, stop, _step) = Self::slice_indices(py_list, slice_index)?;
             if removed_indices.is_empty() {
                 return Ok(());
             }

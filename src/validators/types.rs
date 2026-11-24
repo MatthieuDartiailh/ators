@@ -1157,8 +1157,9 @@ impl TypeValidator {
                 if let Ok(nlist) = value.cast::<crate::containers::NotifyingList>()
                     && nlist.get().matches_assignment_context(name, object)
                 {
-                    return Ok(crate::containers::NotifyingList::clone_for_assignment(nlist)?
-                        .into_any());
+                    return Ok(
+                        crate::containers::NotifyingList::clone_for_assignment(nlist)?.into_any(),
+                    );
                 }
                 if let Ok(list) = value.cast::<PyList>() {
                     let nlist = crate::containers::NotifyingList::new_empty(
@@ -1221,32 +1222,38 @@ impl TypeValidator {
                     validation_error!("notifying list", name, object, value)
                 }
             }
-            Self::NotifyingMap { key, value: value_validator } => {
+            Self::NotifyingMap {
+                key,
+                value: value_validator,
+            } => {
                 if let Ok(nmap) = value.cast::<crate::containers::NotifyingMap>()
                     && nmap.get().matches_assignment_context(name, object)
                 {
-                    return Ok(crate::containers::NotifyingMap::clone_for_assignment(nmap)?
-                        .into_any());
+                    return Ok(
+                        crate::containers::NotifyingMap::clone_for_assignment(nmap)?.into_any()
+                    );
                 }
                 if let Ok(dict) = value.cast::<PyDict>() {
                     let py = value.py();
-                    let key_validator = key.as_ref().map(|v| (*v.0).clone()).unwrap_or_else(
-                        || crate::validators::Validator::new(
+                    let key_validator = key.as_ref().map(|v| (*v.0).clone()).unwrap_or_else(|| {
+                        crate::validators::Validator::new(
                             crate::validators::TypeValidator::Any {},
                             None,
                             None,
                             None,
-                        ),
-                    );
+                        )
+                    });
                     let val_validator = value_validator
                         .as_ref()
                         .map(|v| (*v.0).clone())
-                        .unwrap_or_else(|| crate::validators::Validator::new(
-                            crate::validators::TypeValidator::Any {},
-                            None,
-                            None,
-                            None,
-                        ));
+                        .unwrap_or_else(|| {
+                            crate::validators::Validator::new(
+                                crate::validators::TypeValidator::Any {},
+                                None,
+                                None,
+                                None,
+                            )
+                        });
                     let nmap = crate::containers::NotifyingMap::new_empty(
                         py,
                         key_validator.clone(),
@@ -1255,19 +1262,19 @@ impl TypeValidator {
                         object.map(|m| m.clone().unbind()),
                     )?;
                     for (k, v) in dict.iter() {
-                        let validated_key = key.as_ref()
+                        let validated_key = key
+                            .as_ref()
                             .map(|validator| validator.validate(name, object, &k))
                             .unwrap_or_else(|| Ok(k.clone()))?;
                         let validated_value = value_validator
                             .as_ref()
                             .map(|validator| validator.validate(name, object, &v))
                             .unwrap_or_else(|| Ok(v.clone()))?;
-                        nmap.get().values_bound(py).set_item(
-                            &validated_key,
-                            &validated_value,
-                        )?;
+                        nmap.get()
+                            .values_bound(py)
+                            .set_item(&validated_key, &validated_value)?;
                     }
-                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap, &dict)?;
+                    crate::containers::NotifyingMap::sync_values_from_dict(&nmap, dict)?;
                     Ok(nmap.into_any())
                 } else {
                     validation_error!("notifying map", name, object, value)
@@ -1767,9 +1774,7 @@ impl Clone for TypeValidator {
                 item: item.clone(),
                 validation_mode: *validation_mode,
             },
-            Self::NotifyingList { item } => Self::NotifyingList {
-                item: item.clone(),
-            },
+            Self::NotifyingList { item } => Self::NotifyingList { item: item.clone() },
             Self::NotifyingMap { key, value } => Self::NotifyingMap {
                 key: key.clone(),
                 value: value.clone(),
