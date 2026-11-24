@@ -135,6 +135,20 @@ def test_nested_tuple_coercion_preserves_original_cause():
     assert "invalid literal for int() with base 10: 'bad'" in str(exc.value.__cause__)
 
 
+def test_union_coercion_reports_grouped_cause():
+    class A(Ators):
+        value: Member[int | float, Any] = member().coerce()
+
+    a = A()
+    with pytest.raises(TypeError) as exc:
+        a.value = "bad"
+
+    assert isinstance(exc.value.__cause__, BaseExceptionGroup)
+    assert len(exc.value.__cause__.exceptions) == 2
+    assert "Validation failed for member 'value' of" in str(exc.value)
+    assert "Failed to coerce" in str(exc.value.__cause__)
+
+
 def test_nested_container_coercion_preserves_original_cause():
     class TupleBox(Ators):
         value: Member[tuple[tuple[int, int], int], Any] = member().coerce()

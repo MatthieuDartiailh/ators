@@ -1245,26 +1245,14 @@ impl TypeValidator {
                         .collect::<Vec<_>>(),
                 )?
                 .unbind();
-                let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
-                    format!("Failed to validate {} against union members", value.repr()?),
-                    group_items,
-                ));
-                let outer = if let Some(member_name) = name {
-                    let target = match object {
-                        Some(obj) => obj.repr()?,
-                        None => value.repr()?,
-                    };
-                    pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Validation failed for member '{}' of {}",
-                        member_name, target
-                    ))
-                } else {
-                    pyo3::exceptions::PyTypeError::new_err(format!(
-                        "Validation failed for {}",
-                        value.repr()?
-                    ))
-                };
-                Err(crate::utils::err_with_cause(py, outer, group))
+                let exception_group = py
+                    .import(intern!(py, "builtins"))?
+                    .getattr(intern!(py, "ExceptionGroup"))?
+                    .call1((
+                        format!("Failed to validate {} against union members", value.repr()?),
+                        group_items,
+                    ))?;
+                Err(pyo3::PyErr::from_value(exception_group))
             }
             Self::GenericAttributes { type_, attributes } => {
                 let t = type_.bind(value.py());

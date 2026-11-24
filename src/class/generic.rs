@@ -142,7 +142,6 @@ fn ensure_typevar_slot_id<'py>(
     Ok(())
 }
 
-#[allow(clippy::needless_borrow)]
 pub(crate) fn same_typevar_slot(
     left: &Bound<'_, PyAny>,
     right: &Bound<'_, PyAny>,
@@ -573,7 +572,6 @@ fn enforce_within_constraints(parent: &Bound<'_, PyAny>, arg: &Bound<'_, PyAny>)
 ///
 /// This resolves and validates type arguments, computes the canonical origin
 /// argument mapping, and reuses an existing specialisation when available.
-#[allow(clippy::needless_borrow)]
 #[pyfunction]
 pub fn create_ators_specialized_subclass<'py>(
     cls: &Bound<'py, PyType>,
@@ -662,9 +660,9 @@ pub fn create_ators_specialized_subclass<'py>(
         .zip(params_tuple.iter())
     {
         if is_type_var(&arg)? {
-            enforce_narrower_typevar_bound(&exposed, &arg)?;
+            enforce_narrower_typevar_bound(exposed, &arg)?;
         }
-        enforce_within_constraints(&exposed, &arg)?;
+        enforce_within_constraints(exposed, &arg)?;
         if is_type_var(&arg)? {
             // A replacement TypeVar is the same logical generic slot as the
             // exposed parameter it binds to during a specialization.  If we
@@ -674,7 +672,7 @@ pub fn create_ators_specialized_subclass<'py>(
             // shared slot so unrelated `T` names remain distinct while legitimate
             // local rebindings stay tied to the same owner-scoped parameter.
             let slot_attr = intern!(py, "__ators_typevar_slot__");
-            match (typevar_slot_id(&exposed)?, typevar_slot_id(&arg)?) {
+            match (typevar_slot_id(exposed)?, typevar_slot_id(&arg)?) {
                 (Some(exposed_slot), Some(arg_slot)) if exposed_slot == arg_slot => {}
                 (Some(exposed_slot), Some(arg_slot)) => {
                     if exposed_slot.starts_with("template:") {
@@ -713,11 +711,11 @@ pub fn create_ators_specialized_subclass<'py>(
             }
         }
 
-        if same_typevar_slot(&exposed, &arg)? {
+        if same_typevar_slot(exposed, &arg)? {
             if !arg.is(exposed) {
                 let mut to_replace = Vec::new();
                 for (key, value) in full_bindings.iter() {
-                    if same_typevar_slot(&value, &exposed)? {
+                    if same_typevar_slot(&value, exposed)? {
                         to_replace.push(key.unbind());
                     }
                 }
@@ -730,7 +728,7 @@ pub fn create_ators_specialized_subclass<'py>(
 
         let mut to_replace = Vec::new();
         for (key, value) in full_bindings.iter() {
-            if same_typevar_slot(&value, &exposed)? {
+            if same_typevar_slot(&value, exposed)? {
                 to_replace.push(key.unbind());
             }
         }

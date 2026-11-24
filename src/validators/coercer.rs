@@ -7,7 +7,7 @@
 |----------------------------------------------------------------------------*/
 /// Structures used to manage coercion behaviors for validators.
 use pyo3::{
-    Bound, Py, PyAny, PyResult, PyTypeInfo, Python, pyclass,
+    Bound, Py, PyAny, PyResult, PyTypeInfo, Python, intern, pyclass,
     types::{
         PyAnyMethods, PyBool, PyBytes, PyComplex, PyDict, PyDictMethods, PyFloat, PyFrozenSet,
         PyInt, PyList, PyListMethods, PyMapping, PyMappingMethods, PySequence, PySequenceMethods,
@@ -16,7 +16,7 @@ use pyo3::{
 };
 
 use super::TypeValidator;
-use crate::utils::{TupleBuilder, create_behavior_callable_checker, err_with_cause};
+use crate::utils::{TupleBuilder, create_behavior_callable_checker};
 
 create_behavior_callable_checker!(co_callv, Coercer, CallValue, 1);
 create_behavior_callable_checker!(co_callmovi, Coercer, CallNameObjectValueInit, 4);
@@ -247,26 +247,11 @@ impl Coercer {
                         err.into_iter().map(|e| e.into_value(py)).collect::<Vec<_>>(),
                     )?
                     .unbind();
-                    let group = pyo3::exceptions::PyBaseExceptionGroup::new_err((
-                        format!("Failed to coerce {} against union members", value.repr()?),
-                        group_items,
-                    ));
-                    let target = match object {
-                        Some(obj) => obj.repr()?,
-                        None => value.repr()?,
-                    };
-                    let outer = if let Some(member_name) = name {
-                        pyo3::exceptions::PyTypeError::new_err(format!(
-                            "Failed to coerce member '{}' of {}",
-                            member_name, target
-                        ))
-                    } else {
-                        pyo3::exceptions::PyTypeError::new_err(format!(
-                            "Failed to coerce {}",
-                            target
-                        ))
-                    };
-                    Err(err_with_cause(py, outer, group))
+                    let exception_group = py
+                        .import(intern!(py, "builtins"))?
+                        .getattr(intern!(py, "ExceptionGroup"))?
+                        .call1((format!("Failed to coerce {} against union members", value.repr()?), group_items))?;
+                    Err(pyo3::PyErr::from_value(exception_group))
                 },
                 TypeValidator::GenericAttributes { type_, .. } => {
                     type_.bind(py).call1((value,))
