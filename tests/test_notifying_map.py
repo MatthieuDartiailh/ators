@@ -7,6 +7,8 @@
 # --------------------------------------------------------------------------------------
 """Tests for ordered NotifyingMap behavior."""
 
+from typing import ForwardRef
+
 import pytest
 
 from ators import (
@@ -29,12 +31,139 @@ class _BareObservableNotifyingMapOwner(Ators, observable=True):
     items: NotifyingMap = member()
 
 
+class _CoercedNotifyingMapOwner(Ators, observable=True):
+    items: NotifyingMap[str, int] = member().coerce_init()
+
+
+class _ForwardNotifyingMapOwner(Ators, observable=True):
+    items: ForwardRef("NotifyingMap[str, int]") = member()
+
+
+class _GenericNotifyingMapOwner[K, V](Ators, observable=True):
+    items: NotifyingMap[K, V] = member()
+
+
 def test_bare_notifying_map_annotation_in_valid_position():
     obj = _BareObservableNotifyingMapOwner(items={"a": 1, "b": "two"})
 
     assert list(obj.items.items()) == [("a", 1), ("b", "two")]
     obj.items.add("c", 3)
     assert list(obj.items.items()) == [("a", 1), ("b", "two"), ("c", 3)]
+
+
+def test_notifying_map_public_views_repr_del_and_pop_paths():
+    obj = _ObservableNotifyingMapOwner(items={"a": 1, "b": 2})
+
+    assert obj.items.keys() == ["a", "b"]
+    assert obj.items.values() == [1, 2]
+    assert obj.items.items() == [("a", 1), ("b", 2)]
+    assert repr(obj.items) == "NotifyingMap({'a': 1, 'b': 2})"
+    assert obj.items.pop("missing", 99) == 99
+    with pytest.raises(KeyError):
+        obj.items.pop("missing")
+
+    del obj.items["a"]
+    assert list(obj.items) == ["b"]
+    with pytest.raises(KeyError):
+        del obj.items["missing"]
+
+
+def test_notifying_map_update_setdefault_and_move_before_paths():
+    obj = _ObservableNotifyingMapOwner(items={"a": 1})
+
+    obj.items.update({"b": 2})
+    obj.items.update([("c", 3)])
+    obj.items.update(d=4)
+    assert list(obj.items) == ["a", "b", "c", "d"]
+
+    assert obj.items.setdefault("a", 99) == 1
+    assert obj.items.setdefault("e", 5) == 5
+    assert list(obj.items) == ["a", "b", "c", "d", "e"]
+
+    obj.items.move("a", "c")
+    assert list(obj.items) == ["b", "a", "c", "d", "e"]
+    obj.items.move("a", "a")
+    assert list(obj.items) == ["b", "a", "c", "d", "e"]
+
+
+def test_notifying_map_update_from_mapping_protocol():
+    class MappingProtocol:
+        def keys(self):
+            return ["a", "b"]
+
+        def __getitem__(self, key):
+            return {"a": 1, "b": 2}[key]
+
+    obj = _ObservableNotifyingMapOwner(items={})
+    obj.items.update(MappingProtocol())
+    assert list(obj.items.items()) == [("a", 1), ("b", 2)]
+
+
+def test_forward_and_generic_notifying_map_annotations():
+    forward = _ForwardNotifyingMapOwner(items={"a": 1})
+    assert list(forward.items.items()) == [("a", 1)]
+    forward.items["b"] = 2
+    assert list(forward.items.items()) == [("a", 1), ("b", 2)]
+
+    generic = _GenericNotifyingMapOwner[str, int](items={"a": 1})
+    assert list(generic.items.items()) == [("a", 1)]
+    generic.items["b"] = 2
+    assert list(generic.items.items()) == [("a", 1), ("b", 2)]
+    with pytest.raises(TypeError):
+        generic.items["bad"] = "bad"
+
+
+def test_coerced_notifying_map_member():
+    obj = _CoercedNotifyingMapOwner(items={"a": "1", "b": "2"})
+
+    assert list(obj.items.items()) == [("a", 1), ("b", 2)]
+    with pytest.raises(TypeError):
+        obj.items["c"] = "3"
+
+
+def test_notifying_map_direct_batch_api_and_assignment_clone():
+    obj = _ObservableNotifyingMapOwner(items={"a": 1})
+    changes = []
+    observe(obj, "items", changes.append)
+
+    obj.items.begin_batch_notifications()
+    obj.items["b"] = 2
+    obj.items.move("b", None)
+    obj.items.end_batch()
+
+    assert len(changes) == 1
+    assert len(changes[0].operations) == 2
+
+    other = _ObservableNotifyingMapOwner(items=obj.items)
+    assert list(other.items.items()) == [("a", 1), ("b", 2)]
+    assert other.items is not obj.items
+
+
+def test_container_operation_reprs_and_payload_properties():
+    obj = _ObservableNotifyingMapOwner(items={"a": 1})
+    changes = []
+    observe(obj, "items", changes.append)
+
+    obj.items["b"] = 2
+    obj.items["a"] = 10
+    obj.items.move("b", None)
+    del obj.items["a"]
+
+    operations = [operation for change in changes for operation in change.operations]
+    assert repr(operations[0]).startswith("Added(index=")
+    assert operations[0].index == 1
+    assert operations[0].payload == ("b", 2)
+    assert repr(operations[1]).startswith("Replaced(index=")
+    assert operations[1].index == 0
+    assert operations[1].old_value == ("a", 1)
+    assert operations[1].new_value == ("a", 10)
+    assert repr(operations[2]).startswith("Moved(from_index=")
+    assert operations[2].from_index == 1
+    assert operations[2].to_index == 1
+    assert operations[2].payload == ("b", 2)
+    assert repr(operations[3]).startswith("Removed(old_index=")
+    assert operations[3].old_index == 0
+    assert operations[3].payload == ("a", 10)
 
 
 def test_notifying_map_add_move_remove_preserve_order():

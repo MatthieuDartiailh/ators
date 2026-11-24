@@ -8,6 +8,7 @@
 """Tests for NotifyingList behavior."""
 
 import pickle
+from typing import ForwardRef
 
 import pytest
 
@@ -32,12 +33,154 @@ class _BareObservableNotifyingListOwner(Ators, observable=True):
     items: NotifyingList = member()
 
 
+class _CoercedNotifyingListOwner(Ators, observable=True):
+    items: NotifyingList[int] = member().coerce_init()
+
+
+class _ForwardNotifyingListOwner(Ators, observable=True):
+    items: ForwardRef("NotifyingList[int]") = member()
+
+
+class _GenericNotifyingListOwner[T](Ators, observable=True):
+    items: NotifyingList[T] = member()
+
+
 def test_bare_notifying_list_annotation_in_valid_position():
     obj = _BareObservableNotifyingListOwner(items=[1, "two", 3])
 
     assert list(obj.items) == [1, "two", 3]
     obj.items.append("four")
     assert list(obj.items) == [1, "two", 3, "four"]
+
+
+def test_notifying_list_insert_extend_remove_pop_and_clear():
+    obj = _ObservableNotifyingListOwner(items=[1, 2])
+
+    obj.items.insert(1, 10)
+    obj.items.extend([20, 30])
+    assert list(obj.items) == [1, 10, 2, 20, 30]
+
+    obj.items.remove(10)
+    assert list(obj.items) == [1, 2, 20, 30]
+
+    assert obj.items.pop(-1) == 30
+    assert obj.items.pop(-2) == 2
+    obj.items.clear()
+    assert list(obj.items) == []
+
+    with pytest.raises(ValueError):
+        obj.items.remove(999)
+    with pytest.raises(IndexError):
+        obj.items.pop(0)
+    with pytest.raises(IndexError):
+        obj.items.pop(100)
+
+
+def test_notifying_list_iadd_imul_and_validation_errors():
+    obj = _ObservableNotifyingListOwner(items=[1, 2])
+
+    obj.items += [3, 4]
+    assert list(obj.items) == [1, 2, 3, 4]
+
+    obj.items *= 2
+    assert list(obj.items) == [1, 2, 3, 4, 1, 2, 3, 4]
+
+    obj.items *= 0
+    assert list(obj.items) == []
+
+    with pytest.raises(TypeError):
+        obj.items += ["bad"]
+
+
+def test_notifying_list_move_and_index_error_paths():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3])
+
+    obj.items.move_item(0, 0)
+    assert list(obj.items) == [1, 2, 3]
+    with pytest.raises(IndexError):
+        obj.items.move_item(100, 0)
+    with pytest.raises(IndexError):
+        obj.items.move_item(0, 100)
+
+    with pytest.raises(IndexError):
+        obj.items[100] = 10
+    with pytest.raises(IndexError):
+        del obj.items[100]
+
+
+def test_container_operation_reprs_and_payload_properties():
+    obj = _ObservableNotifyingListOwner(items=[1, 2, 3])
+
+    changes = []
+    observe(obj, "items", changes.append)
+    obj.items[1] = 20
+    obj.items.move_item(0, 2)
+    del obj.items[2:]
+
+    operations = [operation for change in changes for operation in change.operations]
+
+    assert repr(operations[0]).startswith("Replaced(index=")
+    assert operations[0].index == 1
+    assert operations[0].old_value == 2
+    assert operations[0].new_value == 20
+    assert repr(operations[1]).startswith("Moved(from_index=")
+    assert operations[1].from_index == 0
+    assert operations[1].to_index == 2
+    assert operations[1].payload == 1
+    assert repr(operations[2]).startswith("Removed(old_index=")
+    assert operations[2].old_index == 2
+    assert operations[2].payload == 1
+
+
+def test_forward_and_generic_notifying_list_annotations():
+    forward = _ForwardNotifyingListOwner(items=[1, 2])
+    assert list(forward.items) == [1, 2]
+    forward.items.append(3)
+    assert list(forward.items) == [1, 2, 3]
+
+    generic = _GenericNotifyingListOwner[int](items=[1, 2])
+    assert list(generic.items) == [1, 2]
+    generic.items.append(3)
+    assert list(generic.items) == [1, 2, 3]
+    with pytest.raises(TypeError):
+        generic.items.append("bad")
+
+
+def test_coerced_notifying_list_member():
+    obj = _CoercedNotifyingListOwner(items=["1", "2"])
+
+    assert list(obj.items) == [1, 2]
+    with pytest.raises(TypeError):
+        obj.items.append("3")
+
+
+def test_notifying_list_direct_batch_api_and_assignment_clone():
+    obj = _ObservableNotifyingListOwner(items=[1])
+    changes = []
+    observe(obj, "items", changes.append)
+
+    obj.items.begin_batch_notifications()
+    obj.items.append(2)
+    obj.items.append(3)
+    obj.items.end_batch()
+
+    assert len(changes) == 1
+    assert len(changes[0].operations) == 2
+
+    other = _ObservableNotifyingListOwner(items=obj.items)
+    assert list(other.items) == [1, 2, 3]
+    assert other.items is not obj.items
+
+
+def test_notifying_list_observer_error_is_grouped():
+    obj = _ObservableNotifyingListOwner(items=[1])
+
+    def fail(change):
+        raise RuntimeError("observer failure")
+
+    observe(obj, "items", fail)
+    with pytest.raises(BaseExceptionGroup):
+        obj.items.append(2)
 
 
 def test_notifying_list_annotation_creates_notifying_container():

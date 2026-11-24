@@ -1226,9 +1226,7 @@ impl TypeValidator {
                 key,
                 value: value_validator,
             } => {
-                if let Ok(nmap) = value.cast::<crate::containers::NotifyingMap>()
-                    && nmap.get().matches_assignment_context(name, object)
-                {
+                if let Ok(nmap) = value.cast::<crate::containers::NotifyingMap>() {
                     return Ok(
                         crate::containers::NotifyingMap::clone_for_assignment(nmap)?.into_any()
                     );

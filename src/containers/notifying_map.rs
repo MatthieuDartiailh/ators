@@ -16,7 +16,7 @@ use crate::{
     class::AtorsBase,
     containers::{
         ContainerOperation,
-        common::{NotificationBuffer, matches_assignment_context, notification_context},
+        common::{NotificationBuffer, notification_context},
     },
     validators::Validator,
 };
@@ -102,14 +102,6 @@ impl NotifyingMap {
         )
     }
 
-    pub(crate) fn matches_assignment_context<'py>(
-        &self,
-        member_name: Option<&str>,
-        object: Option<&Bound<'py, AtorsBase>>,
-    ) -> bool {
-        matches_assignment_context(&self.member_name, &self.object, member_name, object)
-    }
-
     pub(crate) fn clone_for_assignment<'py>(
         source: &Bound<'py, NotifyingMap>,
     ) -> PyResult<Bound<'py, NotifyingMap>> {
@@ -129,14 +121,15 @@ impl NotifyingMap {
             member_name.as_deref(),
             object,
         )?;
-        let values = unsafe { &*copy.get().values.get() }.bind(source.py());
+        let source_values = map.values_bound(source.py());
+        let copy_values = unsafe { &*copy.get().values.get() }.bind(source.py());
         let order = unsafe { &*map.order.get() };
         for key in order {
             let key_bound = key.bind(source.py());
-            let value = values
+            let value = source_values
                 .get_item(key_bound)?
                 .expect("stored key must still exist");
-            values.set_item(key_bound, &value)?;
+            copy_values.set_item(key_bound, &value)?;
         }
         unsafe {
             (*copy.get().order.get()) =
