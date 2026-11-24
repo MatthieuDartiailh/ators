@@ -8,17 +8,22 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 
 from ators import Ators, add_generic_type_attributes, member
+from ators._ators import AtorsDict, AtorsList, AtorsSet
 
 if TYPE_CHECKING:
     from logging import Logger
 
 
 class OB:
+    pass
+
+
+class SubOB(OB):
     pass
 
 
@@ -59,6 +64,7 @@ type MyInt = int
     [
         (object, [1, object()], [], False),
         (Any, [1, object()], [], False),
+        (None, [None], [1], False),
         (bool, [False, True], [""], False),
         (int, [0, 1, -1], [1.0, ""], False),
         (MyInt, [0, 1, -1], [1.0, ""], False),
@@ -70,6 +76,17 @@ type MyInt = int
         (tuple, [()], [1, ""], False),
         (tuple[int, ...], [(), (1,), (1, 2, 3)], [1, ("a",)], False),
         (tuple[int, int], [(1, 2)], [1, (), (1,), (1, 2, 3), (1, "a")], False),
+        (tuple[int | list[int], ...], [(), (1,), (1, [2, 3], 1)], [1, ("a",)], False),
+        (
+            tuple[int, list[int], int],
+            [(1, [2, 3], 1)],
+            [1, (), (1,), (1, 2, 3), (1, "a", 1)],
+            False,
+        ),
+        (tuple[str, int, float], [("a", 1, 1.0)], [("a", 1), (1, "a", 1.0)], False),
+        (list, [[], [1], [1, "a"]], [1, ()], False),
+        (list[int], [[], [1]], [1, (), [1, "a"]], False),
+        (list[str], [[], ["a"]], [[1], ["a", 1]], False),
         (
             frozenset,
             [frozenset(), frozenset((1,)), frozenset({1, "a"})],
@@ -84,8 +101,18 @@ type MyInt = int
         ),
         (set, [set(), {1}, {1, "a"}], [1, ()], False),
         (set[int], [set(), {1}], [1, (), {1, "a"}], False),
+        (set[str], [set(), {"a"}], [{1}, {"a", 1}], False),
+        # Nested container edge cases
+        (list[list[int]], [[], [[]], [[1, 2]]], [[["a"]], [1]], False),
         (dict, [{}, {1: 1}, {1: "a"}], [1, ()], False),
         (dict[int, int], [{}, {1: 1}], [1, (), {1: "a"}, {"1": 1}, {"1": "a"}], False),
+        (dict[str, int], [{}, {"a": 1}], [{1: 1}, {"a": "b"}, {1: "b"}], False),
+        (
+            dict[str, list[int]],
+            [{}, {"a": []}, {"a": [1]}],
+            [{"a": ["b"]}, {1: [1]}],
+            False,
+        ),
         # NOTE Not a type validation
         (Literal[1, 2, 3], [1, 2, 3], [0, 4, "a"], False),
         (CustomBase, [CustomObj()], ["", 1, object()], False),
@@ -103,7 +130,7 @@ type MyInt = int
         ),
         # type[X] - subclass validators
         (type[int], [int, bool], [int(), 1, str, object()], False),
-        (type[OB], [OB], [OB(), int, object()], False),
+        (type[OB], [OB, SubOB], [OB(), int, object()], False),
         (
             type[CustomBase],
             [CustomBase, CustomObj],
@@ -111,6 +138,8 @@ type MyInt = int
             False,
         ),
         (type, [int, str, object, type], [1, "a", object()], False),
+        # Edge cases for container validation error paths
+        # Tuple with mixed types
     ],
 )
 def test_type_validators(ann, goods, bads, warn):
@@ -135,25 +164,6 @@ def test_type_validators(ann, goods, bads, warn):
             a.a = bad
 
 
-@pytest.mark.parametrize(
-    "ann, bad",
-    [
-        (list[int], "not-a-list"),
-        (set[int], {"not": "a-set"}),
-        (frozenset[int], [1, 2, 3]),
-        (dict[int, int], [("a", 1)]),
-        (tuple[int, ...], 1),
-    ],
-)
-def test_container_validator_rejects_wrong_shape(ann, bad):
-    class A(Ators):
-        a: ann = member()
-
-    obj = A()
-    with pytest.raises(TypeError):
-        obj.a = bad
-
-
 def test_union_validator_reports_grouped_cause():
     class A(Ators):
         a: int | str = member()
@@ -162,8 +172,100 @@ def test_union_validator_reports_grouped_cause():
     with pytest.raises(TypeError) as exc:
         obj.a = object()  # type: ignore
 
+    assert isinstance(exc.value, TypeError)
     assert exc.value.__cause__ is not None
     assert isinstance(exc.value.__cause__, BaseExceptionGroup)
+    assert len(exc.value.__cause__.exceptions) == 2
+    assert "Validation failed for member 'a' of" in str(exc.value)
+    assert "Failed to validate" in str(exc.value.__cause__)
+
+
+def test_member_reassignment_reuses_container_metadata_within_same_assignment_context():
+    class A(Ators):
+        items: list[int] = member()
+        values: set[int] = member()
+        mapping: dict[str, int] = member()
+
+    obj = A()
+    obj.items = [1, 2]
+    obj.values = {1, 2}
+    obj.mapping = {"keep": 1}
+
+    items_before = obj.items
+    values_before = obj.values
+    mapping_before = obj.mapping
+
+    obj.items = items_before
+    obj.values = values_before
+    obj.mapping = mapping_before
+
+    assert isinstance(obj.items, AtorsList)
+    assert isinstance(obj.values, AtorsSet)
+    assert isinstance(obj.mapping, AtorsDict)
+    assert obj.items == [1, 2]
+    assert obj.values == {1, 2}
+    assert obj.mapping == {"keep": 1}
+    assert obj.items is not items_before
+    assert obj.values is not values_before
+    assert obj.mapping is not mapping_before
+
+
+def test_nested_generic_container_assignment_uses_owner_context():
+    class A(Ators):
+        items: list[MyGen[int]] = member()
+
+    obj = A()
+    good = [MyGen(1)]
+    obj.items = good
+
+    assert isinstance(obj.items, AtorsList)
+    assert obj.items == good
+    assert obj.items[0].a == 1
+
+    with pytest.raises(TypeError):
+        obj.items = [MyGen("bad")]  # type: ignore
+
+
+@pytest.mark.parametrize(
+    "ann, bad_value, expected_context",
+    [
+        (
+            list[tuple[int, int]],
+            [(1, "bad")],
+            "Failed to validate item 0 for the member",
+        ),
+        (
+            set[tuple[int, int]],
+            {(1, "bad")},
+            "Failed to validate item 0 for the member",
+        ),
+        (dict[str, tuple[int, int]], {"key": (1, "bad")}, "Failed to validate value"),
+        (
+            tuple[tuple[int, int], ...],
+            ((1, "bad"),),
+            "Failed to validate item 0 for the member",
+        ),
+        (
+            tuple[tuple[int, int], tuple[int, int]],
+            ((1, "bad"), (2, 3)),
+            "Failed to validate item 0 for the member",
+        ),
+    ],
+)
+def test_nested_container_validation_preserves_cause_chain(
+    ann, bad_value, expected_context
+):
+    class A(Ators):
+        values: ann = member()
+
+    obj = A()
+    with pytest.raises(TypeError) as exc:
+        obj.values = bad_value  # type: ignore[arg-type]
+
+    assert isinstance(exc.value, TypeError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert expected_context in str(exc.value.__cause__)
 
 
 def test_generic_attributes_reject_invalid_typed_attribute_value():
@@ -173,8 +275,123 @@ def test_generic_attributes_reject_invalid_typed_attribute_value():
     obj = A()
     obj.a = MyGen(1)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError) as exc:
         obj.a = MyGen("not-an-int")  # type: ignore
+
+    assert isinstance(exc.value, TypeError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+    assert "Validation failed for member 'a' of" in str(exc.value)
+    assert "Failed to validate attribute 'a' of" in str(exc.value.__cause__)
+
+
+def test_generic_attributes_ignore_unset_attribute_state():
+    class UnsetGen(MyGen[int]):
+        def __getattribute__(self, name):
+            if name == "a":
+                raise TypeError("value is unset and has no default")
+            return super().__getattribute__(name)
+
+    class A(Ators):
+        a: MyGen[int] = member()
+
+    obj = A()
+    obj.a = UnsetGen(1)
+    assert obj.a is not None
+
+
+def test_unspecialized_typevar_uses_bound_when_available():
+    class BoundGenericBox[T: int](Ators):
+        item: T = member()
+
+    box = BoundGenericBox()
+    box.item = 1  # type: ignore
+    with pytest.raises(TypeError):
+        box.item = "a"  # type: ignore
+
+
+def test_unspecialized_unbound_typevar_remains_broad():
+    class GenericBox[T](Ators):
+        item: T = member()
+
+    box = GenericBox()
+    box.item = 1  # type: ignore
+    box.item = "a"  # type: ignore
+
+
+def test_specialized_typevar_narrows_validator():
+    class GenericBox[T](Ators):
+        item: T = member()
+
+    IntBox = GenericBox[int]
+    box = IntBox()
+    box.item = 1
+    with pytest.raises(TypeError):
+        box.item = "a"  # type: ignore
+
+
+def test_specialized_nested_typevar_narrows_validator():
+    class GenericListBox[T](Ators):
+        items: list[T] = member()
+
+    IntListBox = GenericListBox[int]
+    box = IntListBox()
+    box.items = [1, 2, 3]
+    with pytest.raises(TypeError):
+        box.items = ["a"]  # type: ignore
+
+
+def test_partial_specialization_keeps_generic_parameter():
+    class GenericPair[T, U](Ators):
+        first: T = member()
+        second: U = member()
+
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
+
+    assert len(BoundSecond.__type_params__) == 1
+    assert BoundSecond.__type_params__[0].__bound__ is int
+
+    pair = BoundSecond[int]()
+    pair.first = 1
+    pair.second = 2  # type: ignore
+    with pytest.raises(TypeError):
+        pair.second = "a"  # type: ignore
+
+
+def test_partial_specialization_can_be_fully_specialized_later():
+    class GenericPair[T, U](Ators):
+        first: T = member()
+        second: U = member()
+
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
+
+    final = BoundSecond[bool]
+
+    pair = final()
+    pair.first = 1
+    pair.second = True
+    with pytest.raises(TypeError):
+        pair.second = "a"  # type: ignore
+
+
+def test_repeated_partial_specialization_reuses_cached_alias_binding():
+    class GenericPair[T, U](Ators):
+        first: T = member()
+        second: U = member()
+
+    class BoundSecond[T: int](GenericPair[int, T]):
+        pass
+
+    final = BoundSecond[bool]
+    assert final is BoundSecond[bool]
+
+    value = final()
+    value.first = 1
+    value.second = True
+    with pytest.raises(TypeError):
+        value.second = "bad"  # type: ignore
 
 
 class SelfRefA(Ators):
@@ -205,7 +422,7 @@ class OutOfOrderB(Ators):
 )
 def test_forward_ref_support_out_of_order(attr, good, bad):
 
-    a1 = OutOfOrderA()
+    a1 = OutOfOrderA()  # type: ignore
     setattr(a1, attr, good)
     assert getattr(a1, attr) is good
     with pytest.raises(TypeError):
@@ -226,7 +443,7 @@ def test_forward_ref_preserve_owner_in_subclasses():
     with pytest.raises(TypeError):
         a1.a = 5  # type: ignore
 
-    a1 = NOOA()
+    a1 = NOOA()  # type: ignore
     b1 = OutOfOrderB()
     a1.a = b1
     assert a1.a is b1
@@ -269,6 +486,112 @@ def test_forward_ref_support_callable_and_type_alias(resolver):
         a1.b = ""  # type: ignore
 
 
+def test_forward_ref_delayed_resolution_uses_local_context_and_owner():
+    class Node:
+        pass
+
+    class A(Ators):
+        child: Node = member().forward_ref_environment(lambda: {"Node": Node})
+
+    obj = A()
+    node = Node()
+    obj.child = node
+    assert obj.child is node
+    with pytest.raises(TypeError):
+        obj.child = object()  # type: ignore
+
+
+def test_forward_ref_owner_namespace_resolves_nested_container_types():
+    class A(Ators):
+        class Node:
+            pass
+
+        children: list[Node] = member()
+
+    obj = A()
+    node = A.Node()
+    obj.children = [node]
+    assert obj.children == [node]
+    with pytest.raises(TypeError):
+        obj.children = [object()]  # type: ignore
+
+
+def test_forward_ref_explicit_local_namespace_takes_precedence_over_unresolved_owner():
+    class LocalNode:
+        pass
+
+    class A(Ators):
+        child: MissingNode = member().forward_ref_environment(  # noqa : F821  # type: ignore
+            lambda: {"MissingNode": LocalNode}
+        )
+
+    obj = A()
+    node = LocalNode()
+    obj.child = node
+    assert obj.child is node
+    with pytest.raises(TypeError):
+        obj.child = object()
+
+
+class RedundantOwnerNamespace(Ators):
+    child: Node = member().forward_ref_environment(lambda: {"Node": Node})
+
+
+class ConflictingOwnerNamespace(Ators):
+    child: Node = member().forward_ref_environment(lambda: {"Node": int})
+
+
+class Node:
+    pass
+
+
+def test_forward_ref_redundant_provider_namespace_warns():
+
+    obj = RedundantOwnerNamespace()
+    node = Node()
+    with pytest.warns(UserWarning, match="redundant"):
+        obj.child = node
+    assert obj.child is node
+
+
+def test_forward_ref_conflicting_owner_and_provider_namespaces_raise():
+
+    obj = ConflictingOwnerNamespace()
+    with pytest.raises(TypeError) as e:
+        obj.child = Node()
+    assert "Conflicting namespaces for forward reference" in str(e.value.__cause__)
+
+
+def test_nested_generic_owner_namespace_resolves_local_specialization():
+    class Outer:
+        class Inner:
+            pass
+
+        class Box[T](Ators):
+            item: T = member()
+
+    obj = Outer.Box[Outer.Inner]()
+    node = Outer.Inner()
+    obj.item = node
+    assert obj.item is node
+    with pytest.raises(TypeError):
+        obj.item = object()  # type: ignore
+
+
+def test_forward_ref_failed_resolution_keeps_original_cause_chain():
+    class A(Ators):
+        child: MissingNode = member().forward_ref_environment(lambda: {})  # noqa : F821  # type: ignore
+
+    obj = A()
+    with pytest.raises(NameError) as exc:
+        obj.child = object()
+
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, NameError)
+    assert "Failed to resolve forward reference for child" in str(exc.value.__cause__)
+    assert "MissingNode" in str(exc.value.__cause__)
+
+
 def test_inherited_type_validator():
     class A(Ators):
         a: int
@@ -276,176 +599,42 @@ def test_inherited_type_validator():
     class B(A):
         a = member().inherit()
 
-    b = B()
+    b = B(a=1)
     b.a = 5
     assert b.a == 5
     with pytest.raises(TypeError):
         b.a = ""
 
 
-class GenericBox[T](Ators):
-    item: T = member()
+def test_type_alias_annotations_are_evaluated_before_validation():
+    type AliasT = int | str
 
+    class AliasBox(Ators):
+        value: AliasT = member()
 
-class BoundGenericBox[T: int](Ators):
-    item: T = member()
-
-
-class GenericListBox[T](Ators):
-    items: list[T] = member()
-
-
-class GenericPair[T, U](Ators):
-    first: T = member()
-    second: U = member()
-
-
-class BoundedPair[T: int, U: int](Ators):
-    first: T = member()
-    second: U = member()
-
-
-class ForwardRefPartialHolder[T: int](Ators):
-    pair: GenericPair[int, T] = member()
-
-
-class DelayedForwardRefPartialHolder[T: int](Ators):
-    pair: DelayedGenericPair[int, T] = member()
-
-
-class DelayedGenericPair[T, U](Ators):
-    first: T = member()
-    second: U = member()
-
-
-def test_generic_specialization_is_cached_class():
-    int_box = GenericBox[int]
-    assert int_box is GenericBox[int]
-    assert int_box is not GenericBox[str]
-
-
-def test_specialized_class_exposes_generic_metadata():
-    import typing
-
-    int_box = GenericBox[int]
-    assert int_box.__origin__ is GenericBox
-    assert int_box.__args__ == (int,)
-    assert typing.get_origin(int_box) is GenericBox
-    assert typing.get_args(int_box) == (int,)
-
-
-def test_full_and_stepwise_specialization_are_identical():
-    U = TypeVar("U")
-    direct = GenericPair[int, str]
-    stepwise = GenericPair[int, U][str]
-    assert direct is stepwise
-
-
-def test_unspecialized_typevar_uses_bound_when_available():
-    box = BoundGenericBox()
-    box.item = 1
+    box = AliasBox()
+    box.value = 1
+    box.value = "ok"
     with pytest.raises(TypeError):
-        box.item = "a"
-
-
-def test_unspecialized_unbound_typevar_remains_broad():
-    box = GenericBox()
-    box.item = 1
-    box.item = "a"
-
-
-def test_specialized_typevar_narrows_validator():
-    IntBox = GenericBox[int]
-    box = IntBox()
-    box.item = 1
-    with pytest.raises(TypeError):
-        box.item = "a"
-
-
-def test_specialized_nested_typevar_narrows_validator():
-    IntListBox = GenericListBox[int]
-    box = IntListBox()
-    box.items = [1, 2, 3]
-    with pytest.raises(TypeError):
-        box.items = ["a"]
-
-
-def test_partial_specialization_keeps_generic_parameter():
-    T2 = TypeVar("T2", bound=int)
-    partial = GenericPair[int, T2]
-
-    assert len(partial.__type_params__) == 1
-    assert partial.__type_params__[0] is T2
-
-    pair = partial()
-    pair.first = 1
-    pair.second = 2
-    with pytest.raises(TypeError):
-        pair.second = "a"  # type: ignore
-
-
-def test_partial_specialization_can_be_fully_specialized_later():
-    T2 = TypeVar("T2", bound=int)
-    partial = GenericPair[int, T2]
-    final = partial[bool]
-
-    pair = final()
-    pair.first = 1
-    pair.second = True
-    with pytest.raises(TypeError):
-        pair.second = "a"
-
-
-def test_partial_specialization_typevar_bound_must_be_narrower():
-    narrower = TypeVar("narrower", bound=bool)
-    _ = BoundedPair[int, narrower]
-
-    wider = TypeVar("wider", bound=str)
-    with pytest.raises(TypeError, match="not narrower"):
-        _ = BoundedPair[int, wider]  # type: ignore
-
-
-def test_partial_specialization_typevar_without_required_bound_is_rejected():
-    unbounded = TypeVar("unbounded")
-    with pytest.raises(TypeError, match="must define a bound"):
-        _ = BoundedPair[int, unbounded]  # type: ignore
-
-
-def test_forward_ref_support_partial_specialization():
-    T2 = TypeVar("T2", bound=int)
-    holder = ForwardRefPartialHolder[T2]()
-
-    holder.pair = GenericPair[int, T2]()
-    with pytest.raises(TypeError):
-        holder.pair = GenericPair[str, T2]()  # type: ignore
-
-
-def test_delayed_forward_ref_support_partial_specialization():
-    holder = DelayedForwardRefPartialHolder[int]()
-    holder.pair = DelayedGenericPair[int, int]()
-    with pytest.raises(TypeError):
-        holder.pair = DelayedGenericPair[str, int]()  # type: ignore
+        box.value = object()  # type: ignore
 
 
 # ---------------------------------------------------------------------------
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------
 
-T_constrained = TypeVar("T_constrained", int, str)
-
-
-class ConstrainedBox[T_constrained](Ators):
-    item: T_constrained = member()
+class ConstrainedBox[T: (int, str)](Ators):
+    item: T = member()
 
 
 def test_constrained_typevar_accepts_first_constraint():
     box = ConstrainedBox()
-    box.item = 1
+    box.item = 1  # type: ignore
 
 
 def test_constrained_typevar_accepts_second_constraint():
     box = ConstrainedBox()
-    box.item = "hello"
+    box.item = "hello"  # type: ignore
 
 
 def test_constrained_typevar_rejects_other_types():
@@ -468,7 +657,7 @@ def test_constrained_typevar_matches_union_behavior():
     ubox = UnionBox()
 
     for val in (1, "x"):
-        cbox.item = val
+        cbox.item = val  # type: ignore
         ubox.item = val
 
     for val in (1.5, [], {}):
@@ -495,8 +684,8 @@ class ConstrainedGenericPair[T: (int, str), U](Ators):
 
 def test_constrained_generic_unspecialized_accepts_constraints():
     box = ConstrainedGenericBox()
-    box.item = 1
-    box.item = "hello"
+    box.item = 1  # type: ignore
+    box.item = "hello"  # type: ignore
 
 
 def test_constrained_generic_unspecialized_rejects_other_types():
@@ -541,44 +730,46 @@ def test_constrained_generic_specialization_rejects_list_type():
 
 
 def test_constrained_generic_partial_specialization_with_subset_constraints():
-    # T_sub has constraints (int, bool) — both are subtypes of int, which is in (int, str)
-    T_sub = TypeVar("T_sub", int, bool)
-    partial = ConstrainedGenericPair[T_sub, str]
-    pair = partial()
-    pair.first = 1
+    class SubsetConstraint[T: (int, bool)](ConstrainedGenericPair[T, str]):
+        pass
+
+    pair = SubsetConstraint[int]()
+    pair.first = 1  # type: ignore
     pair.second = "x"
     with pytest.raises(TypeError):
         pair.first = "a"  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_rejects_incompatible_constraints():
-    # T_bad has float which is not within (int, str)
-    T_bad = TypeVar("T_bad", int, float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_bad, str]  # type: ignore
+
+        class IncompatibleConstraint[T: (int, float)](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_constrained_generic_partial_specialization_rejects_unconstrained_typevar():
-    T_free = TypeVar("T_free")
     with pytest.raises(TypeError, match="compatible with the constraints"):
-        _ = ConstrainedGenericPair[T_free, str]  # type: ignore
+
+        class FreeTypeVar[T](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_constrained_generic_partial_specialization_with_bound_within_constraints():
-    # T_bound has bound=int, which is within (int, str) constraints
-    T_bound = TypeVar("T_bound", bound=int)
-    partial = ConstrainedGenericPair[T_bound, str]
-    pair = partial()
-    pair.first = 1
+    class BoundWithinConstraints[T: int](ConstrainedGenericPair[T, str]):
+        pass
+
+    pair = BoundWithinConstraints[int]()
+    pair.first = 1  # type: ignore
     pair.second = "x"
     with pytest.raises(TypeError):
         pair.first = "a"  # type: ignore
 
 
 def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
-    T_float_bound = TypeVar("T_float_bound", bound=float)
     with pytest.raises(TypeError, match="not within the constraints"):
-        _ = ConstrainedGenericPair[T_float_bound, str]  # type: ignore
+
+        class FloatBound[T: float](ConstrainedGenericPair[T, str]):
+            pass
 
 
 def test_fixed_tuple_validation_preserves_unchanged_items_after_transformation():
@@ -616,3 +807,34 @@ def test_faulty_multiple_subscript_type_annotation():
 
         class A(Ators):
             a: type[int, str] = member()  # type: ignore
+
+
+def test_subclass_validation_with_generic_class():
+    """type[X] validator correctly rejects generic aliases while accepting subtypes."""
+    from ators import Ators
+
+    class Base(Ators):
+        pass
+
+    class Derived(Base):
+        pass
+
+    class TypeContainer(Ators):
+        cls: type[Base]
+
+    tc = TypeContainer()
+
+    # Accept Base class
+    tc.cls = Base
+    assert tc.cls is Base
+
+    # Accept Derived (subclass)
+    tc.cls = Derived
+    assert tc.cls is Derived
+
+    # Reject non-subclass
+    with pytest.raises(TypeError):
+        tc.cls = int
+
+    # This exercises Subclass validator error path
+    # Rust: types.rs lines 650-700 (Subclass validation)

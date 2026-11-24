@@ -53,17 +53,6 @@ impl Validator {
         }
     }
 
-    fn new_with_extra_value_validators(&self, extra: Vec<ValueValidator>) -> PyResult<Validator> {
-        Ok(Validator {
-            type_validator: self.type_validator.clone(),
-            value_validators: [&self.value_validators, extra.as_slice()]
-                .concat()
-                .into_boxed_slice(),
-            coercer: self.coercer.clone(),
-            init_coercer: self.init_coercer.clone(),
-        })
-    }
-
     #[getter]
     fn get_type_validator(&self) -> TypeValidator {
         self.type_validator.clone()
@@ -81,7 +70,7 @@ impl Validator {
 
     #[getter]
     fn get_init_coercer(&self) -> Option<Coercer> {
-        self.coercer.clone()
+        self.init_coercer.clone()
     }
 }
 
@@ -133,11 +122,6 @@ impl Validator {
                 "No coercer defined for {:?}",
             ))
         }
-    }
-
-    #[inline]
-    pub fn is_set_passthrough(&self) -> bool {
-        matches!(self.type_validator, TypeValidator::Any {}) && self.value_validators.is_empty()
     }
 
     /// Validate the value against the type and value validators, without coercion
