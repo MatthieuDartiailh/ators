@@ -76,7 +76,7 @@ def test_frozendict_rejects_plain_dict_without_coercion():
 
 def test_frozendict_empty_generic_alias_is_treated_as_untyped():
     class A(Ators):
-        mapping: FROZENDICT[()] = member()
+        mapping: FROZENDICT = member()
 
     value = FROZENDICT({"a": 1})
     a = A(mapping=value)
