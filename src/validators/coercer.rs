@@ -269,6 +269,64 @@ impl Coercer {
                         ))
                     }
                 }
+                TypeValidator::NotifyingList { item } => {
+                    let temp = value.cast::<PySequence>()?;
+                    PyList::new(
+                        py,
+                        temp.try_iter()?.map(|v| -> PyResult<Bound<'py, PyAny>> {
+                            let v = v?;
+                            if let Some(item_validator) = item {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &item_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                )
+                            } else {
+                                Ok(v)
+                            }
+                        }).collect::<PyResult<Vec<_>>>()?,
+                    )
+                    .map(|ob| ob.as_any().clone())
+                },
+                TypeValidator::NotifyingMap { key, value: value_validator } => {
+                    let coerced = PyDict::new(py);
+                    if let Ok(mapping) = value.cast::<PyMapping>() {
+                        for item in mapping.items()?.iter() {
+                            let (k, v): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
+                                item.extract()?;
+                            let ck = if let Some(key_validator) = key {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &key_validator.type_validator,
+                                    name,
+                                    object,
+                                    &k,
+                                )?
+                            } else {
+                                k
+                            };
+                            let cv = if let Some(val_validator) = value_validator {
+                                self.coerce_value(
+                                    is_init_coercion,
+                                    &val_validator.type_validator,
+                                    name,
+                                    object,
+                                    &v,
+                                )?
+                            } else {
+                                v
+                            };
+                            coerced.set_item(ck, cv)?;
+                        }
+                    } else {
+                        return Err(pyo3::exceptions::PyTypeError::new_err(
+                            "Cannot coerce a value to NotifyingMap",
+                        ));
+                    }
+                    Ok(coerced.as_any().clone())
+                },
                 TypeValidator::Dict { items, validation_mode: _ } => {
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {

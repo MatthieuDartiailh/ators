@@ -23,6 +23,7 @@ use pyo3::types::PyFrozenDict;
 
 use crate::{
     class::generic::lookup_typevar_binding,
+    containers::{NotifyingList, NotifyingMap},
     event::EventBuilder,
     get_generic_attributes_map,
     member::{DefaultBehavior, DelattrBehavior, Member, MemberBuilder, PreSetattrBehavior},
@@ -45,6 +46,59 @@ impl ValidatorBuildInfo {
     pub fn requires_owner(&self) -> bool {
         self.requires_owner
     }
+}
+
+fn find_nested_notifying_container<'py>(
+    ann: &Bound<'py, PyAny>,
+    tools: &TypeTools<'py>,
+) -> PyResult<Option<&'static str>> {
+    let py = ann.py();
+    if ann.is(py.get_type::<NotifyingList>().as_any()) {
+        return Ok(Some("NotifyingList"));
+    }
+    if ann.is(py.get_type::<NotifyingMap>().as_any()) {
+        return Ok(Some("NotifyingMap"));
+    }
+    let origin = tools.get_origin.call1((ann,))?;
+    if origin.is(py.get_type::<NotifyingList>()) {
+        return Ok(Some("NotifyingList"));
+    }
+    if origin.is(py.get_type::<NotifyingMap>()) {
+        return Ok(Some("NotifyingMap"));
+    }
+    if origin.is_none() {
+        return Ok(None);
+    }
+    let args = tools.get_args.call1((ann,))?.cast_into::<PyTuple>()?;
+    for arg in args.iter() {
+        if let Some(name) = find_nested_notifying_container(&arg, tools)? {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
+fn notifying_guard_error<'py>(
+    py: Python<'py>,
+    attr_key: &Bound<'py, PyAny>,
+    ann: &Bound<'py, PyAny>,
+    message: &str,
+) -> PyErr {
+    let inner = pyo3::exceptions::PyTypeError::new_err(message.to_string());
+    let middle = err_with_cause(
+        py,
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "Failed to build validator for member {attr_key} from annotation {ann}"
+        )),
+        inner,
+    );
+    err_with_cause(
+        py,
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "Failed to build validator for member {attr_key} from annotation {ann}"
+        )),
+        middle,
+    )
 }
 
 /// Types requiring special treatment when encountered in type annotations.
@@ -563,6 +617,79 @@ pub fn build_validator_from_annotation<'py>(
                 ),
                 ValidatorBuildInfo { requires_owner },
             ))
+        } else if origin.is(py.get_type::<NotifyingList>()) {
+            let (item, requires_owner) = if let Ok(item_arg) = args.get_item(0) {
+                let (item_validator, item_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-item")).cast()?,
+                    &item_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                )?;
+                (
+                    Some(BoxedValidator::from(item_validator)),
+                    item_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::NotifyingList { item },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
+            ))
+        } else if origin.is(py.get_type::<NotifyingMap>()) {
+            let (key, key_requires_owner) = if let Ok(key_arg) = args.get_item(0) {
+                let (key_validator, key_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-key")).cast()?,
+                    &key_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                )?;
+                (
+                    Some(BoxedValidator::from(key_validator)),
+                    key_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            let (value, value_requires_owner) = if let Ok(value_arg) = args.get_item(1) {
+                let (value_validator, value_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-value")).cast()?,
+                    &value_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                )?;
+                (
+                    Some(BoxedValidator::from(value_validator)),
+                    value_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::NotifyingMap { key, value },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo {
+                    requires_owner: key_requires_owner || value_requires_owner,
+                },
+            ))
         } else if origin.is(&tools.types.union_) {
             let mut members = Vec::new();
             let mut requires_owner = false;
@@ -895,6 +1022,33 @@ pub fn build_validator_from_annotation<'py>(
                 requires_owner: false,
             },
         ))
+    } else if ann.is(py.get_type::<NotifyingList>()) {
+        Ok((
+            Validator::new(
+                TypeValidator::NotifyingList { item: None },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
+    } else if ann.is(py.get_type::<NotifyingMap>()) {
+        Ok((
+            Validator::new(
+                TypeValidator::NotifyingMap {
+                    key: None,
+                    value: None,
+                },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo {
+                requires_owner: false,
+            },
+        ))
     } else if ann.is(py.get_type::<PyType>()) {
         // Bare type annotation (not type[X]) - accept any type object (subclass of object)
         let object_type = tools.types.object.clone().cast_into::<PyType>()?;
@@ -1078,6 +1232,7 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
     type_containers: i64,
     typevar_bindings: Option<&Bound<'py, PyDict>>,
     validate_attr: bool,
+    is_observable: bool,
 ) -> PyResult<(
     HashMap<String, MemberBuilder>,
     HashMap<String, EventBuilder>,
@@ -1126,6 +1281,41 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         let (attr_key, ann) = item.extract::<(Bound<'py, PyAny>, Bound<'py, PyAny>)>()?;
         // Get the origin of the type annotation — computed once, used by both branches.
         let origin = tools.get_origin.call1((&ann,))?;
+
+        if ann.is(py.get_type::<NotifyingList>().as_any())
+            || origin.is(py.get_type::<NotifyingList>())
+        {
+            if !is_observable {
+                return Err(notifying_guard_error(
+                    py,
+                    &attr_key,
+                    &ann,
+                    "NotifyingList can only be used in observable classes",
+                ));
+            }
+        } else if ann.is(py.get_type::<NotifyingMap>().as_any())
+            || origin.is(py.get_type::<NotifyingMap>())
+        {
+            if !is_observable {
+                return Err(notifying_guard_error(
+                    py,
+                    &attr_key,
+                    &ann,
+                    "NotifyingMap can only be used in observable classes",
+                ));
+            }
+        } else if let Some(container_name) =
+            find_nested_notifying_container(&ann, &tools)?
+        {
+            return Err(notifying_guard_error(
+                py,
+                &attr_key,
+                &ann,
+                &format!(
+                    "{container_name} can only be used as a top-level annotation, not inside a container"
+                ),
+            ));
+        }
 
         // Check we are not dealing with a ClassVar (parameterized ClassVar[T] or
         // bare ClassVar).  Both cases must be skipped even when validate_attr=False.
