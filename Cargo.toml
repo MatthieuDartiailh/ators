@@ -10,7 +10,7 @@
   crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.29"
+pyo3 = "0.30"
 [profile.release]
   opt-level        = 3
   strip            = "none"
