@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// Shared operation payload for ordered container mutations.
-#[pyclass(module = "ators._ators", frozen, skip_from_py_object)]
+#[pyclass(module = "ators._ators", frozen)]
 #[derive(Debug)]
 pub enum ContainerOperation {
     Added {
