@@ -244,3 +244,10 @@ def test_notifying_map_rejects_nested_usage():
 
         class _Nested(Ators, observable=True):
             items: list[NotifyingMap[str, int]] = member()
+
+
+def test_bare_notifying_map_rejects_nested_usage():
+    with pytest.raises(TypeError):
+
+        class _Nested(Ators, observable=True):
+            items: list[NotifyingMap] = member()

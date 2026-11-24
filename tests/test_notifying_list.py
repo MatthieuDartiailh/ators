@@ -271,3 +271,14 @@ def test_notifying_list_forbidden_inside_tuple():
     assert "NotifyingList can only be used as a top-level annotation" in str(
         exc_info.value.__cause__.__cause__
     )
+
+
+def test_bare_notifying_list_forbidden_inside_list():
+    with pytest.raises(TypeError) as exc_info:
+
+        class _Nested(Ators, observable=True):
+            items: list[NotifyingList] = member()
+
+    assert "NotifyingList can only be used as a top-level annotation" in str(
+        exc_info.value.__cause__.__cause__
+    )
