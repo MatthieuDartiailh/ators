@@ -316,7 +316,7 @@ impl GenericAttributesMap {
 }
 
 /// Enum representing whether a type is mutable, immutable, or mutability is undecidable
-#[pyclass(module = "ators._ators", eq, frozen, skip_from_py_object)]
+#[pyclass(module = "ators._ators", eq, frozen)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mutability {
     /// The type is mutable

@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// Information extracted while building a validator from an annotation.
-#[pyclass(module = "ators._ators", frozen, get_all, skip_from_py_object)]
+#[pyclass(module = "ators._ators", frozen, get_all)]
 #[derive(Clone, Debug, Default)]
 pub struct ValidatorBuildInfo {
     /// Whether the validator contains a ForwardValidator that requires an owner
