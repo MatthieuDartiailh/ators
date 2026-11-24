@@ -11,7 +11,11 @@ use crate::annotations::{build_validator_from_annotation, get_type_tools};
 use crate::get_type_mutability_map;
 use crate::utils::{Mutability, TupleBuilder, err_with_cause};
 use pyo3::Borrowed;
+#[cfg(Py_3_15)]
+use pyo3::PyTypeInfo;
 use pyo3::sync::critical_section::with_critical_section;
+#[cfg(Py_3_15)]
+use pyo3::types::{PyFrozenDict, PyFrozenDictMethods};
 use pyo3::{
     Bound, FromPyObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     ffi::{
@@ -338,6 +342,10 @@ pub enum TypeValidator {
         item: Option<BoxedValidator>,
         validation_mode: ValidationMode,
     },
+    #[pyo3(constructor = (items))]
+    FrozenDict {
+        items: Option<(BoxedValidator, BoxedValidator)>,
+    },
     #[pyo3(constructor = (item, validation_mode))]
     Set {
         item: Option<BoxedValidator>,
@@ -383,6 +391,14 @@ macro_rules! validation_error {
             )))
         }
     };
+}
+
+fn combine_mutability(lhs: Mutability, rhs: Mutability) -> Mutability {
+    match (lhs, rhs) {
+        (Mutability::Mutable, _) | (_, Mutability::Mutable) => Mutability::Mutable,
+        (Mutability::Undecidable, _) | (_, Mutability::Undecidable) => Mutability::Undecidable,
+        (Mutability::Immutable, Mutability::Immutable) => Mutability::Immutable,
+    }
 }
 
 impl TypeValidator {
@@ -443,6 +459,14 @@ impl TypeValidator {
                     .as_ref()
                     .map(|v| BoxedValidator::from(v.with_owner(py, owner))),
                 validation_mode: *validation_mode,
+            },
+            Self::FrozenDict { items } => Self::FrozenDict {
+                items: items.as_ref().map(|(k, v)| {
+                    (
+                        BoxedValidator::from(k.with_owner(py, owner)),
+                        BoxedValidator::from(v.with_owner(py, owner)),
+                    )
+                }),
             },
             Self::Set {
                 item,
@@ -793,6 +817,92 @@ impl TypeValidator {
                 } else {
                     validation_error!("frozenset", name, object, value)
                 }
+            }
+            Self::FrozenDict {
+                items: Some((_key_v, _val_v)),
+            } => {
+                #[cfg(Py_3_15)]
+                {
+                    let (key_v, val_v) = (_key_v, _val_v);
+                    if let Ok(frozendict) = value.cast_exact::<PyFrozenDict>() {
+                        let mut rebuilt: Option<Py<PyDict>> = None;
+                        let items = frozendict.items();
+                        for (index, pair) in items.iter().enumerate() {
+                            let (tk, tv) =
+                                pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                            match (
+                                key_v.validate(name, object, &tk),
+                                val_v.validate(name, object, &tv),
+                            ) {
+                                (Ok(k), Ok(v)) => {
+                                    if rebuilt.is_some() || !k.is(&tk) || !v.is(&tv) {
+                                        if rebuilt.is_none() {
+                                            let dict = PyDict::new(value.py());
+                                            for i in 0..index {
+                                                let previous = items.get_item(i)?.extract::<(
+                                                    Bound<'_, PyAny>,
+                                                    Bound<'_, PyAny>,
+                                                )>(
+                                                )?;
+                                                dict.set_item(previous.0, previous.1)?;
+                                            }
+                                            rebuilt = Some(dict.unbind());
+                                        }
+                                        rebuilt
+                                            .as_ref()
+                                            .expect("rebuilt frozendict should be initialized")
+                                            .bind(value.py())
+                                            .set_item(k, v)?;
+                                    }
+                                }
+                                (Err(err), _) => {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate frozendict key '{}'.",
+                                            tk.repr()?,
+                                        )),
+                                        err,
+                                    ));
+                                }
+                                (Ok(_), Err(err)) => {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate frozendict value '{}' with key '{}'.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                        )),
+                                        err,
+                                    ));
+                                }
+                            }
+                        }
+                        return if let Some(rebuilt) = rebuilt {
+                            Ok(PyFrozenDict::type_object(value.py())
+                                .call1((rebuilt.bind(value.py()),))?
+                                .cast_into::<PyFrozenDict>()?
+                                .into_any())
+                        } else {
+                            Ok(value.clone())
+                        };
+                    }
+                    validation_error!("frozendict", name, object, value)
+                }
+                #[cfg(not(Py_3_15))]
+                validation_error!("frozendict", name, object, value)
+            }
+            Self::FrozenDict { items: None } => {
+                #[cfg(Py_3_15)]
+                {
+                    if value.cast_exact::<PyFrozenDict>().is_ok() {
+                        Ok(value.clone())
+                    } else {
+                        validation_error!("frozendict", name, object, value)
+                    }
+                }
+                #[cfg(not(Py_3_15))]
+                validation_error!("frozendict", name, object, value)
             }
             Self::Set {
                 item: Some(item),
@@ -1385,6 +1495,13 @@ impl TypeValidator {
                 None => Mutability::Immutable,
                 Some(iv) => iv.type_validator.is_type_mutable(py),
             },
+            Self::FrozenDict { items } => match items {
+                None => Mutability::Immutable,
+                Some((key, value)) => combine_mutability(
+                    key.type_validator.is_type_mutable(py),
+                    value.type_validator.is_type_mutable(py),
+                ),
+            },
             // NOTE try_fold does not seem relevant here
             Self::Tuple { items } => {
                 items
@@ -1489,6 +1606,9 @@ impl Clone for TypeValidator {
             } => Self::FrozenSet {
                 item: item.clone(),
                 validation_mode: *validation_mode,
+            },
+            Self::FrozenDict { items } => Self::FrozenDict {
+                items: items.clone(),
             },
             Self::Set {
                 item,

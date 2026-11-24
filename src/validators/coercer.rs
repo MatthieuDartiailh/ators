@@ -5,6 +5,8 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
+#[cfg(Py_3_15)]
+use pyo3::types::PyFrozenDict;
 /// Structures used to manage coercion behaviors for validators.
 use pyo3::{
     Bound, Py, PyAny, PyResult, PyTypeInfo, Python, intern, pyclass,
@@ -179,6 +181,94 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
+                TypeValidator::FrozenDict { items } => {
+                    let coerced = PyDict::new(py);
+                    if let Ok(dict) = value.cast::<PyDict>() {
+                        for (key, value) in dict.iter() {
+                            if let Some((key_v, val_v)) = items {
+                                let key = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_v.type_validator,
+                                    name,
+                                    object,
+                                    &key,
+                                )?;
+                                let value = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_v.type_validator,
+                                    name,
+                                    object,
+                                    &value,
+                                )?;
+                                coerced.set_item(key, value)?;
+                            } else {
+                                coerced.set_item(key, value)?;
+                            }
+                        }
+                    } else if let Ok(mapping) = value.cast::<PyMapping>() {
+                        for pair in mapping.items()?.iter() {
+                            let (key, value) =
+                                pair.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                            if let Some((key_v, val_v)) = items {
+                                let key = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_v.type_validator,
+                                    name,
+                                    object,
+                                    &key,
+                                )?;
+                                let value = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_v.type_validator,
+                                    name,
+                                    object,
+                                    &value,
+                                )?;
+                                coerced.set_item(key, value)?;
+                            } else {
+                                coerced.set_item(key, value)?;
+                            }
+                        }
+                    } else {
+                        for pair in value.try_iter()? {
+                            let (key, value) =
+                                pair?.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+                            if let Some((key_v, val_v)) = items {
+                                let key = self.coerce_value(
+                                    is_init_coercion,
+                                    &key_v.type_validator,
+                                    name,
+                                    object,
+                                    &key,
+                                )?;
+                                let value = self.coerce_value(
+                                    is_init_coercion,
+                                    &val_v.type_validator,
+                                    name,
+                                    object,
+                                    &value,
+                                )?;
+                                coerced.set_item(key, value)?;
+                            } else {
+                                coerced.set_item(key, value)?;
+                            }
+                        }
+                    }
+
+                    #[cfg(Py_3_15)]
+                    {
+                        Ok(PyFrozenDict::type_object(py)
+                            .call1((coerced,))?
+                            .cast_into::<PyFrozenDict>()?
+                            .into_any())
+                    }
+                    #[cfg(not(Py_3_15))]
+                    {
+                        Err(pyo3::exceptions::PyTypeError::new_err(
+                            "Cannot coerce to frozendict on Python versions older than 3.15",
+                        ))
+                    }
+                }
                 TypeValidator::Dict { items, validation_mode: _ } => {
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {
