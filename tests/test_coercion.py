@@ -70,7 +70,8 @@ from ators.behaviors import Coercer, coerce, coerce_init
 )
 def test_type_inferred_coercion(ty, init, inputs, expected):
     class A(Ators):
-        a: ty if init else Member[ty, Any] = getattr(
+        # Use conditional type annotation to simplify test
+        a: ty if init else Member[ty, Any] = getattr(  # type: ignore
             member(), "coerce_init" if init else "coerce"
         )()
 
@@ -105,7 +106,8 @@ def test_call_coerce(init, inputs, called, expected):
         return int(n)
 
     class A(Ators):
-        a: int if init else Member[int, Any] = getattr(
+        # Use conditional type annotation to simplify test
+        a: int if init else Member[int, Any] = getattr(  # type: ignore
             member(), "coerce_init" if init else "coerce"
         )(Coercer.CallValue(make_coerce))
 
@@ -146,7 +148,8 @@ def test_call_member_object_coerce(init, inputs, called, expected):
         return int(value)
 
     class A(Ators):
-        a: int if init else Member[int, Any] = getattr(
+        # Use conditional type annotation to simplify test
+        a: int if init else Member[int, Any] = getattr(  # type: ignore
             member(), "coerce_init" if init else "coerce"
         )(Coercer.CallNameObjectValueInit(make_coerce))
 
@@ -182,7 +185,8 @@ def test_method_coerce(init, inputs, called, expected):
     init_coercion = None
 
     class A(Ators):
-        a: int if init else Member[int, Any] = member()
+        # Use conditional type annotation to simplify test
+        a: int if init else Member[int, Any] = member()  # type: ignore
 
         @(coerce_init if init else coerce)(a)
         def _coerce_a(self, m, v, init):
@@ -219,7 +223,8 @@ def test_method_coerce(init, inputs, called, expected):
 @pytest.mark.parametrize("init", [False, True])
 def test_inherited_coerce_behavior(init):
     class A(Ators):
-        a: int if init else Member[int, Any] = getattr(
+        # Use conditional type annotation to simplify test
+        a: int if init else Member[int, Any] = getattr(  # type: ignore
             member(), "coerce_init" if init else "coerce"
         )()
 
@@ -260,7 +265,8 @@ def test_coerce_not_as_decorator(init):
             def f(self, m):
                 pass
 
-            (coerce_init if init else coerce)(m)(f)
+            # Testing runtime error message caught statically
+            (coerce_init if init else coerce)(m)(f)  # type: ignore
 
     assert (
         f"'{('coerce_init' if init else 'coerce')}' can only be used as a decorator"
@@ -273,7 +279,8 @@ def test_coerce_outside_class_body(init):
     with pytest.raises(RuntimeError) as e:
         m = member()
 
-        @(coerce_init if init else coerce)(m)
+        # Use conditional type annotation to simplify test
+        @(coerce_init if init else coerce)(m)  # type: ignore
         def f(self, m):
             pass
 
@@ -290,7 +297,8 @@ def test_bad_signature_of_method(init):
         class A(Ators):
             m = member()
 
-            @(coerce_init if init else coerce)(m)
+            # Use conditional type annotation to simplify test
+            @(coerce_init if init else coerce)(m)  # type: ignore
             def f(self):
                 pass
 
@@ -304,7 +312,8 @@ def test_warn_on_multiple_setting_of_coerce(init):
     with pytest.warns(UserWarning):
 
         class A(Ators):
-            a: int if init else Member[int, Any] = getattr(
+            # Use conditional type annotation to simplify test
+            a: int if init else Member[int, Any] = getattr(  # type: ignore
                 getattr(member(), "coerce_init" if init else "coerce")(
                     Coercer.CallValue(lambda v: 1)
                 ),

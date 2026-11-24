@@ -306,6 +306,7 @@ impl AtorsBase {
             match &mb.validator().type_validator {
                 TypeValidator::List {
                     item: Some(item_bv),
+                    validation_mode: _,
                 } => {
                     if let Ok(alist) = value.cast::<AtorsList>() {
                         AtorsList::restore(alist, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
@@ -313,6 +314,7 @@ impl AtorsBase {
                 }
                 TypeValidator::Set {
                     item: Some(item_bv),
+                    validation_mode: _,
                 } => {
                     if let Ok(aset) = value.cast::<AtorsSet>() {
                         AtorsSet::restore(aset, (*item_bv.0).clone(), Some(mb.name()), Some(slf));
@@ -320,6 +322,7 @@ impl AtorsBase {
                 }
                 TypeValidator::Dict {
                     items: Some((key_bv, val_bv)),
+                    validation_mode: _,
                 } => {
                     if let Ok(adict) = value.cast::<AtorsDict>() {
                         AtorsDict::restore(

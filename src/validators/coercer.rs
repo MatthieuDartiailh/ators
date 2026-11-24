@@ -121,7 +121,7 @@ impl Coercer {
                         .build()
                         .map(|ob| ob.into_any())
                 },
-                TypeValidator::FrozenSet { item } => {
+                TypeValidator::FrozenSet { item, validation_mode: _ } => {
                     let temp = value.cast::<PySequence>()?;
                     PyFrozenSet::new(
                         py,
@@ -139,7 +139,7 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
-                TypeValidator::Set { item } => {
+                TypeValidator::Set { item, validation_mode: _ } => {
                     let temp = value.cast::<PySequence>()?;
                     // FIXME create the right container upfront so that we can use
                     // a fast validation path
@@ -159,7 +159,7 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
-                TypeValidator::List { item } => {
+                TypeValidator::List { item, validation_mode: _ } => {
                     let temp = value.cast::<PySequence>()?;
                     // FIXME create the right container upfront so that we can use
                     // a fast validation path
@@ -179,7 +179,7 @@ impl Coercer {
                         .collect::<PyResult<Vec<_>>>()?
                     ).map(|ob| ob.as_any().clone())
                 },
-                TypeValidator::Dict { items } => {
+                TypeValidator::Dict { items, validation_mode: _ } => {
                     let coerced = PyDict::new(py);
                     if let Ok(t) = value.cast::<PyDict>() {
                         for (k, v) in t.iter(){
