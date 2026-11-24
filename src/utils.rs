@@ -19,6 +19,9 @@ use pyo3::{
 };
 use std::collections::HashMap;
 
+#[cfg(Py_3_15)]
+use pyo3::types::PyFrozenDict;
+
 // XXX  use module state to store those types
 static TYPING_ANY_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 static TYPING_TYPEVAR_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
@@ -359,6 +362,11 @@ impl TypeMutabilityMap {
         map.insert((&str_type).into(), MutabilitySpec::Immutable);
         let bytes_type = PyBytes::type_object(py);
         map.insert((&bytes_type).into(), MutabilitySpec::Immutable);
+        #[cfg(Py_3_15)]
+        {
+            let frozendict_type = PyFrozenDict::type_object(py);
+            map.insert((&frozendict_type).into(), MutabilitySpec::Immutable);
+        }
 
         Py::new(py, TypeMutabilityMap { map }).expect("TypeMutabilityMap creation cannot fail.")
     }
