@@ -383,7 +383,19 @@ fn validate_set_failed<'py>(
             object.repr()?,
         )));
     }
-
+    // Union failures originate from a grouped validator error. Preserve that
+    // group as the cause while keeping the public member error consistent.
+    if err.is_instance_of::<pyo3::exceptions::PyBaseExceptionGroup>(py) {
+        return Ok(err_with_cause(
+            py,
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "Validation failed for member '{}' of {}",
+                member.name,
+                object.repr()?,
+            )),
+            err,
+        ));
+    }
     Ok(err_with_cause(
         py,
         pyo3::PyErr::from_type(
