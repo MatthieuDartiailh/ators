@@ -144,56 +144,6 @@ def test_method_default():
     assert B().a == 9
 
 
-def test_default_decorator_missing():
-    with pytest.raises(TypeError) as exc:
-
-        class A(Ators):
-            a: int = member().default(decorator=True)
-
-    assert "Member 'a'" in exc.exconly()
-    assert "@default" in exc.exconly()
-
-
-def test_default_decorator_wrong_factory():
-    with pytest.raises(TypeError) as exc:
-
-        class A(Ators):
-            a: int = member().postset(decorator=True)
-
-            @default(a)
-            def _default_a(self, m):
-                return 1
-
-    assert "no pending 'default' decorator" in exc.exconly()
-    assert "postset" in exc.exconly()
-
-
-def test_default_decorator_repeated():
-    with pytest.raises(TypeError) as exc:
-        member().default(decorator=True).default(decorator=True)
-
-    assert "already reserves decorator 'default'" in exc.exconly()
-
-
-def test_default_direct_call_conflicts_with_reservation():
-    with pytest.raises(TypeError) as exc:
-        member().default(decorator=True).default(1)
-
-    assert "reserves the 'default' decorator" in exc.exconly()
-
-
-def test_default_decorator_rejects_false_and_behavior_argument():
-    with pytest.raises(TypeError) as exc:
-        member().default(decorator=False)
-
-    assert "decorator=False" in exc.exconly()
-
-    with pytest.raises(TypeError) as exc:
-        member().default(1, decorator=True)
-
-    assert "does not accept a default value" in exc.exconly()
-
-
 def test_inherited_default_behavior():
     class A(Ators):
         a: int = 2

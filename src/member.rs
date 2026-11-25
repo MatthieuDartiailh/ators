@@ -846,70 +846,6 @@ impl MemberBuilder {
         Ok(self_)
     }
 
-    /// Internal state transition used by standalone behavior decorators.
-    pub fn _consume_decorator<'py>(
-        mut self_: PyRefMut<'py, Self>,
-        method: Bound<'py, PyString>,
-        behavior: Bound<'py, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        let method_name = method.extract::<String>()?;
-        let mself = &mut *self_;
-
-        match method_name.as_str() {
-            "default" => {
-                let b = behavior.cast::<DefaultBehavior>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.default = Some(b.as_any().extract()?);
-            }
-            "preget" => {
-                let b = behavior.cast::<PreGetattrBehavior>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.pre_getattr = Some(b.as_any().extract()?);
-            }
-            "postget" => {
-                let b = behavior.cast::<PostGetattrBehavior>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.post_getattr = Some(b.as_any().extract()?);
-            }
-            "preset" => {
-                let b = behavior.cast::<PreSetattrBehavior>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.pre_setattr = Some(b.as_any().extract()?);
-            }
-            "postset" => {
-                let b = behavior.cast::<PostSetattrBehavior>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.post_setattr = Some(b.as_any().extract()?);
-            }
-            "coerce" => {
-                let b = behavior.cast::<Coercer>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.coerce = Some(b.as_any().extract()?);
-            }
-            "coerce_init" => {
-                let b = behavior.cast::<Coercer>()?;
-                mself.consume_decorator(&method_name)?;
-                mself.coerce_init = Some(b.as_any().extract()?);
-            }
-            "append_value_validator" => {
-                let b = behavior.cast::<ValueValidator>()?;
-                let validator = b.as_any().extract()?;
-                mself.consume_decorator(&method_name)?;
-                if let Some(validators) = &mut mself.value_validators {
-                    validators.push(validator);
-                } else {
-                    mself.value_validators = Some(vec![validator]);
-                }
-            }
-            _ => {
-                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                    "Unknown decorator reservation method '{method_name}'."
-                )));
-            }
-        }
-        Ok(self_)
-    }
-
     /// Attach or configure the pre-get behavior for this member.
     ///
     /// Accepts a behavior object (or compatible callable) which will be
@@ -1194,6 +1130,70 @@ impl MemberBuilder {
                 .or_insert(2);
         }
         mself.forward_ref_environment_factory = Some(fc);
+        Ok(self_)
+    }
+
+    /// Internal state transition used by standalone behavior decorators.
+    pub fn _consume_decorator<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        method: Bound<'py, PyString>,
+        behavior: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let method_name = method.extract::<String>()?;
+        let mself = &mut *self_;
+
+        match method_name.as_str() {
+            "default" => {
+                let b = behavior.cast::<DefaultBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.default = Some(b.as_any().extract()?);
+            }
+            "preget" => {
+                let b = behavior.cast::<PreGetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.pre_getattr = Some(b.as_any().extract()?);
+            }
+            "postget" => {
+                let b = behavior.cast::<PostGetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.post_getattr = Some(b.as_any().extract()?);
+            }
+            "preset" => {
+                let b = behavior.cast::<PreSetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.pre_setattr = Some(b.as_any().extract()?);
+            }
+            "postset" => {
+                let b = behavior.cast::<PostSetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.post_setattr = Some(b.as_any().extract()?);
+            }
+            "coerce" => {
+                let b = behavior.cast::<Coercer>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.coerce = Some(b.as_any().extract()?);
+            }
+            "coerce_init" => {
+                let b = behavior.cast::<Coercer>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.coerce_init = Some(b.as_any().extract()?);
+            }
+            "append_value_validator" => {
+                let b = behavior.cast::<ValueValidator>()?;
+                let validator = b.as_any().extract()?;
+                mself.consume_decorator(&method_name)?;
+                if let Some(validators) = &mut mself.value_validators {
+                    validators.push(validator);
+                } else {
+                    mself.value_validators = Some(vec![validator]);
+                }
+            }
+            _ => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Unknown decorator reservation method '{method_name}'."
+                )));
+            }
+        }
         Ok(self_)
     }
 }
