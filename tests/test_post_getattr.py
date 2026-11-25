@@ -47,7 +47,7 @@ def test_method_postget():
     value = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().postget(decorator=True)
 
         @postget(a)
         def _postget_a(self, m, v):

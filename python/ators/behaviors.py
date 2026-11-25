@@ -12,6 +12,17 @@ to attach behavior implementations (methods) to member builders. Each
 factory validates correct usage (decorator context and method signature)
 and registers an object-method wrapper on the provided member builder.
 
+For method decorators, reserve the matching builder method with
+``decorator=True`` first. For example:
+
+    value: int = member().default(decorator=True)
+
+    @default(value)
+    def _default_value(self, member):
+        return 42
+
+Direct behavior objects remain available when ``decorator=True`` is omitted.
+
 Notes
 -----
 Decorators created here are intended to be used within class bodies
@@ -133,7 +144,9 @@ def default(
     ) -> Callable[[Ators, member], Any]:
         st = inspect.stack(1)
         _validate_use_and_sig(st, "default", func, ("self", "member"))
-        member_builder.default(Default.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "default", Default.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -166,7 +179,9 @@ def preget(
     ) -> Callable[[Ators, member], Any]:
         st = inspect.stack(1)
         _validate_use_and_sig(st, "preget", func, ("self", "member"))
-        member_builder.preget(PreGetAttr.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "preget", PreGetAttr.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -201,7 +216,9 @@ def postget(
     ) -> Callable[[Ators, member, Any], Any]:
         st = inspect.stack(1)
         _validate_use_and_sig(st, "postget", func, ("self", "member", "value"))
-        member_builder.postget(PostGetAttr.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "postget", PostGetAttr.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -235,7 +252,9 @@ def preset(
     ) -> Callable[[Ators, member, Any], Any]:
         st = inspect.stack(1)
         _validate_use_and_sig(st, "preset", func, ("self", "member", "current"))
-        member_builder.preset(PreSetAttr.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "preset", PreSetAttr.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -271,7 +290,9 @@ def postset(
     ) -> Callable[[Ators, member, Any, Any], Any]:
         st = inspect.stack(1)
         _validate_use_and_sig(st, "postset", func, ("self", "member", "old", "new"))
-        member_builder.postset(PostSetAttr.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "postset", PostSetAttr.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -311,7 +332,7 @@ def coerce(
         _validate_use_and_sig(
             st, "coerce", func, ("self", "member", "value", "is_init_coercion")
         )
-        member_builder.coerce(Coercer.ObjectMethod(func.__name__))
+        member_builder._consume_decorator("coerce", Coercer.ObjectMethod(func.__name__))
         return func
 
     return decorator
@@ -351,7 +372,9 @@ def coerce_init(
         _validate_use_and_sig(
             st, "coerce_init", func, ("self", "member", "value", "is_init_coercion")
         )
-        member_builder.coerce_init(Coercer.ObjectMethod(func.__name__))
+        member_builder._consume_decorator(
+            "coerce_init", Coercer.ObjectMethod(func.__name__)
+        )
         return func
 
     return decorator
@@ -390,8 +413,8 @@ def append_value_validator(
         _validate_use_and_sig(
             st, "append_value_validator", func, ("self", "member", "value")
         )
-        member_builder.append_value_validator(
-            ValueValidator.ObjectMethod(func.__name__)
+        member_builder._consume_decorator(
+            "append_value_validator", ValueValidator.ObjectMethod(func.__name__)
         )
         return func
 
@@ -399,6 +422,7 @@ def append_value_validator(
 
 
 __all__ = [
+    "Coercer",
     "Default",
     "DelAttr",
     "PostGetAttr",
@@ -406,6 +430,8 @@ __all__ = [
     "PreGetAttr",
     "PreSetAttr",
     "append_value_validator",
+    "coerce",
+    "coerce_init",
     "default",
     "postget",
     "postset",
