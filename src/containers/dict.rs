@@ -31,6 +31,7 @@ pub(crate) fn restore_nested_container_value<'py>(
     match &value_validator.type_validator {
         TypeValidator::List {
             item: Some(item_validator),
+            ..
         } => {
             if let Ok(nested) = value.cast::<AtorsList>() {
                 AtorsList::restore(nested, (*item_validator.0).clone(), member_name, object);
@@ -38,6 +39,7 @@ pub(crate) fn restore_nested_container_value<'py>(
         }
         TypeValidator::Set {
             item: Some(item_validator),
+            ..
         } => {
             if let Ok(nested) = value.cast::<AtorsSet>() {
                 AtorsSet::restore(nested, (*item_validator.0).clone(), member_name, object);
@@ -45,6 +47,7 @@ pub(crate) fn restore_nested_container_value<'py>(
         }
         TypeValidator::Dict {
             items: Some((key_validator, value_validator)),
+            ..
         } => {
             if let Ok(nested) = value.cast::<AtorsDict>() {
                 AtorsDict::restore(

@@ -858,7 +858,6 @@ pub fn build_validator_from_annotation<'py>(
     } else if is_type_var(&ann)?
         || (ann.getattr(intern!(py, "__constraints__")).is_ok()
             && ann.getattr(intern!(py, "__name__")).is_ok())
-        || ann.is_instance(&tools.types.type_var)?
     {
         if let Some(bindings) = typevar_bindings
             && let Some(bound_ann) = lookup_typevar_binding(bindings, &ann)?

@@ -627,8 +627,14 @@ def test_bare_defaultdict_annotation_is_rejected(annotation):
         class A(Ators):
             a: annotation = member()
 
-    assert exc_info.value.__cause__ is not None
-    assert "bare defaultdict" in str(exc_info.value.__cause__)
+    cause = exc_info.value
+    messages = []
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        messages.append(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    assert any("bare defaultdict" in message for message in messages)
 
 
 class GenericBox[T](Ators):

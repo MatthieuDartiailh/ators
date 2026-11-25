@@ -1724,7 +1724,7 @@ impl TypeValidator {
             Self::Str {} => py.get_type::<PyString>().call(args, call_kwargs),
             Self::Bytes {} => py.get_type::<PyBytes>().call(args, call_kwargs),
             Self::Typed { type_ } => type_.bind(py).call(args, call_kwargs),
-            Self::List { item }
+            Self::List { item, .. }
                 if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
             {
                 if let Some(item_v) = item {
@@ -1739,7 +1739,7 @@ impl TypeValidator {
                     Ok(PyList::empty(py).into_any())
                 }
             }
-            Self::Set { item }
+            Self::Set { item, .. }
                 if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
             {
                 if let Some(item_v) = item {
@@ -1756,6 +1756,7 @@ impl TypeValidator {
             }
             Self::Dict {
                 items: Some((key_v, val_v)),
+                ..
             } if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) => {
                 crate::containers::AtorsDict::new_empty(
                     py,
@@ -1766,7 +1767,7 @@ impl TypeValidator {
                 )
                 .map(|v| v.into_any())
             }
-            Self::Dict { items: None }
+            Self::Dict { items: None, .. }
                 if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) =>
             {
                 Ok(PyDict::new(py).into_any())
