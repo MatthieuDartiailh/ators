@@ -462,12 +462,19 @@ pub(crate) fn replace_slot<'py>(
 
 /// Del the slot value at index
 #[inline]
-pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
+pub(crate) fn del_slot<'py>(
+    object: &Bound<'py, AtorsBase>,
+    index: u8,
+) -> Result<Option<Py<PyAny>>, ()> {
     with_critical_section(object.as_any(), || {
         // Safety: we hold the critical section lock on this object. We write through the
         // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
         unsafe {
-            (*object.get().inner.get()).slots[index as usize] = None;
+            let inner = &mut *object.get().inner.get();
+            if inner.frozen {
+                return Err(());
+            }
+            Ok(inner.slots[index as usize].take())
         }
     })
 }

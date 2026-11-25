@@ -16,6 +16,7 @@ from ators import (
     AtorsChange,
     disable_notifications,
     enable_notifications,
+    freeze,
     is_notifications_enabled,
     member,
     observe,
@@ -69,6 +70,49 @@ def test_observe_and_unobserve():
     unobserve(a, "a", callback)
     a.a = 3
     assert len(calls) == 2
+
+
+def test_observer_notified_when_member_deleted():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A()
+    a.a = 1
+    observe(a, "a", changes.append)
+
+    del a.a
+
+    assert len(changes) == 1
+    assert changes[0].object is a
+    assert changes[0].member_name == "a"
+    assert changes[0].oldvalue == 1
+    assert changes[0].newvalue is None
+
+    del a.a
+    assert len(changes) == 1
+
+
+def test_deleting_member_respects_frozen_and_notification_controls():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A(a=1)
+    observe(a, "a", changes.append)
+    disable_notifications(a)
+    del a.a
+    assert changes == []
+
+    a.a = 2
+    assert changes == []
+    enable_notifications(a)
+    freeze(a)
+
+    with pytest.raises(TypeError, match="Cannot modify"):
+        del a.a
 
 
 def test_observe_fails_for_non_observable():
