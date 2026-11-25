@@ -9,11 +9,13 @@
 
 import asyncio
 import inspect
-from typing import ClassVar
+from collections import defaultdict
+from typing import ClassVar, DefaultDict
 
 import pytest
 
 from ators import Member, validated
+from ators._ators import AtorsDefaultDict
 
 
 def test_validated_function_argument() -> None:
@@ -183,6 +185,61 @@ def test_validated_async_function_return_validation() -> None:
     error_msg = str(exc.value)
     assert "Expected a int" in error_msg
     assert "str" in error_msg
+
+
+def test_validated_defaultdict_argument_and_return_are_wrapped() -> None:
+    @validated
+    def echo(value: DefaultDict[str, int]) -> DefaultDict[str, int]:
+        assert isinstance(value, AtorsDefaultDict)
+        return value
+
+    source = {"a": 1}
+    result = echo(source)
+
+    assert isinstance(result, AtorsDefaultDict)
+    assert dict(result) == {"a": 1}
+    assert result is not source
+
+    source["b"] = 2
+    assert "b" not in result
+
+
+def test_validated_defaultdict_argument_and_return_reject_invalid_items() -> None:
+    @validated
+    def echo(value: DefaultDict[str, int]) -> DefaultDict[str, int]:
+        return value
+
+    with pytest.raises(ExceptionGroup):
+        echo({"a": "bad"})  # type: ignore[dict-item]
+
+    @validated
+    def make() -> DefaultDict[str, int]:
+        return {"a": "bad"}  # type: ignore[return-value]
+
+    with pytest.raises(TypeError, match="Failed to validate return value"):
+        make()
+
+
+@pytest.mark.asyncio
+async def test_validated_async_defaultdict_return_is_wrapped() -> None:
+    @validated
+    async def make() -> DefaultDict[str, int]:
+        return {"a": 1}
+
+    result = await make()
+    assert isinstance(result, AtorsDefaultDict)
+    assert result["missing"] == 0
+
+
+def test_validated_bare_defaultdict_argument_and_return_are_wrapped() -> None:
+    @validated
+    def echo(value: defaultdict) -> defaultdict:
+        assert isinstance(value, AtorsDefaultDict)
+        return value
+
+    result = echo({"a": 1})
+    assert isinstance(result, AtorsDefaultDict)
+    assert dict(result) == {"a": 1}
 
 
 def test_validated_async_iterator_preserves_stop_iteration_value() -> None:
