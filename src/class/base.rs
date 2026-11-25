@@ -363,6 +363,7 @@ impl AtorsBase {
                 }
                 TypeValidator::DefaultDict {
                     items: (key_bv, val_bv),
+                    missing_factory,
                 } => {
                     if let Ok(adict) = value.cast::<AtorsDefaultDict>() {
                         AtorsDefaultDict::restore(
@@ -371,6 +372,9 @@ impl AtorsBase {
                             (*val_bv.0).clone(),
                             Some(mb.name()),
                             Some(slf),
+                            missing_factory
+                                .as_ref()
+                                .map(|factory| factory.clone_ref(py)),
                         );
                     }
                 }

@@ -717,6 +717,7 @@ pub fn build_validator_from_annotation<'py>(
                             BoxedValidator::from(key_validator),
                             BoxedValidator::from(val_validator),
                         ),
+                        missing_factory: None,
                     },
                     None,
                     None,
@@ -852,9 +853,21 @@ pub fn build_validator_from_annotation<'py>(
     } else if ann.is(&tools.types.collections_defaultdict)
         || ann.is(&tools.types.typing_defaultdict)
     {
-        Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "The member {name} annotation uses bare defaultdict. Use defaultdict[K, V]."
-        )))
+        Ok((
+            Validator::new(
+                TypeValidator::DefaultDict {
+                    items: (
+                        BoxedValidator::from(Validator::default()),
+                        BoxedValidator::from(Validator::default()),
+                    ),
+                    missing_factory: None,
+                },
+                None,
+                None,
+                None,
+            ),
+            ValidatorBuildInfo::default(),
+        ))
     } else if is_type_var(&ann)?
         || (ann.getattr(intern!(py, "__constraints__")).is_ok()
             && ann.getattr(intern!(py, "__name__")).is_ok())
@@ -1156,6 +1169,18 @@ pub fn build_function_argument_or_return_validator<'py>(
     Ok(validator)
 }
 
+fn get_defaultdict_factory<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let py = value.py();
+    let defaultdict = py
+        .import(intern!(py, "collections"))?
+        .getattr(intern!(py, "defaultdict"))?;
+    if value.is_instance(&defaultdict)? {
+        Ok(Some(value.getattr(intern!(py, "default_factory"))?))
+    } else {
+        Ok(None)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn configure_member_builder_from_annotation<'py>(
     builder: &mut MemberBuilder,
@@ -1245,6 +1270,85 @@ fn configure_member_builder_from_annotation<'py>(
             err,
         )),
     }?;
+
+    let ann_origin = tools.get_origin.call1((ann.clone(),))?;
+    let is_defaultdict_annotation = ann_origin.is(&tools.types.collections_defaultdict)
+        || ann_origin.is(&tools.types.typing_defaultdict)
+        || ann.is(&tools.types.collections_defaultdict)
+        || ann.is(&tools.types.typing_defaultdict);
+    let is_bare_defaultdict =
+        ann.is(&tools.types.collections_defaultdict) || ann.is(&tools.types.typing_defaultdict);
+
+    if is_defaultdict_annotation && let Some(default_behavior) = builder.default_behavior() {
+        match default_behavior {
+            DefaultBehavior::Static { value } => {
+                let value_bound = value.bind(name.py());
+                if let Some(factory) = get_defaultdict_factory(&value_bound)? {
+                    let factory_py = factory.unbind();
+                    let mut current_validator = new.clone();
+                    if is_bare_defaultdict {
+                        // Bare annotations remain untyped and validate/coerce only
+                        // values already contained in the supplied default dict.
+                        current_validator.type_validator = TypeValidator::DefaultDict {
+                            items: (
+                                BoxedValidator::from(Validator::default()),
+                                BoxedValidator::from(Validator::default()),
+                            ),
+                            missing_factory: Some(factory_py),
+                        };
+                    } else if let TypeValidator::DefaultDict {
+                        items,
+                        missing_factory: _,
+                    } = current_validator.type_validator
+                    {
+                        current_validator.type_validator = TypeValidator::DefaultDict {
+                            items,
+                            missing_factory: Some(factory_py),
+                        };
+                    }
+                    builder.set_type_validator(current_validator.type_validator);
+                } else if is_bare_defaultdict {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Member {name} uses a bare defaultdict annotation. Pass an actual \
+                         collections.defaultdict(factory, ...) value as member(default=...) \
+                         or member().default(...)."
+                    )));
+                }
+            }
+            _ => {
+                if is_bare_defaultdict {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "Member {name} uses a bare defaultdict annotation with a factory \
+                         mechanism. Pass an actual collections.defaultdict(factory, ...) \
+                         value as member(default=...) or member().default(...)."
+                    )));
+                }
+                let warnings = name.py().import(intern!(name.py(), "warnings"))?;
+                warnings.call_method1(
+                    intern!(name.py(), "warn"),
+                    (
+                        format!(
+                            "Member {name} uses a default-factory mechanism with a parameterized \
+                             defaultdict annotation. The inferred value factory will be used."
+                        ),
+                        name.py().get_type::<pyo3::exceptions::PyUserWarning>(),
+                    ),
+                )?;
+                let collections = name.py().import(intern!(name.py(), "collections"))?;
+                let defaultdict_type = collections.getattr(intern!(name.py(), "defaultdict"))?;
+                let fallback_default = defaultdict_type.call0()?.unbind();
+                builder.set_default(crate::member::DefaultBehavior::Static {
+                    value: fallback_default,
+                });
+            }
+        }
+    } else if is_bare_defaultdict {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Member {name} uses a bare defaultdict annotation. Pass an actual \
+             collections.defaultdict(factory, ...) value as member(default=...) \
+             or member().default(...)."
+        )));
+    }
 
     // Set the type validator
     builder.set_type_validator(new.type_validator.clone());

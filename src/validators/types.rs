@@ -369,9 +369,10 @@ pub enum TypeValidator {
         items: Option<(BoxedValidator, BoxedValidator)>,
         validation_mode: ValidationMode,
     },
-    #[pyo3(constructor = (items))]
+    #[pyo3(constructor = (items, missing_factory))]
     DefaultDict {
         items: (BoxedValidator, BoxedValidator),
+        missing_factory: Option<Py<PyAny>>,
     },
     // Sequence,
     // List,
@@ -526,11 +527,15 @@ impl TypeValidator {
             },
             Self::DefaultDict {
                 items: (key_v, val_v),
+                missing_factory,
             } => Self::DefaultDict {
                 items: (
                     BoxedValidator::from(key_v.with_owner(py, owner)),
                     BoxedValidator::from(val_v.with_owner(py, owner)),
                 ),
+                missing_factory: missing_factory
+                    .as_ref()
+                    .map(|factory| factory.clone_ref(py)),
             },
             _ => self.clone(),
         }
@@ -1451,6 +1456,7 @@ impl TypeValidator {
             }
             Self::DefaultDict {
                 items: (key_v, val_v),
+                missing_factory,
             } => {
                 if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDefaultDict>()
                     && ators_dict.get().matches_assignment_context(name, object)
@@ -1462,10 +1468,27 @@ impl TypeValidator {
                 }
                 if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
                     let py = value.py();
-                    let adict = crate::containers::AtorsDefaultDict::new_empty(
+                    let collections = py.import(intern!(py, "collections"))?;
+                    let defaultdict_type = collections.getattr(intern!(py, "defaultdict"))?;
+                    let source_factory = if value.is_instance(&defaultdict_type)? {
+                        let factory = value.getattr(intern!(py, "default_factory"))?;
+                        if factory.is_none() {
+                            None
+                        } else {
+                            Some(factory)
+                        }
+                    } else {
+                        None
+                    };
+                    let adict = crate::containers::AtorsDefaultDict::new_empty_with_factory(
                         py,
                         (*key_v.0).clone(),
                         (*val_v.0).clone(),
+                        source_factory.map(|factory| factory.unbind()).or_else(|| {
+                            missing_factory
+                                .as_ref()
+                                .map(|factory| factory.clone_ref(py))
+                        }),
                         name,
                         object.map(|m| m.clone().unbind()),
                     )?;
@@ -1774,11 +1797,15 @@ impl TypeValidator {
             }
             Self::DefaultDict {
                 items: (key_v, val_v),
+                missing_factory,
             } if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) => {
-                crate::containers::AtorsDefaultDict::new_empty(
+                crate::containers::AtorsDefaultDict::new_empty_with_factory(
                     py,
                     (*key_v.0).clone(),
                     (*val_v.0).clone(),
+                    missing_factory
+                        .as_ref()
+                        .map(|factory| factory.clone_ref(py)),
                     name,
                     object.map(|o| o.clone().unbind()),
                 )
@@ -1884,7 +1911,10 @@ impl TypeValidator {
                 items: _,
                 validation_mode: _,
             } => Mutability::Mutable,
-            Self::DefaultDict { items: _ } => Mutability::Mutable,
+            Self::DefaultDict {
+                items: _,
+                missing_factory: _,
+            } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -1984,8 +2014,14 @@ impl Clone for TypeValidator {
                 items: items.clone(),
                 validation_mode: *validation_mode,
             },
-            Self::DefaultDict { items } => Self::DefaultDict {
+            Self::DefaultDict {
+                items,
+                missing_factory,
+            } => Self::DefaultDict {
                 items: items.clone(),
+                missing_factory: missing_factory
+                    .as_ref()
+                    .map(|factory| factory.clone_ref(py)),
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

@@ -61,6 +61,7 @@ pub(crate) fn restore_nested_container_value<'py>(
         }
         TypeValidator::DefaultDict {
             items: (key_validator, value_validator),
+            missing_factory,
         } => {
             if let Ok(nested) = value.cast::<AtorsDefaultDict>() {
                 AtorsDefaultDict::restore(
@@ -69,6 +70,9 @@ pub(crate) fn restore_nested_container_value<'py>(
                     (*value_validator.0).clone(),
                     member_name,
                     object,
+                    missing_factory
+                        .as_ref()
+                        .map(|factory| factory.clone_ref(value.py())),
                 );
             }
         }
@@ -462,6 +466,7 @@ pub struct AtorsDefaultDict {
     key_validator: UnsafeCell<Validator>,
     value_validator: UnsafeCell<Validator>,
     member_name: UnsafeCell<Option<String>>,
+    missing_factory: UnsafeCell<Option<Py<PyAny>>>,
     // Wrapped in UnsafeCell to allow clearing during GC while keeping the class frozen.
     object: UnsafeCell<Option<Py<AtorsBase>>>,
 }
@@ -482,12 +487,31 @@ impl AtorsDefaultDict {
         member_name: Option<&str>,
         object: Option<Py<AtorsBase>>,
     ) -> PyResult<Bound<'py, AtorsDefaultDict>> {
+        AtorsDefaultDict::new_empty_with_factory(
+            py,
+            key_validator,
+            value_validator,
+            None,
+            member_name,
+            object,
+        )
+    }
+
+    pub(crate) fn new_empty_with_factory<'py>(
+        py: Python<'py>,
+        key_validator: Validator,
+        value_validator: Validator,
+        missing_factory: Option<Py<PyAny>>,
+        member_name: Option<&str>,
+        object: Option<Py<AtorsBase>>,
+    ) -> PyResult<Bound<'py, AtorsDefaultDict>> {
         Bound::new(
             py,
             AtorsDefaultDict {
                 key_validator: UnsafeCell::new(key_validator),
                 value_validator: UnsafeCell::new(value_validator),
                 member_name: UnsafeCell::new(member_name.map(|m| m.to_string())),
+                missing_factory: UnsafeCell::new(missing_factory),
                 object: UnsafeCell::new(object),
             },
         )
@@ -535,6 +559,9 @@ impl AtorsDefaultDict {
     /// The returned value is validated by `__missing__`; insertion is handled by callers
     /// such as `__getitem__`.
     fn build_missing_value<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(factory) = unsafe { &*self.missing_factory.get() } {
+            return factory.bind(py).call0();
+        }
         let value_validator = unsafe { &*self.value_validator.get() };
         let m = unsafe { &*self.member_name.get() }.as_deref();
         let o = unsafe { &*self.object.get() }
@@ -560,13 +587,17 @@ impl AtorsDefaultDict {
         let member_name = unsafe { &*dict.member_name.get() }
             .as_deref()
             .map(|s| s.to_string());
+        let missing_factory = unsafe { &*dict.missing_factory.get() }
+            .as_ref()
+            .map(|factory| factory.clone_ref(source.py()));
         let object = unsafe { &*dict.object.get() }
             .as_ref()
             .map(|object| object.clone_ref(source.py()));
-        let adict = AtorsDefaultDict::new_empty(
+        let adict = AtorsDefaultDict::new_empty_with_factory(
             source.py(),
             key_validator,
             value_validator,
+            missing_factory,
             member_name.as_deref(),
             object,
         )?;
@@ -585,6 +616,7 @@ impl AtorsDefaultDict {
         value_validator: Validator,
         member_name: Option<&str>,
         object: Option<&Bound<'py, AtorsBase>>,
+        missing_factory: Option<Py<PyAny>>,
     ) {
         let value_v = value_validator.clone();
 
@@ -598,6 +630,7 @@ impl AtorsDefaultDict {
                 (*inner.key_validator.get()) = key_validator;
                 (*inner.value_validator.get()) = value_validator;
                 (*inner.member_name.get()) = member_name.map(|s| s.to_string());
+                (*inner.missing_factory.get()) = missing_factory;
                 (*inner.object.get()) = object.map(|o| o.clone().unbind());
             }
         });
@@ -723,6 +756,7 @@ impl AtorsDefaultDict {
                     init_coercer: None,
                 }),
                 member_name: UnsafeCell::new(None),
+                missing_factory: UnsafeCell::new(None),
                 object: UnsafeCell::new(None),
             },
         )

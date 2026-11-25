@@ -342,3 +342,55 @@ def test_defaultdict_missing_typed_default_requires_nullary_ctor():
     obj = A(a={})
     with pytest.raises(TypeError):
         _ = obj.a["missing"]
+
+
+def test_member_default_dict_factory_overrides_inferred_default():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict[str, int] = member(
+            default=defaultdict(lambda: 42, {"seed": 7})
+        )
+
+    obj = A()
+    assert obj.a["missing"] == 42
+    assert obj.a["seed"] == 7
+
+
+def test_member_builder_default_dict_factory_overrides_inferred_default():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict[str, int] = member().default(
+            defaultdict(lambda: 42, {"seed": 7})
+        )
+
+    obj = A()
+    assert obj.a["missing"] == 42
+    assert obj.a["seed"] == 7
+
+
+def test_bare_defaultdict_accepts_actual_default_dict():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict = member(default=defaultdict(lambda: 42))
+
+    obj = A()
+    assert obj.a["missing"] == 42
+
+
+def test_bare_defaultdict_without_actual_default_is_rejected():
+    from ators import Ators
+
+    with pytest.raises(TypeError, match="Failed to configure Member a") as exc_info:
+        class A(Ators):
+            a: defaultdict
+    cause = exc_info.value
+    messages = []
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        messages.append(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    assert any("bare defaultdict" in message for message in messages)
