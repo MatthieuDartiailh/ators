@@ -23,6 +23,7 @@ from ._ators import (
     NotifyingList,
     NotifyingMap,
     PicklePolicy,
+    _register_ators_ordered_dict_type,
     add_generic_type_attributes,
     atorsref,
     create_ators_specialized_alias as _create_ators_specialized_alias,
@@ -48,8 +49,13 @@ from ._ators import (
     unobserve,
     validated,
 )
+from ._containers import AtorsOrderedDict
 from ._meta import AtorsMeta as _Meta
 from ._sentinel import UNSET
+
+# Register the AtorsOrderedDict class with the Rust type-validator so that it
+# can produce instances when an `OrderedDict` annotation is encountered.
+_register_ators_ordered_dict_type(AtorsOrderedDict)
 
 # Register generic type attributes for numpy ndarray if numpy is available
 try:
@@ -118,6 +124,7 @@ __all__ = [
     "ContainerOperation",
     "Event",
     "EventCustomizationTool",
+    "AtorsOrderedDict",
     "Member",
     "NotifyingList",
     "NotifyingMap",

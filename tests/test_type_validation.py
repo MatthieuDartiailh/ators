@@ -9,7 +9,14 @@
 
 from abc import ABC
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, DefaultDict, Literal
+from collections import OrderedDict as StdOrderedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    DefaultDict,
+    Literal,
+    OrderedDict,
+)
 
 import pytest
 
@@ -124,6 +131,20 @@ type MyInt = int
             DefaultDict[int, int],
             [{}, {1: 1}, defaultdict(int, {1: 1})],
             [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
+        (
+            OrderedDict[str, int],
+            [StdOrderedDict(), StdOrderedDict({"a": 1}), StdOrderedDict({"a": 1, "b": 2})],
+            [
+                1,
+                (),
+                {"a": "1"},
+                {1: 1},
+                {"a": 1},
+                StdOrderedDict({"a": "1"}),
+                StdOrderedDict({1: 1}),
+            ],
             False,
         ),
         # NOTE Not a type validation
@@ -801,7 +822,6 @@ def test_constrained_generic_partial_specialization_with_bound_within_constraint
 
 def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
     with pytest.raises(TypeError, match="not within the constraints"):
-
         class FloatBound[T: float](ConstrainedGenericPair[T, str]):
             pass
 
@@ -872,3 +892,15 @@ def test_subclass_validation_with_generic_class():
 
     # This exercises Subclass validator error path
     # Rust: types.rs lines 650-700 (Subclass validation)
+
+def test_ordered_dict_annotation_produces_ators_ordered_dict():
+    """OrderedDict[K, V] annotations must produce AtorsOrderedDict containers."""
+    from ators import AtorsOrderedDict
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1, "y": 2}))
+    assert isinstance(obj.a, AtorsOrderedDict)
+    assert isinstance(obj.a, StdOrderedDict)
+    assert list(obj.a.keys()) == ["x", "y"]

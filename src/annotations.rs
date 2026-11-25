@@ -117,6 +117,7 @@ pub(crate) struct PyTypes<'py> {
     frozendict: Bound<'py, PyAny>,
     collections_defaultdict: Bound<'py, PyAny>,
     typing_defaultdict: Bound<'py, PyAny>,
+    ordered_dict: Bound<'py, PyAny>,
     // sequence: Bound<'py, PyAny>,
     // mapping: Bound<'py, PyAny>,
 }
@@ -170,6 +171,7 @@ pub(crate) fn get_type_tools<'py>(py: Python<'py>) -> Result<TypeTools<'py>, PyE
             typing_defaultdict: typing_mod.getattr(intern!(py, "DefaultDict"))?,
             // sequence: builtins_mod.getattr(intern!(py, "tuple"))?,
             // mapping: builtins_mod.getattr(intern!(py, "tuple"))?,
+            ordered_dict: collections_mod.getattr(intern!(py, "OrderedDict"))?,
         },
     })
 }
@@ -683,6 +685,47 @@ pub fn build_validator_from_annotation<'py>(
                 ValidatorBuildInfo {
                     requires_owner: key_requires_owner || value_requires_owner,
                 },
+            ))
+        } else if origin.is(&tools.types.ordered_dict) {
+            let (items_validator, requires_owner) = if let Ok((key_arg, val_arg)) = args.extract() {
+                let (key_validator, key_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-key")).cast()?,
+                    &key_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                )?;
+                let (val_validator, val_info) = build_validator_from_annotation(
+                    PyString::new(py, &format!("{name}-value")).cast()?,
+                    &val_arg,
+                    type_containers,
+                    tools,
+                    ctx_provider,
+                    typevar_bindings,
+                    validation_mode,
+                )?;
+                (
+                    Some((
+                        BoxedValidator::from(key_validator),
+                        BoxedValidator::from(val_validator),
+                    )),
+                    key_info.requires_owner || val_info.requires_owner,
+                )
+            } else {
+                (None, false)
+            };
+            Ok((
+                Validator::new(
+                    TypeValidator::OrderedDict {
+                        items: items_validator,
+                    },
+                    None,
+                    None,
+                    None,
+                ),
+                ValidatorBuildInfo { requires_owner },
             ))
         } else if origin.is(&tools.types.collections_defaultdict)
             || origin.is(&tools.types.typing_defaultdict)
