@@ -913,6 +913,11 @@ pub fn build_validator_from_annotation<'py>(
             ),
             ValidatorBuildInfo::default(),
         ))
+    } else if ann.is(&tools.types.ordered_dict) {
+        Ok((
+            Validator::new(TypeValidator::OrderedDict { items: None }, None, None, None),
+            ValidatorBuildInfo::default(),
+        ))
     } else if is_type_var(&ann)?
         || (ann.getattr(intern!(py, "__constraints__")).is_ok()
             && ann.getattr(intern!(py, "__name__")).is_ok())
