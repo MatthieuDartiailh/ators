@@ -56,6 +56,8 @@ pub(crate) fn get_unset<'py>(py: Python<'py>) -> PyResult<Bound<'py, pyo3::PyAny
                 .map(Bound::unbind)
         })
         .map(|unset| unset.clone_ref(py).into_bound(py))
+}
+
 /// Cached `collections.OrderedDict` type object.
 static ORDERED_DICT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
 
