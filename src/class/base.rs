@@ -525,8 +525,8 @@ pub(crate) fn get_observer_pool<'a, 'py>(
 pub(crate) fn notify_member_change<'py>(
     obj: &Bound<'py, AtorsBase>,
     member_name: &str,
-    oldvalue: Py<PyAny>,
-    newvalue: Py<PyAny>,
+    oldvalue: Option<Py<PyAny>>,
+    newvalue: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     // Fast path: check is_observable without a critical section.
     // is_observable is set once at construction and never mutated.
@@ -542,6 +542,14 @@ pub(crate) fn notify_member_change<'py>(
     // slots[0] is immutable after construction: no CS needed to get a reference to the pool.
     let pool = get_observer_pool(obj);
     let py = obj.py();
+    let oldvalue = match oldvalue {
+        Some(value) => value,
+        None => crate::get_unset(py)?.unbind(),
+    };
+    let newvalue = match newvalue {
+        Some(value) => value,
+        None => crate::get_unset(py)?.unbind(),
+    };
     let change = Bound::new(
         py,
         AtorsChange::new(

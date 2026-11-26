@@ -46,6 +46,18 @@ fn get_type_mutability_map<'py>(py: Python<'py>) -> Bound<'py, TypeMutabilityMap
         .into_bound(py)
 }
 
+static UNSET: PyOnceLock<Py<pyo3::PyAny>> = PyOnceLock::new();
+
+pub(crate) fn get_unset<'py>(py: Python<'py>) -> PyResult<Bound<'py, pyo3::PyAny>> {
+    UNSET
+        .get_or_try_init(py, || {
+            py.import("ators._sentinel")?
+                .getattr("UNSET")
+                .map(Bound::unbind)
+        })
+        .map(|unset| unset.clone_ref(py).into_bound(py))
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 mod _ators {

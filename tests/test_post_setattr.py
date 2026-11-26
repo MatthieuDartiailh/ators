@@ -9,7 +9,7 @@
 
 import pytest
 
-from ators import Ators, Member, member
+from ators import UNSET, Ators, Member, member
 from ators.behaviors import PostSetAttr, postset
 
 
@@ -38,7 +38,7 @@ def test_call_name_object_old_new_postset():
     assert i == 1
     assert isinstance(m, Member)
     assert isinstance(obj, A)
-    assert old is None
+    assert old is UNSET
     assert new == 2
 
     a.a = 5
@@ -72,7 +72,7 @@ def test_method_postset():
     a.a = 2
     assert a.a == 2
     assert isinstance(me, Member)
-    assert old is None
+    assert old is UNSET
     assert new == 2
     assert i == 1
 
@@ -110,6 +110,22 @@ def test_inherited_postset_behavior():
     b = B()
     b.a = 5
     assert i == 1
+
+
+def test_postset_preserves_explicit_none():
+    old_values = []
+
+    def post_set(member, object, old, new):
+        old_values.append(old)
+
+    class A(Ators):
+        a: int | None = member().postset(PostSetAttr.CallMemberObjectOldNew(post_set))
+
+    a = A()
+    a.a = None
+    a.a = 1
+
+    assert old_values == [UNSET, None]
 
 
 @pytest.mark.parametrize(

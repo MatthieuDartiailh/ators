@@ -12,6 +12,7 @@ import gc
 import pytest
 
 from ators import (
+    UNSET,
     Ators,
     AtorsChange,
     disable_notifications,
@@ -59,7 +60,7 @@ def test_observe_and_unobserve():
     assert isinstance(calls[0], AtorsChange)
     assert calls[0].object is a
     assert calls[0].member_name == "a"
-    assert calls[0].oldvalue is None
+    assert calls[0].oldvalue is UNSET
     assert calls[0].newvalue == 1
 
     a.a = 2
@@ -88,7 +89,7 @@ def test_observer_notified_when_member_deleted():
     assert changes[0].object is a
     assert changes[0].member_name == "a"
     assert changes[0].oldvalue == 1
-    assert changes[0].newvalue is None
+    assert changes[0].newvalue is UNSET
 
     del a.a
     assert len(changes) == 1
@@ -113,6 +114,21 @@ def test_deleting_member_respects_frozen_and_notification_controls():
 
     with pytest.raises(TypeError, match="Cannot modify"):
         del a.a
+
+
+def test_none_value_is_distinct_from_unset():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int | None = member()
+
+    a = A()
+    observe(a, "a", changes.append)
+
+    a.a = None
+
+    assert changes[0].oldvalue is UNSET
+    assert changes[0].newvalue is None
 
 
 def test_observe_fails_for_non_observable():

@@ -10,6 +10,7 @@
 import pytest
 
 from ators import (
+    UNSET,
     Ators,
     Event,
     EventCustomizationTool,
@@ -210,8 +211,8 @@ def test_event_each_valid_set_notifies():
     assert hits == [1, 1, 1]
 
 
-def test_event_oldvalue_is_none():
-    """AtorsChange.oldvalue is None for events (no stored prior value)."""
+def test_event_oldvalue_is_unset():
+    """AtorsChange.oldvalue is UNSET for events (no stored prior value)."""
     changes = []
 
     class A(Ators, observable=True):
@@ -220,7 +221,7 @@ def test_event_oldvalue_is_none():
     a = A()
     observe(a, "clicked", changes.append)
     a.clicked = 7
-    assert changes[0].oldvalue is None
+    assert changes[0].oldvalue is UNSET
     assert changes[0].newvalue == 7
 
 

@@ -74,6 +74,29 @@ Key Features
 * **Behaviors**: Custom logic for getting, setting, and deleting attributes.
 * **Freezing**: Objects can be made immutable (frozen).
 
+Undefined Values
+----------------
+
+``ators.UNSET`` represents the absence of a value in member callbacks and
+observer changes. Compare it by identity::
+
+   from ators import Ators, UNSET, member, observe
+
+   class Item(Ators, observable=True):
+       value: int | None = member()
+
+   item = Item()
+   observe(item, "value", lambda change: print(change.oldvalue is UNSET))
+   item.value = None
+
+The first assignment passes ``UNSET`` as the pre/post-set ``current`` or
+``old`` argument and as the observer's ``oldvalue``. Deleting a stored member
+passes ``UNSET`` as ``newvalue``. Events, which never have a stored old value,
+always use ``UNSET`` for ``oldvalue``.
+
+An explicitly assigned ``None`` remains ``None`` and is distinct from
+``UNSET``. The sentinel preserves its identity when copied or pickled.
+
 Supported Typing Constructs
 ----------------------------
 
