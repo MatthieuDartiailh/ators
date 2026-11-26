@@ -5,7 +5,10 @@
 |
 | The full license is in the file LICENSE, distributed with this software.
 |----------------------------------------------------------------------------*/
-use pyo3::{Bound, Py, PyAny, PyResult, Python, pyclass, pymethods};
+use pyo3::{
+    Bound, IntoPyObject, Py, PyAny, PyResult, Python, intern, pyclass, pymethods,
+    types::PyAnyMethods,
+};
 use std::cell::UnsafeCell;
 
 use crate::{class::AtorsBase, validators::Validator};
@@ -68,10 +71,42 @@ impl AtorsOrderedDictCore {
                 _ => false,
             }
     }
+
+    pub(crate) fn restore<'py>(
+        container: &Bound<'py, PyAny>,
+        key_validator: Validator,
+        value_validator: Validator,
+        member_name: Option<&str>,
+        object: Option<&Bound<'py, AtorsBase>>,
+    ) -> PyResult<()> {
+        let core = AtorsOrderedDictCore::new_empty(
+            container.py(),
+            key_validator,
+            value_validator,
+            member_name,
+            object.map(|o| o.clone().unbind()),
+        )?;
+        container.setattr(intern!(container.py(), "_core"), core)
+    }
 }
 
 #[pymethods]
 impl AtorsOrderedDictCore {
+    #[staticmethod]
+    pub fn _construct<'py>(py: Python<'py>) -> PyResult<Bound<'py, AtorsOrderedDictCore>> {
+        use crate::validators::Validator;
+        AtorsOrderedDictCore::new_empty(py, Validator::default(), Validator::default(), None, None)
+    }
+
+    pub fn __reduce_ex__<'py>(
+        self_: &Bound<'py, Self>,
+        py: Python<'py>,
+        _protocol: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        (self_.getattr(intern!(py, "_construct"))?, (), py.None())
+            .into_pyobject(py)
+            .map(|obj| obj.into_any())
+    }
     /// Validate and return a key.
     pub fn validate_key<'py>(&self, key: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = key.py();

@@ -26,7 +26,6 @@ INITIAL_DICT = {"a": 1, "b": 2, "c": 3, "d": 4}
 INITIAL_ORDERED_DICT = OrderedDict([("a", 1), ("b", 2), ("c", 3), ("d", 4)])
 
 
-
 def _ensure_int(value: Any) -> None:
     if not isinstance(value, int):
         raise TypeError(f"Expected int, got {type(value).__name__}")
@@ -795,6 +794,10 @@ def _build_defaultdict_missing_scalar_op(obj: Any) -> Callable[[], None]:
         _ = obj.scalar_field[key]
         obj.scalar_field.pop(key)
         index[0] += 1
+
+    return op
+
+
 def _build_ordered_dict_setitem_op(obj: Any) -> Callable[[], None]:
     next_value = [9]
 
@@ -812,6 +815,7 @@ def _build_ordered_dict_move_to_end_last_op(obj: Any) -> Callable[[], None]:
     def op() -> None:
         obj.ordered_dict_field.move_to_end(keys[idx[0]])
         idx[0] = (idx[0] + 1) % len(keys)
+
     return op
 
 
@@ -823,6 +827,10 @@ def _build_defaultdict_missing_list_op(obj: Any) -> Callable[[], None]:
         _ = obj.list_field[key]
         obj.list_field.pop(key)
         index[0] += 1
+
+    return op
+
+
 def _build_ordered_dict_move_to_end_first_op(obj: Any) -> Callable[[], None]:
     keys = list(obj.ordered_dict_field.keys())
     idx = [0]
@@ -830,6 +838,7 @@ def _build_ordered_dict_move_to_end_first_op(obj: Any) -> Callable[[], None]:
     def op() -> None:
         obj.ordered_dict_field.move_to_end(keys[idx[0]], last=False)
         idx[0] = (idx[0] + 1) % len(keys)
+
     return op
 
 
@@ -841,12 +850,17 @@ def _build_defaultdict_missing_dict_op(obj: Any) -> Callable[[], None]:
         _ = obj.dict_field[key]
         obj.dict_field.pop(key)
         index[0] += 1
+
+    return op
+
+
 def _build_ordered_dict_popitem_last_op(obj: Any) -> Callable[[], None]:
     field = obj.ordered_dict_field
 
     def op() -> None:
         k, v = field.popitem(last=True)
         field[k] = v  # restore to keep the dict non-empty
+
     return op
 
 
@@ -858,6 +872,10 @@ def _build_defaultdict_mutate_list_after_missing_op(obj: Any) -> Callable[[], No
         obj.list_field[key].append(9)
         obj.list_field.pop(key)
         index[0] += 1
+
+    return op
+
+
 def _build_ordered_dict_popitem_first_op(obj: Any) -> Callable[[], None]:
     field = obj.ordered_dict_field
 
@@ -866,6 +884,7 @@ def _build_ordered_dict_popitem_first_op(obj: Any) -> Callable[[], None]:
         # Re-insert at the front using move_to_end
         field[k] = v
         field.move_to_end(k, last=False)
+
     return op
 
 

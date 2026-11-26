@@ -258,6 +258,9 @@ def test_validated_ordered_dict_argument_and_return_reject_invalid_items() -> No
     with pytest.raises(TypeError, match="Failed to validate return value"):
         make()
 
+    with pytest.raises(ExceptionGroup):
+        echo({"a": 1})  # plain dict is not an OrderedDict
+
 
 @pytest.mark.asyncio
 async def test_validated_async_defaultdict_return_is_checked_without_wrapping() -> None:

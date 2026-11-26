@@ -59,6 +59,15 @@ class AtorsOrderedDict(OrderedDict):
             )
         # Already initialised by _from_core_and_items; nothing to do.
 
+    def __reduce_ex__(self, protocol):
+        from ators._ators import AtorsOrderedDictCore
+
+        core = AtorsOrderedDictCore._construct()
+        return (
+            AtorsOrderedDict._from_core_and_items,
+            (core, list(OrderedDict.items(self))),
+        )
+
     # ------------------------------------------------------------------
     # Mutating operations — all delegate validation to self._core.
     # ------------------------------------------------------------------

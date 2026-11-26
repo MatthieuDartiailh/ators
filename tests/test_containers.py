@@ -437,6 +437,8 @@ def test_bare_defaultdict_without_actual_default_is_rejected():
         messages.append(str(cause))
         cause = cause.__cause__ or cause.__context__
     assert any("bare defaultdict" in message for message in messages)
+
+
 @pytest.fixture()
 def ators_ordered_dict_object():
     from collections import OrderedDict as StdOrderedDict

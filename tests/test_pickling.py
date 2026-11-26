@@ -8,7 +8,7 @@
 """Tests for pickling support in Ators."""
 
 import pickle
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 
 import pytest
 
@@ -121,12 +121,18 @@ class _NotifyingListClass(Ators, observable=True):
 
 class _NotifyingMapClass(Ators, observable=True):
     items: NotifyingMap[str, int]
+
+
 class _DefaultDictClass(Ators):
     mapping: defaultdict[str, int]
 
 
 class _DefaultDictNestedClass(Ators):
     mapping: defaultdict[str, list[int]]
+
+
+class _OrderedDictClass(Ators):
+    mapping: OrderedDict[str, int]
 
 
 class _InheritanceBase(Ators):
@@ -450,6 +456,18 @@ def test_nested_defaultdict_member_validates_after_restore():
         a2.mapping["x"].append("bad")
     a2.mapping["y"].append(3)
     assert a2.mapping["y"] == [3]
+
+
+def test_ordered_dict_member_roundtrip_preserves_validation():
+    a = _OrderedDictClass(mapping=OrderedDict([("x", 1)]))
+    a2 = pickle.loads(pickle.dumps(a))
+
+    assert isinstance(a2.mapping, OrderedDict)
+    assert list(a2.mapping.items()) == [("x", 1)]
+    a2.mapping["y"] = 2
+    assert list(a2.mapping.items()) == [("x", 1), ("y", 2)]
+    with pytest.raises(TypeError):
+        a2.mapping["bad"] = "value"
 
 
 # ---------------------------------------------------------------------------
