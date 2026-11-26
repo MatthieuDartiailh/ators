@@ -369,10 +369,11 @@ pub enum TypeValidator {
         items: Option<(BoxedValidator, BoxedValidator)>,
         validation_mode: ValidationMode,
     },
-    #[pyo3(constructor = (items, missing_factory))]
+    #[pyo3(constructor = (items, missing_factory, validation_mode))]
     DefaultDict {
         items: (BoxedValidator, BoxedValidator),
         missing_factory: Option<Py<PyAny>>,
+        validation_mode: ValidationMode,
     },
     // Sequence,
     // List,
@@ -434,6 +435,9 @@ impl TypeValidator {
                 validation_mode, ..
             }
             | Self::Dict {
+                validation_mode, ..
+            }
+            | Self::DefaultDict {
                 validation_mode, ..
             } => *validation_mode == ValidationMode::CheckOnly,
             Self::NotifyingList { .. } | Self::NotifyingMap { .. } => false,
@@ -528,6 +532,7 @@ impl TypeValidator {
             Self::DefaultDict {
                 items: (key_v, val_v),
                 missing_factory,
+                validation_mode,
             } => Self::DefaultDict {
                 items: (
                     BoxedValidator::from(key_v.with_owner(py, owner)),
@@ -536,6 +541,7 @@ impl TypeValidator {
                 missing_factory: missing_factory
                     .as_ref()
                     .map(|factory| factory.clone_ref(py)),
+                validation_mode: *validation_mode,
             },
             _ => self.clone(),
         }
@@ -1457,7 +1463,51 @@ impl TypeValidator {
             Self::DefaultDict {
                 items: (key_v, val_v),
                 missing_factory,
+                validation_mode,
             } => {
+                if *validation_mode == ValidationMode::CheckOnly {
+                    if let Ok(dict) = value.cast::<pyo3::types::PyDict>() {
+                        for (tk, tv) in dict.iter() {
+                            if let Err(err) = key_v.validate(name, object, &tk) {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate key '{}' for the member {} of {}.",
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                }
+                                return Err(err);
+                            }
+                            if let Err(err) = val_v.validate(name, object, &tv) {
+                                if let Some(m) = name
+                                    && let Some(o) = object
+                                {
+                                    return Err(err_with_cause(
+                                        value.py(),
+                                        pyo3::exceptions::PyTypeError::new_err(format!(
+                                            "Failed to validate value '{}' with key '{}' for the member {} of {}.",
+                                            tv.repr()?,
+                                            tk.repr()?,
+                                            m,
+                                            o.repr()?
+                                        )),
+                                        err,
+                                    ));
+                                }
+                                return Err(err);
+                            }
+                        }
+                        return Ok(value.clone());
+                    }
+                    return validation_error!("dict", name, object, value);
+                }
                 if let Ok(ators_dict) = value.cast::<crate::containers::AtorsDefaultDict>()
                     && ators_dict.get().matches_assignment_context(name, object)
                 {
@@ -1798,6 +1848,7 @@ impl TypeValidator {
             Self::DefaultDict {
                 items: (key_v, val_v),
                 missing_factory,
+                validation_mode,
             } if args.is_empty() && kwargs.as_ref().is_none_or(|k| k.bind(py).is_empty()) => {
                 crate::containers::AtorsDefaultDict::new_empty_with_factory(
                     py,
@@ -1914,6 +1965,7 @@ impl TypeValidator {
             Self::DefaultDict {
                 items: _,
                 missing_factory: _,
+                validation_mode: _,
             } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
@@ -2017,11 +2069,13 @@ impl Clone for TypeValidator {
             Self::DefaultDict {
                 items,
                 missing_factory,
+                validation_mode,
             } => Self::DefaultDict {
                 items: items.clone(),
                 missing_factory: missing_factory
                     .as_ref()
                     .map(|factory| factory.clone_ref(py)),
+                validation_mode: *validation_mode,
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

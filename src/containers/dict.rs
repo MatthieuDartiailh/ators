@@ -62,6 +62,7 @@ pub(crate) fn restore_nested_container_value<'py>(
         TypeValidator::DefaultDict {
             items: (key_validator, value_validator),
             missing_factory,
+            validation_mode: _,
         } => {
             if let Ok(nested) = value.cast::<AtorsDefaultDict>() {
                 AtorsDefaultDict::restore(

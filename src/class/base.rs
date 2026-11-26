@@ -364,6 +364,7 @@ impl AtorsBase {
                 TypeValidator::DefaultDict {
                     items: (key_bv, val_bv),
                     missing_factory,
+                    validation_mode: _,
                 } => {
                     if let Ok(adict) = value.cast::<AtorsDefaultDict>() {
                         AtorsDefaultDict::restore(

@@ -187,21 +187,23 @@ def test_validated_async_function_return_validation() -> None:
     assert "str" in error_msg
 
 
-def test_validated_defaultdict_argument_and_return_are_wrapped() -> None:
+def test_validated_defaultdict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
     @validated
     def echo(value: DefaultDict[str, int]) -> DefaultDict[str, int]:
-        assert isinstance(value, AtorsDefaultDict)
+        assert not isinstance(value, AtorsDefaultDict)
         return value
 
     source = {"a": 1}
     result = echo(source)
 
-    assert isinstance(result, AtorsDefaultDict)
+    assert not isinstance(result, AtorsDefaultDict)
     assert dict(result) == {"a": 1}
-    assert result is not source
+    assert result is source
 
     source["b"] = 2
-    assert "b" not in result
+    assert "b" in result
 
 
 def test_validated_defaultdict_argument_and_return_reject_invalid_items() -> None:
@@ -221,24 +223,26 @@ def test_validated_defaultdict_argument_and_return_reject_invalid_items() -> Non
 
 
 @pytest.mark.asyncio
-async def test_validated_async_defaultdict_return_is_wrapped() -> None:
+async def test_validated_async_defaultdict_return_is_checked_without_wrapping() -> None:
     @validated
     async def make() -> DefaultDict[str, int]:
         return {"a": 1}
 
     result = await make()
-    assert isinstance(result, AtorsDefaultDict)
-    assert result["missing"] == 0
+    assert not isinstance(result, AtorsDefaultDict)
+    assert dict(result) == {"a": 1}
 
 
-def test_validated_bare_defaultdict_argument_and_return_are_wrapped() -> None:
+def test_validated_bare_defaultdict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
     @validated
     def echo(value: defaultdict) -> defaultdict:
-        assert isinstance(value, AtorsDefaultDict)
+        assert not isinstance(value, AtorsDefaultDict)
         return value
 
     result = echo({"a": 1})
-    assert isinstance(result, AtorsDefaultDict)
+    assert not isinstance(result, AtorsDefaultDict)
     assert dict(result) == {"a": 1}
 
 

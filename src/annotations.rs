@@ -718,6 +718,7 @@ pub fn build_validator_from_annotation<'py>(
                             BoxedValidator::from(val_validator),
                         ),
                         missing_factory: None,
+                        validation_mode,
                     },
                     None,
                     None,
@@ -861,6 +862,7 @@ pub fn build_validator_from_annotation<'py>(
                         BoxedValidator::from(Validator::default()),
                     ),
                     missing_factory: None,
+                    validation_mode,
                 },
                 None,
                 None,
@@ -1295,15 +1297,18 @@ fn configure_member_builder_from_annotation<'py>(
                                 BoxedValidator::from(Validator::default()),
                             ),
                             missing_factory: Some(factory_py),
+                            validation_mode: ValidationMode::CheckAndWrap,
                         };
                     } else if let TypeValidator::DefaultDict {
                         items,
                         missing_factory: _,
+                        validation_mode,
                     } = current_validator.type_validator
                     {
                         current_validator.type_validator = TypeValidator::DefaultDict {
                             items,
                             missing_factory: Some(factory_py),
+                            validation_mode,
                         };
                     }
                     builder.set_type_validator(current_validator.type_validator);
