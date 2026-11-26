@@ -49,6 +49,7 @@ from ._ators import (
     validated,
 )
 from ._meta import AtorsMeta as _Meta
+from ._sentinel import UNSET
 
 # Register generic type attributes for numpy ndarray if numpy is available
 try:
@@ -109,6 +110,7 @@ class Ators(_Base, metaclass=_Meta):
 
 
 __all__ = [
+    "UNSET",
     "Ators",
     "AtorsChange",
     "AtorsRef",

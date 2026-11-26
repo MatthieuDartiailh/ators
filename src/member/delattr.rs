@@ -27,12 +27,9 @@ impl DelattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::Slot {} => match crate::class::base::del_slot(object, member.index()) {
-                Ok(Some(old)) => crate::class::base::notify_member_change(
-                    object,
-                    member.name(),
-                    old,
-                    object.py().None(),
-                ),
+                Ok(Some(old)) => {
+                    crate::class::base::notify_member_change(object, member.name(), Some(old), None)
+                }
                 Ok(None) => Ok(()),
                 Err(()) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                     "Cannot modify {} which is frozen.",

@@ -134,7 +134,7 @@ impl Event {
         };
 
         // Notify observers — no value is stored.
-        notify_member_change(object, &self_.name, py.None(), new.unbind())?;
+        notify_member_change(object, &self_.name, None, Some(new.unbind()))?;
 
         Ok(())
     }

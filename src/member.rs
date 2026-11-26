@@ -502,12 +502,7 @@ impl Member {
                 run_post_set(&self_, object, &old_on_write.as_ref(), &new)?;
             }
 
-            notify_member_change(
-                object,
-                &self_.name,
-                old_on_write.unwrap_or_else(|| py.None()),
-                new.unbind(),
-            )?;
+            notify_member_change(object, &self_.name, old_on_write, Some(new.unbind()))?;
         }
 
         Ok(())
