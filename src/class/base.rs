@@ -277,7 +277,7 @@ impl AtorsBase {
         slf: &Bound<'py, AtorsBase>,
         state: &Bound<'py, PyDict>,
     ) -> PyResult<()> {
-        use crate::containers::{AtorsDict, AtorsList, AtorsSet};
+        use crate::containers::{AtorsDefaultDict, AtorsDict, AtorsList, AtorsSet};
         use crate::validators::types::TypeValidator;
 
         let py = slf.py();
@@ -358,6 +358,24 @@ impl AtorsBase {
                             (*val_bv.0).clone(),
                             Some(mb.name()),
                             Some(slf),
+                        );
+                    }
+                }
+                TypeValidator::DefaultDict {
+                    items: (key_bv, val_bv),
+                    missing_factory,
+                    validation_mode: _,
+                } => {
+                    if let Ok(adict) = value.cast::<AtorsDefaultDict>() {
+                        AtorsDefaultDict::restore(
+                            adict,
+                            (*key_bv.0).clone(),
+                            (*val_bv.0).clone(),
+                            Some(mb.name()),
+                            Some(slf),
+                            missing_factory
+                                .as_ref()
+                                .map(|factory| factory.clone_ref(py)),
                         );
                     }
                 }

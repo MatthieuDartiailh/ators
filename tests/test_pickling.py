@@ -8,6 +8,7 @@
 """Tests for pickling support in Ators."""
 
 import pickle
+from collections import defaultdict
 
 import pytest
 
@@ -120,6 +121,12 @@ class _NotifyingListClass(Ators, observable=True):
 
 class _NotifyingMapClass(Ators, observable=True):
     items: NotifyingMap[str, int]
+class _DefaultDictClass(Ators):
+    mapping: defaultdict[str, int]
+
+
+class _DefaultDictNestedClass(Ators):
+    mapping: defaultdict[str, list[int]]
 
 
 class _InheritanceBase(Ators):
@@ -423,6 +430,26 @@ def test_dict_dict_value_member_validates_after_restore():
     assert a2.mapping["y"]["c"] == 3
     with pytest.raises(TypeError):
         a2.mapping["y"]["d"] = "not an int"
+
+
+def test_defaultdict_member_roundtrip_preserves_missing_behavior():
+    a = _DefaultDictClass(mapping={"x": 1})
+    a2 = pickle.loads(pickle.dumps(a))
+    assert dict(a2.mapping) == {"x": 1}
+    assert a2.mapping["missing"] == 0
+    with pytest.raises(TypeError):
+        _ = a2.mapping[1]  # type: ignore[index]
+
+
+def test_nested_defaultdict_member_validates_after_restore():
+    a = _DefaultDictNestedClass(mapping={"x": [1]})
+    a2 = pickle.loads(pickle.dumps(a))
+    a2.mapping["x"].append(2)
+    assert a2.mapping["x"] == [1, 2]
+    with pytest.raises(TypeError):
+        a2.mapping["x"].append("bad")
+    a2.mapping["y"].append(3)
+    assert a2.mapping["y"] == [3]
 
 
 # ---------------------------------------------------------------------------

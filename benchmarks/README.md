@@ -22,6 +22,7 @@ and two frontends:
 - `containers/test_list.py`: Rust-backed list method family.
 - `containers/test_set.py`: Rust-backed set method family.
 - `containers/test_dict.py`: Rust-backed dict method family.
+- `containers/test_defaultdict.py`: Rust-backed defaultdict method family.
 - `test_typecheck.py`: generic-aware `issubclass`/`isinstance` family.
 
 ### Shared pyperf entrypoints

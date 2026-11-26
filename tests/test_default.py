@@ -314,6 +314,42 @@ def test_member_ctor_default_inherits():
     assert B().a == 7
 
 
+def test_actual_defaultdict_default_is_copied_per_instance():
+    from collections import defaultdict
+
+    template = defaultdict(lambda: 42, {"seed": 7})
+
+    class A(Ators):
+        a = member(default=template)
+
+    first = A()
+    second = A()
+    assert first.a is not template
+    assert second.a is not first.a
+    assert first.a.default_factory is template.default_factory
+    assert first.a["seed"] == 7
+    first.a["new"] = 99
+    assert "new" not in second.a
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        lambda: member(default_factory=lambda: []),
+        lambda: member().default(Default.Call(lambda: [])),
+    ],
+)
+def test_other_factory_mechanism_parameterized_annotation_warns(builder):
+    from collections import defaultdict
+
+    with pytest.warns(UserWarning, match="inferred"):
+        class A(Ators):
+            a: defaultdict[str, list[int]] = builder()
+
+    obj = A()
+    assert obj.a["missing"] == []
+
+
 def test_member_ctor_default_factory_inherits():
     """Constructor-set default_factory propagates through .inherit() in subclasses."""
     i = 0

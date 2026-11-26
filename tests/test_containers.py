@@ -7,6 +7,7 @@
 # --------------------------------------------------------------------------------------
 """Test ators object containers validation behavior."""
 
+from collections import defaultdict
 from contextlib import nullcontext
 from types import MappingProxyType
 
@@ -120,12 +121,19 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
+@pytest.fixture(
+    params=[dict[str, int], defaultdict[str, int]], ids=["dict", "defaultdict"]
+)
+def dict_annotation(request):
+    return request.param
+
+
 @pytest.fixture()
-def ators_dict_object():
+def ators_dict_object(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     return A(a={"a": 2})
 
@@ -208,11 +216,11 @@ def test_set_same_owner_member_reassignment_copies_container():
     assert type(obj.a) is type(original)
 
 
-def test_dict_same_owner_member_reassignment_copies_container():
+def test_dict_same_owner_member_reassignment_copies_container(dict_annotation):
     from ators import Ators
 
     class A(Ators):
-        a: dict[str, int]
+        a: dict_annotation
 
     obj = A(a={"a": 1, "b": 2})
     original = obj.a
@@ -261,3 +269,171 @@ def test_deeply_nested_container_error_context():
 
     # This exercises error chain building through nested validation
     # Rust: types.rs lines 250-350 (nested container error paths)
+
+
+def test_dict_assignment_from_dict_and_copy_on_reassignment(dict_annotation):
+    from ators import Ators
+
+    class A(Ators):
+        a: dict_annotation
+
+    obj = A(a={"a": 1, "b": 2})
+    source = {"x": 10}
+    obj.a = source
+    source["y"] = 20
+    assert dict(obj.a) == {"x": 10}
+
+    original = obj.a
+    obj.a = original
+    assert obj.a == {"x": 10}
+    assert obj.a is not original
+    obj.a["z"] = 30
+    assert "z" not in original
+
+
+def test_defaultdict_missing_scalar_default():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={})
+    assert obj.a["missing"] == 0
+    assert obj.a["missing"] == 0
+    assert dict(obj.a) == {"missing": 0}
+    with pytest.raises(TypeError):
+        _ = obj.a[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_nested_defaults_and_validation():
+    from ators import Ators
+
+    class A(Ators):
+        lists: defaultdict[str, list[int]]
+        sets: defaultdict[str, set[int]]
+        dicts: defaultdict[str, dict[str, int]]
+        nested: defaultdict[str, defaultdict[str, int]]
+
+    obj = A(lists={}, sets={}, dicts={}, nested={})
+
+    obj.lists["k"].append(1)
+    with pytest.raises(TypeError):
+        obj.lists["k"].append("bad")
+
+    obj.sets["k"].add(1)
+    with pytest.raises(TypeError):
+        obj.sets["k"].add("bad")
+
+    obj.dicts["k"]["x"] = 1
+    with pytest.raises(TypeError):
+        obj.dicts["k"]["x"] = "bad"
+
+    assert obj.nested["outer"]["inner"] == 0
+    with pytest.raises(TypeError):
+        _ = obj.nested[1]  # type: ignore[index]
+
+
+def test_defaultdict_missing_typed_default_requires_nullary_ctor():
+    from ators import Ators
+
+    class RequiresArg:
+        def __init__(self, value):
+            self.value = value
+
+    class A(Ators):
+        a: defaultdict[str, RequiresArg]
+
+    obj = A(a={})
+    with pytest.raises(TypeError):
+        _ = obj.a["missing"]
+
+
+def test_defaultdict_mutation_assignment_and_copy_paths():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={"seed": 1})
+    obj.a["key"] = 2
+    obj.a.setdefault("default", 3)
+    obj.a.setdefault("existing", 99)
+    obj.a.update({"updated": 4})
+    obj.a.update(named=5)
+    obj.a |= {"ior": 6}
+    del obj.a["seed"]
+
+    assert dict(obj.a) == {
+        "key": 2,
+        "default": 3,
+        "existing": 99,
+        "updated": 4,
+        "named": 5,
+        "ior": 6,
+    }
+
+    with pytest.raises(TypeError):
+        obj.a[1] = 7
+    with pytest.raises(TypeError):
+        obj.a["bad"] = "value"
+
+    source = {"copy": 8}
+    obj.a = source
+    source["later"] = 9
+    assert dict(obj.a) == {"copy": 8}
+
+    original = obj.a
+    obj.a = original
+    assert obj.a is not original
+
+
+def test_member_default_dict_factory_overrides_inferred_default():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict[str, int] = member(default=defaultdict(lambda: 42, {"seed": 7}))
+
+    obj = A()
+    assert obj.a["missing"] == 42
+    assert obj.a["seed"] == 7
+
+
+def test_member_builder_default_dict_factory_overrides_inferred_default():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict[str, int] = member().default(
+            defaultdict(lambda: 42, {"seed": 7})
+        )
+
+    obj = A()
+    assert obj.a["missing"] == 42
+    assert obj.a["seed"] == 7
+
+
+def test_bare_defaultdict_accepts_actual_default_dict():
+    from ators import Ators, member
+
+    class A(Ators):
+        a: defaultdict = member(default=defaultdict(lambda: 42))
+
+    obj = A()
+    assert obj.a["missing"] == 42
+
+
+def test_bare_defaultdict_without_actual_default_is_rejected():
+    from ators import Ators
+
+    with pytest.raises(TypeError, match="Failed to configure Member a") as exc_info:
+
+        class A(Ators):
+            a: defaultdict
+
+    cause = exc_info.value
+    messages = []
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        messages.append(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    assert any("bare defaultdict" in message for message in messages)

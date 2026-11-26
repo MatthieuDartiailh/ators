@@ -8,7 +8,7 @@
 /// Default value behavior definitions and related utilities.
 use crate::utils::create_behavior_callable_checker;
 use pyo3::{
-    Bound, Py, PyAny, PyRef, PyResult, Python, pyclass,
+    Bound, Py, PyAny, PyRef, PyResult, Python, intern, pyclass,
     types::{PyAnyMethods, PyDict, PyString, PyTuple},
 };
 
@@ -50,10 +50,22 @@ impl DefaultBehavior {
                 member.name,
                 object.repr()?
             ))),
-            Self::Static { value } => Ok(value.clone_ref(member.py()).into_bound(member.py())),
-            Self::ValidatorDelegate { args, kwargs } => member
-                .validator
-                .create_default(args.bind(member.py()), kwargs),
+            Self::Static { value } => {
+                let py = member.py();
+                let value = value.bind(py);
+                let collections = py.import(intern!(py, "collections"))?;
+                let defaultdict_type = collections.getattr(intern!(py, "defaultdict"))?;
+                if value.is_instance(&defaultdict_type)? {
+                    Ok(value.call_method0(intern!(py, "copy"))?)
+                } else {
+                    Ok(value.clone())
+                }
+            }
+            Self::ValidatorDelegate { args, kwargs } => {
+                member
+                    .validator
+                    .create_default(None, None, args.bind(member.py()), kwargs)
+            }
             Self::Call { callable } => callable.0.bind(member.py()).call0(),
             Self::CallMemberObject { callable } => {
                 callable.0.bind(member.py()).call1((&member.name, object))
