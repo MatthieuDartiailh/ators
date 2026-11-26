@@ -77,6 +77,19 @@ pub(crate) fn restore_nested_container_value<'py>(
                 );
             }
         }
+        TypeValidator::OrderedDict {
+            items: Some((key_validator, value_validator)),
+            validation_mode: _,
+        } => {
+            crate::containers::AtorsOrderedDictCore::restore(
+                value,
+                (*key_validator.0).clone(),
+                (*value_validator.0).clone(),
+                member_name,
+                object,
+            )
+            .ok();
+        }
         TypeValidator::NotifyingList {
             item: Some(item_validator),
         } => {

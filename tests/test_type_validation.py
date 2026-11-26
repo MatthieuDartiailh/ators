@@ -8,8 +8,14 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from collections import defaultdict
-from typing import TYPE_CHECKING, Any, DefaultDict, Literal
+from collections import OrderedDict as StdOrderedDict, defaultdict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    DefaultDict,
+    Literal,
+    OrderedDict,
+)
 
 import pytest
 
@@ -124,6 +130,24 @@ type MyInt = int
             DefaultDict[int, int],
             [{}, {1: 1}, defaultdict(int, {1: 1})],
             [1, (), {1: "a"}, {"1": 1}, {"1": "a"}],
+            False,
+        ),
+        (
+            OrderedDict[str, int],
+            [
+                StdOrderedDict(),
+                StdOrderedDict({"a": 1}),
+                StdOrderedDict({"a": 1, "b": 2}),
+            ],
+            [
+                1,
+                (),
+                {"a": "1"},
+                {1: 1},
+                {"a": 1},
+                StdOrderedDict({"a": "1"}),
+                StdOrderedDict({1: 1}),
+            ],
             False,
         ),
         # NOTE Not a type validation
@@ -621,7 +645,9 @@ def test_inherited_type_validator():
 
 @pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
 def test_bare_defaultdict_annotation_is_rejected(annotation):
-    with pytest.raises(TypeError, match="Failed to configure Member a from annotation") as exc_info:
+    with pytest.raises(
+        TypeError, match="Failed to configure Member a from annotation"
+    ) as exc_info:
 
         class A(Ators):
             a: annotation = member()
@@ -656,6 +682,7 @@ def test_type_alias_annotations_are_evaluated_before_validation():
 # ---------------------------------------------------------------------------
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------
+
 
 class ConstrainedBox[T: (int, str)](Ators):
     item: T = member()
@@ -872,3 +899,16 @@ def test_subclass_validation_with_generic_class():
 
     # This exercises Subclass validator error path
     # Rust: types.rs lines 650-700 (Subclass validation)
+
+
+def test_ordered_dict_annotation_produces_ators_ordered_dict():
+    """OrderedDict[K, V] annotations must produce AtorsOrderedDict containers."""
+    from ators import AtorsOrderedDict
+
+    class A(Ators):
+        a: OrderedDict[str, int]
+
+    obj = A(a=StdOrderedDict({"x": 1, "y": 2}))
+    assert isinstance(obj.a, AtorsOrderedDict)
+    assert isinstance(obj.a, StdOrderedDict)
+    assert list(obj.a.keys()) == ["x", "y"]

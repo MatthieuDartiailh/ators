@@ -7,8 +7,8 @@
 # --------------------------------------------------------------------------------------
 """Shared container benchmark case registry."""
 
-from collections import defaultdict
-from typing import Any, Callable, cast
+from collections import OrderedDict, defaultdict
+from typing import Any, Callable, OrderedDict as TypingOrderedDict, cast
 
 from ators import Ators, member
 from benchmarks.shared.registry_types import BenchmarkCase
@@ -23,6 +23,7 @@ if ATOM_AVAILABLE:
 INITIAL_LIST = [1, 2, 3, 4]
 INITIAL_SET = {1, 2, 3, 4}
 INITIAL_DICT = {"a": 1, "b": 2, "c": 3, "d": 4}
+INITIAL_ORDERED_DICT = OrderedDict([("a", 1), ("b", 2), ("c", 3), ("d", 4)])
 
 
 def _ensure_int(value: Any) -> None:
@@ -146,6 +147,40 @@ class ValidatedStrIntDict(dict):
         return self
 
 
+class ValidatedStrIntOrderedDict(OrderedDict):
+    def __setitem__(self, key, value):
+        _ensure_key(key)
+        _ensure_value(value)
+        return super().__setitem__(key, value)
+
+    def update(self, other=(), **kwargs):
+        if other:
+            if hasattr(other, "keys"):
+                for key in other.keys():
+                    value = other[key]
+                    _ensure_key(key)
+                    _ensure_value(value)
+            else:
+                for key, value in other:
+                    _ensure_key(key)
+                    _ensure_value(value)
+        for key, value in kwargs.items():
+            _ensure_key(key)
+            _ensure_value(value)
+        return super().update(other, **kwargs)
+
+    def setdefault(self, key, default=None):
+        _ensure_key(key)
+        if key in self:
+            return self[key]
+        _ensure_value(default)
+        return super().setdefault(key, default)
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
 class PyListContainer:
     def __init__(self):
         self.list_field = INITIAL_LIST.copy()
@@ -174,6 +209,16 @@ class PyDictContainer:
 class PyValidatedDictContainer:
     def __init__(self):
         self.dict_field = ValidatedStrIntDict(INITIAL_DICT)
+
+
+class PyOrderedDictContainer:
+    def __init__(self):
+        self.ordered_dict_field = OrderedDict(INITIAL_ORDERED_DICT)
+
+
+class PyValidatedOrderedDictContainer:
+    def __init__(self):
+        self.ordered_dict_field = ValidatedStrIntOrderedDict(INITIAL_ORDERED_DICT)
 
 
 class AtorsListContainer(Ators):
@@ -209,6 +254,10 @@ class AtorsDefaultDictContainer(Ators):
     scalar_field: defaultdict[str, int] = member()
     list_field: defaultdict[str, list[int]] = member()
     dict_field: defaultdict[str, dict[str, int]] = member()
+
+
+class AtorsOrderedDictContainer(Ators):
+    ordered_dict_field: TypingOrderedDict[str, int] = member()
 
 
 if ATOM_AVAILABLE:
@@ -305,6 +354,16 @@ def _defaultdict_implementations() -> dict[str, Callable[[], Any]]:
             dict_field={},
         )
     return implementations
+
+
+def _ordered_dict_implementations() -> dict[str, Callable[[], Any]]:
+    return {
+        "py": PyOrderedDictContainer,
+        "py_typed": PyValidatedOrderedDictContainer,
+        "ators": lambda: AtorsOrderedDictContainer(
+            ordered_dict_field=OrderedDict(INITIAL_ORDERED_DICT)
+        ),
+    }
 
 
 def _make_case(
@@ -669,6 +728,64 @@ def _defaultdict_cases() -> list[BenchmarkCase]:
     return cases
 
 
+def _ordered_dict_cases() -> list[BenchmarkCase]:
+    cases = []
+    for implementation, factory in _ordered_dict_implementations().items():
+        cases.extend(
+            [
+                _make_case(
+                    "ordered_dict",
+                    "setitem",
+                    implementation,
+                    factory,
+                    _build_ordered_dict_setitem_op,
+                ),
+                _make_case(
+                    "ordered_dict",
+                    "update",
+                    implementation,
+                    factory,
+                    lambda obj: (
+                        lambda: (
+                            obj.ordered_dict_field.update({"x": 11, "y": 12}),
+                            obj.ordered_dict_field.pop("x"),
+                            obj.ordered_dict_field.pop("y"),
+                        )
+                    ),
+                ),
+                _make_case(
+                    "ordered_dict",
+                    "move_to_end_last",
+                    implementation,
+                    factory,
+                    _build_ordered_dict_move_to_end_last_op,
+                ),
+                _make_case(
+                    "ordered_dict",
+                    "move_to_end_first",
+                    implementation,
+                    factory,
+                    _build_ordered_dict_move_to_end_first_op,
+                ),
+                _make_case(
+                    "ordered_dict",
+                    "popitem_last",
+                    implementation,
+                    factory,
+                    _build_ordered_dict_popitem_last_op,
+                ),
+                _make_case(
+                    "ordered_dict",
+                    "popitem_first",
+                    implementation,
+                    factory,
+                    _build_ordered_dict_popitem_first_op,
+                ),
+            ]
+        )
+    return cases
+
+
 def _build_defaultdict_missing_scalar_op(obj: Any) -> Callable[[], None]:
     index = [0]
 
@@ -677,6 +794,27 @@ def _build_defaultdict_missing_scalar_op(obj: Any) -> Callable[[], None]:
         _ = obj.scalar_field[key]
         obj.scalar_field.pop(key)
         index[0] += 1
+
+    return op
+
+
+def _build_ordered_dict_setitem_op(obj: Any) -> Callable[[], None]:
+    next_value = [9]
+
+    def op() -> None:
+        obj.ordered_dict_field["a"] = next_value[0]
+        next_value[0] = 1 if next_value[0] == 9 else 9
+
+    return op
+
+
+def _build_ordered_dict_move_to_end_last_op(obj: Any) -> Callable[[], None]:
+    keys = list(obj.ordered_dict_field.keys())
+    idx = [0]
+
+    def op() -> None:
+        obj.ordered_dict_field.move_to_end(keys[idx[0]])
+        idx[0] = (idx[0] + 1) % len(keys)
 
     return op
 
@@ -693,6 +831,17 @@ def _build_defaultdict_missing_list_op(obj: Any) -> Callable[[], None]:
     return op
 
 
+def _build_ordered_dict_move_to_end_first_op(obj: Any) -> Callable[[], None]:
+    keys = list(obj.ordered_dict_field.keys())
+    idx = [0]
+
+    def op() -> None:
+        obj.ordered_dict_field.move_to_end(keys[idx[0]], last=False)
+        idx[0] = (idx[0] + 1) % len(keys)
+
+    return op
+
+
 def _build_defaultdict_missing_dict_op(obj: Any) -> Callable[[], None]:
     index = [0]
 
@@ -701,6 +850,16 @@ def _build_defaultdict_missing_dict_op(obj: Any) -> Callable[[], None]:
         _ = obj.dict_field[key]
         obj.dict_field.pop(key)
         index[0] += 1
+
+    return op
+
+
+def _build_ordered_dict_popitem_last_op(obj: Any) -> Callable[[], None]:
+    field = obj.ordered_dict_field
+
+    def op() -> None:
+        k, v = field.popitem(last=True)
+        field[k] = v  # restore to keep the dict non-empty
 
     return op
 
@@ -717,8 +876,26 @@ def _build_defaultdict_mutate_list_after_missing_op(obj: Any) -> Callable[[], No
     return op
 
 
+def _build_ordered_dict_popitem_first_op(obj: Any) -> Callable[[], None]:
+    field = obj.ordered_dict_field
+
+    def op() -> None:
+        k, v = field.popitem(last=False)
+        # Re-insert at the front using move_to_end
+        field[k] = v
+        field.move_to_end(k, last=False)
+
+    return op
+
+
 def iter_container_cases() -> list[BenchmarkCase]:
-    return [*_list_cases(), *_set_cases(), *_dict_cases(), *_defaultdict_cases()]
+    return [
+        *_list_cases(),
+        *_set_cases(),
+        *_dict_cases(),
+        *_defaultdict_cases(),
+        *_ordered_dict_cases(),
+    ]
 
 
 def select_container_cases(

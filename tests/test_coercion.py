@@ -7,8 +7,8 @@
 # --------------------------------------------------------------------------------------
 """Test coercion behavior for ators object"""
 
-from collections import UserDict
-from typing import Any
+from collections import OrderedDict as StdOrderedDict, UserDict
+from typing import Any, OrderedDict
 
 import pytest
 
@@ -95,6 +95,19 @@ from ators.behaviors import Coercer, coerce, coerce_init
             True,
             [("1", "2"), {"bad": 1}],
             [frozenset({1, 2}), TypeError("")],
+        ),
+        # OrderedDict coercion from dict and iterable-of-pairs
+        (
+            OrderedDict[str, int],
+            False,
+            [{1: "2", "3": 4}, [(1, "2")]],
+            [StdOrderedDict({"1": 2, "3": 4}), StdOrderedDict({"1": 2})],
+        ),
+        (
+            OrderedDict[str, int],
+            True,
+            [{1: "2", "3": 4}, [(1, "2")]],
+            [StdOrderedDict({"1": 2, "3": 4}), TypeError("")],
         ),
         # Union: first matching member is used
         (int | complex, False, ["1", "1j", "a"], [1, 1j, TypeError("")]),

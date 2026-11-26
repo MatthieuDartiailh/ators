@@ -9,12 +9,12 @@
 
 import asyncio
 import inspect
-from collections import defaultdict
-from typing import ClassVar, DefaultDict
+from collections import OrderedDict, defaultdict
+from typing import ClassVar, DefaultDict, OrderedDict as TypingOrderedDict
 
 import pytest
 
-from ators import Member, validated
+from ators import AtorsOrderedDict, Member, validated
 from ators._ators import AtorsDefaultDict
 
 
@@ -222,6 +222,46 @@ def test_validated_defaultdict_argument_and_return_reject_invalid_items() -> Non
         make()
 
 
+def test_validated_ordered_dict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
+    @validated
+    def echo(
+        value: TypingOrderedDict[str, int],
+    ) -> TypingOrderedDict[str, int]:
+        assert not isinstance(value, AtorsOrderedDict)
+        return value
+
+    source = OrderedDict([("a", 1)])
+    result = echo(source)
+
+    assert not isinstance(result, AtorsOrderedDict)
+    assert isinstance(result, OrderedDict)
+    assert list(result.items()) == [("a", 1)]
+    assert result is source
+
+
+def test_validated_ordered_dict_argument_and_return_reject_invalid_items() -> None:
+    @validated
+    def echo(
+        value: TypingOrderedDict[str, int],
+    ) -> TypingOrderedDict[str, int]:
+        return value
+
+    with pytest.raises(ExceptionGroup):
+        echo(OrderedDict([("a", "bad")]))  # type: ignore[list-item]
+
+    @validated
+    def make() -> TypingOrderedDict[str, int]:
+        return OrderedDict([("a", "bad")])  # type: ignore[return-value]
+
+    with pytest.raises(TypeError, match="Failed to validate return value"):
+        make()
+
+    with pytest.raises(ExceptionGroup):
+        echo({"a": 1})  # plain dict is not an OrderedDict
+
+
 @pytest.mark.asyncio
 async def test_validated_async_defaultdict_return_is_checked_without_wrapping() -> None:
     @validated
@@ -244,6 +284,35 @@ def test_validated_bare_defaultdict_argument_and_return_are_checked_without_wrap
     result = echo({"a": 1})
     assert not isinstance(result, AtorsDefaultDict)
     assert dict(result) == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_validated_async_ordered_dict_return_is_checked_without_wrapping() -> (
+    None
+):
+    @validated
+    async def make() -> TypingOrderedDict[str, int]:
+        return OrderedDict([("a", 1)])
+
+    result = await make()
+    assert not isinstance(result, AtorsOrderedDict)
+    assert isinstance(result, OrderedDict)
+    assert list(result.items()) == [("a", 1)]
+
+
+def test_validated_bare_ordered_dict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
+    @validated
+    def echo(value: OrderedDict) -> OrderedDict:
+        assert not isinstance(value, AtorsOrderedDict)
+        return value
+
+    source = TypingOrderedDict([("a", 1)])
+    result = echo(source)
+    assert not isinstance(result, AtorsOrderedDict)
+    assert list(result.items()) == [("a", 1)]
+    assert result is source
 
 
 def test_validated_async_iterator_preserves_stop_iteration_value() -> None:
