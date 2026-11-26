@@ -119,7 +119,7 @@ def test_method_value_validation():
     value = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().append_value_validator(decorator=True)
 
         @append_value_validator(a)
         def _validate_a_value(self, m, v):

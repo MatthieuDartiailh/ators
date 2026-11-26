@@ -104,7 +104,7 @@ def test_method_preset():
     current = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().preset(decorator=True)
 
         @preset(a)
         def _preset_a(self, m, c):

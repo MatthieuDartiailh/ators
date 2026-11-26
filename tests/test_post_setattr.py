@@ -57,7 +57,7 @@ def test_method_postset():
     new = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().postset(decorator=True)
 
         @postset(a)
         def _postset_a(self, m, o, n):
