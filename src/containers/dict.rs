@@ -480,23 +480,6 @@ pub struct AtorsDefaultDict {
 unsafe impl Sync for AtorsDefaultDict {}
 
 impl AtorsDefaultDict {
-    pub(crate) fn new_empty<'py>(
-        py: Python<'py>,
-        key_validator: Validator,
-        value_validator: Validator,
-        member_name: Option<&str>,
-        object: Option<Py<AtorsBase>>,
-    ) -> PyResult<Bound<'py, AtorsDefaultDict>> {
-        AtorsDefaultDict::new_empty_with_factory(
-            py,
-            key_validator,
-            value_validator,
-            None,
-            member_name,
-            object,
-        )
-    }
-
     pub(crate) fn new_empty_with_factory<'py>(
         py: Python<'py>,
         key_validator: Validator,

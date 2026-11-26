@@ -8,9 +8,8 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from annotationlib import ForwardRef
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, DefaultDict, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, DefaultDict, Literal
 
 import pytest
 

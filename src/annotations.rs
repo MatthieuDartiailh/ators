@@ -1283,7 +1283,7 @@ fn configure_member_builder_from_annotation<'py>(
         match default_behavior {
             DefaultBehavior::Static { value } => {
                 let value_bound = value.bind(name.py());
-                if let Some(factory) = get_defaultdict_factory(&value_bound)? {
+                if let Some(factory) = get_defaultdict_factory(value_bound)? {
                     let factory_py = factory.unbind();
                     let mut current_validator = new.clone();
                     if is_bare_defaultdict {
