@@ -121,7 +121,9 @@ def test_set_container_validation(
     assert ators_set_object.a == expected
 
 
-@pytest.fixture(params=[dict[str, int], defaultdict[str, int]], ids=["dict", "defaultdict"])
+@pytest.fixture(
+    params=[dict[str, int], defaultdict[str, int]], ids=["dict", "defaultdict"]
+)
 def dict_annotation(request):
     return request.param
 
@@ -267,6 +269,8 @@ def test_deeply_nested_container_error_context():
 
     # This exercises error chain building through nested validation
     # Rust: types.rs lines 250-350 (nested container error paths)
+
+
 def test_dict_assignment_from_dict_and_copy_on_reassignment(dict_annotation):
     from ators import Ators
 
@@ -344,13 +348,50 @@ def test_defaultdict_missing_typed_default_requires_nullary_ctor():
         _ = obj.a["missing"]
 
 
+def test_defaultdict_mutation_assignment_and_copy_paths():
+    from ators import Ators
+
+    class A(Ators):
+        a: defaultdict[str, int]
+
+    obj = A(a={"seed": 1})
+    obj.a["key"] = 2
+    obj.a.setdefault("default", 3)
+    obj.a.setdefault("existing", 99)
+    obj.a.update({"updated": 4})
+    obj.a.update(named=5)
+    obj.a |= {"ior": 6}
+    del obj.a["seed"]
+
+    assert dict(obj.a) == {
+        "key": 2,
+        "default": 3,
+        "existing": 99,
+        "updated": 4,
+        "named": 5,
+        "ior": 6,
+    }
+
+    with pytest.raises(TypeError):
+        obj.a[1] = 7
+    with pytest.raises(TypeError):
+        obj.a["bad"] = "value"
+
+    source = {"copy": 8}
+    obj.a = source
+    source["later"] = 9
+    assert dict(obj.a) == {"copy": 8}
+
+    original = obj.a
+    obj.a = original
+    assert obj.a is not original
+
+
 def test_member_default_dict_factory_overrides_inferred_default():
     from ators import Ators, member
 
     class A(Ators):
-        a: defaultdict[str, int] = member(
-            default=defaultdict(lambda: 42, {"seed": 7})
-        )
+        a: defaultdict[str, int] = member(default=defaultdict(lambda: 42, {"seed": 7}))
 
     obj = A()
     assert obj.a["missing"] == 42
@@ -384,8 +425,10 @@ def test_bare_defaultdict_without_actual_default_is_rejected():
     from ators import Ators
 
     with pytest.raises(TypeError, match="Failed to configure Member a") as exc_info:
+
         class A(Ators):
             a: defaultdict
+
     cause = exc_info.value
     messages = []
     seen = set()
