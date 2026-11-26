@@ -12,10 +12,12 @@ import gc
 import pytest
 
 from ators import (
+    UNSET,
     Ators,
     AtorsChange,
     disable_notifications,
     enable_notifications,
+    freeze,
     is_notifications_enabled,
     member,
     observe,
@@ -58,7 +60,7 @@ def test_observe_and_unobserve():
     assert isinstance(calls[0], AtorsChange)
     assert calls[0].object is a
     assert calls[0].member_name == "a"
-    assert calls[0].oldvalue is None
+    assert calls[0].oldvalue is UNSET
     assert calls[0].newvalue == 1
 
     a.a = 2
@@ -69,6 +71,64 @@ def test_observe_and_unobserve():
     unobserve(a, "a", callback)
     a.a = 3
     assert len(calls) == 2
+
+
+def test_observer_notified_when_member_deleted():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A()
+    a.a = 1
+    observe(a, "a", changes.append)
+
+    del a.a
+
+    assert len(changes) == 1
+    assert changes[0].object is a
+    assert changes[0].member_name == "a"
+    assert changes[0].oldvalue == 1
+    assert changes[0].newvalue is UNSET
+
+    del a.a
+    assert len(changes) == 1
+
+
+def test_deleting_member_respects_frozen_and_notification_controls():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int = member()
+
+    a = A(a=1)
+    observe(a, "a", changes.append)
+    disable_notifications(a)
+    del a.a
+    assert changes == []
+
+    a.a = 2
+    assert changes == []
+    enable_notifications(a)
+    freeze(a)
+
+    with pytest.raises(TypeError, match="Cannot modify"):
+        del a.a
+
+
+def test_none_value_is_distinct_from_unset():
+    changes = []
+
+    class A(Ators, observable=True):
+        a: int | None = member()
+
+    a = A()
+    observe(a, "a", changes.append)
+
+    a.a = None
+
+    assert changes[0].oldvalue is UNSET
+    assert changes[0].newvalue is None
 
 
 def test_observe_fails_for_non_observable():

@@ -121,7 +121,7 @@ def test_method_default():
     me = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().default(decorator=True)
 
         @default(a)
         def _default_a(self, m):

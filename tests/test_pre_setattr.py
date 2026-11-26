@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 
-from ators import Ators, member
+from ators import UNSET, Ators, member
 from ators.behaviors import PreSetAttr, preset
 
 
@@ -88,7 +88,7 @@ def test_call_name_object_value_preset():
     assert i == 1
     assert isinstance(m, str)
     assert isinstance(obj, A)
-    assert current is None
+    assert current is UNSET
 
     a.a = 5
     assert a.a == 5
@@ -104,7 +104,7 @@ def test_method_preset():
     current = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().preset(decorator=True)
 
         @preset(a)
         def _preset_a(self, m, c):
@@ -119,7 +119,7 @@ def test_method_preset():
     assert a.a == 2
     assert i == 1
     assert isinstance(me, str)
-    assert current is None
+    assert current is UNSET
 
     a.a = 4
     assert a.a == 4
@@ -154,6 +154,22 @@ def test_inherited_preset_behavior():
     b = B()
     b.a = 5
     assert i == 1
+
+
+def test_preset_preserves_explicit_none():
+    current_values = []
+
+    def pre_set(name, object, current):
+        current_values.append(current)
+
+    class A(Ators):
+        a: int | None = member().preset(PreSetAttr.CallMemberObjectValue(pre_set))
+
+    a = A()
+    a.a = None
+    a.a = 1
+
+    assert current_values == [UNSET, None]
 
 
 @pytest.mark.parametrize(

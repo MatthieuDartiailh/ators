@@ -1592,7 +1592,8 @@ pub fn generate_member_builders_from_cls_namespace<'py>(
         //
         // The `effective_ann` resolved here replaces the outer `Member[T1, T2]`
         // with its first type argument (T1) for subsequent validator inference.
-        let has_coerce = builder.coercer().is_some();
+        let has_coerce =
+            builder.coercer().is_some() || builder.pending_decorator_methods().contains("coerce");
 
         // Track whether `effective_ann` differs from the original `ann`
         // so the validate_attr=False path can reuse the already-computed

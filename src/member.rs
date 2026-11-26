@@ -21,7 +21,10 @@ use pyo3::{
         PyString, PyTuple, PyType,
     },
 };
-use std::{clone::Clone, collections::HashMap};
+use std::{
+    clone::Clone,
+    collections::{HashMap, HashSet},
+};
 
 use crate::utils::err_with_cause;
 
@@ -502,12 +505,7 @@ impl Member {
                 run_post_set(&self_, object, &old_on_write.as_ref(), &new)?;
             }
 
-            notify_member_change(
-                object,
-                &self_.name,
-                old_on_write.unwrap_or_else(|| py.None()),
-                new.unbind(),
-            )?;
+            notify_member_change(object, &self_.name, old_on_write, Some(new.unbind()))?;
         }
 
         Ok(())
@@ -555,7 +553,7 @@ impl Member {
 
 /// Parameter type for `member(default=...)`, distinguishing "not provided"
 /// (Missing) from "explicitly provided as any value including `None`" (Value).
-pub(crate) enum MemberDefaultArg<'py> {
+pub enum MemberDefaultArg<'py> {
     Missing,
     Value(Bound<'py, PyAny>),
 }
@@ -597,6 +595,7 @@ pub struct MemberBuilder {
     // in subclasses.
     pub require_owner: bool,
     multiple_settings: HashMap<String, u8>,
+    pending_decorator_methods: HashSet<String>,
 }
 
 #[pymethods]
@@ -663,13 +662,37 @@ impl MemberBuilder {
     }
 
     /// Specify a default value or default value factory for this member.
-    #[pyo3(name = "default")]
+    #[pyo3(
+        name = "default",
+        signature = (default_behavior = MemberDefaultArg::Missing, *, decorator = None)
+    )]
     pub fn py_default<'py>(
         mut self_: PyRefMut<'py, Self>,
-        default_behavior: Bound<'py, PyAny>,
+        default_behavior: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid default() reservation.",
+                ));
+            }
+            if matches!(default_behavior, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "default(decorator=True) does not accept a default value.",
+                ));
+            }
+            mself.reserve_decorator("default")?;
+            return self_.into_bound_py_any(py);
+        }
+        let MemberDefaultArg::Value(default_behavior) = default_behavior else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "default() requires a value or default(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("default")?;
         if mself.default.is_some() {
             mself
                 .multiple_settings
@@ -694,13 +717,29 @@ impl MemberBuilder {
 
     /// Specify a coercer to be applied to values assigned to this member if
     /// type validation fails.
-    #[pyo3( signature= ( coercer = None))]
+    #[pyo3(signature = (coercer = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn coerce<'py>(
         mut self_: PyRefMut<'py, Self>,
-        coercer: Option<Bound<'py, PyAny>>,
+        coercer: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid coerce() reservation.",
+                ));
+            }
+            if matches!(coercer, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "coerce(decorator=True) does not accept a coercer.",
+                ));
+            }
+            mself.reserve_decorator("coerce")?;
+            return self_.into_bound_py_any(py);
+        }
+        mself.ensure_direct_setting_allowed("coerce")?;
         if mself.coerce.is_some() {
             mself
                 .multiple_settings
@@ -708,27 +747,46 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        if let Some(c) = coercer {
-            // XXX accept a callable directly
-            let bc = c.cast::<Coercer>()?;
-            mself.coerce = Some(bc.as_any().extract()?);
-        } else {
-            // Use the Type Inferred coercer by default
-            // (people should not call coerce if they do not want to coerce).
-            mself.coerce = Some(Coercer::TypeInferred {});
-        };
+        match coercer {
+            MemberDefaultArg::Missing => mself.coerce = Some(Coercer::TypeInferred {}),
+            MemberDefaultArg::Value(c) => {
+                if c.is_none() {
+                    mself.coerce = Some(Coercer::TypeInferred {});
+                } else {
+                    // XXX accept a callable directly
+                    let bc = c.cast::<Coercer>()?;
+                    mself.coerce = Some(bc.as_any().extract()?);
+                }
+            }
+        }
         self_.into_bound_py_any(py)
     }
 
     /// Specify a coercer to be applied to the initial value of the member
     /// during instance creation.
-    #[pyo3( signature= ( coercer = None))]
+    #[pyo3(signature = (coercer = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn coerce_init<'py>(
         mut self_: PyRefMut<'py, Self>,
-        coercer: Option<Bound<'py, PyAny>>,
+        coercer: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid coerce_init() reservation.",
+                ));
+            }
+            if matches!(coercer, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "coerce_init(decorator=True) does not accept a coercer.",
+                ));
+            }
+            mself.reserve_decorator("coerce_init")?;
+            return self_.into_bound_py_any(py);
+        }
+        mself.ensure_direct_setting_allowed("coerce_init")?;
         if mself.coerce_init.is_some() {
             mself
                 .multiple_settings
@@ -736,23 +794,49 @@ impl MemberBuilder {
                 .and_modify(|e| *e += 1)
                 .or_insert(2);
         }
-        if let Some(c) = coercer {
-            // XXX accept a callable directly
-            let bc = c.cast::<Coercer>()?;
-            mself.coerce_init = Some(bc.as_any().extract()?);
-        } else {
-            // Use the Type Inferred coercer by default
-            // (people should not call coerce if they do not want to coerce).
-            mself.coerce_init = Some(Coercer::TypeInferred {});
-        };
+        match coercer {
+            MemberDefaultArg::Missing => mself.coerce_init = Some(Coercer::TypeInferred {}),
+            MemberDefaultArg::Value(c) => {
+                if c.is_none() {
+                    mself.coerce_init = Some(Coercer::TypeInferred {});
+                } else {
+                    // XXX accept a callable directly
+                    let bc = c.cast::<Coercer>()?;
+                    mself.coerce_init = Some(bc.as_any().extract()?);
+                }
+            }
+        }
         self_.into_bound_py_any(py)
     }
 
+    #[pyo3(signature = (value_validator = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn append_value_validator<'py>(
         mut self_: PyRefMut<'py, Self>,
-        value_validator: Bound<'py, PyAny>,
+        value_validator: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid append_value_validator() reservation.",
+                ));
+            }
+            if matches!(value_validator, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "append_value_validator(decorator=True) does not accept a validator.",
+                ));
+            }
+            mself.reserve_decorator("append_value_validator")?;
+            return Ok(self_);
+        }
+        let MemberDefaultArg::Value(value_validator) = value_validator else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "append_value_validator() requires a validator or \
+                 append_value_validator(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("append_value_validator")?;
         let b = value_validator.cast::<ValueValidator>()?;
         if let Some(vv) = &mut mself.value_validators {
             vv.push(b.as_any().extract()?);
@@ -767,12 +851,34 @@ impl MemberBuilder {
     /// Accepts a behavior object (or compatible callable) which will be
     /// invoked before attribute access on instances to allow preparation
     /// or short-circuiting of the returned value.
+    #[pyo3(signature = (pre_getattr = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn preget<'py>(
         mut self_: PyRefMut<'py, Self>,
-        pre_getattr: Bound<'py, PyAny>,
+        pre_getattr: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid preget() reservation.",
+                ));
+            }
+            if matches!(pre_getattr, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "preget(decorator=True) does not accept a behavior.",
+                ));
+            }
+            mself.reserve_decorator("preget")?;
+            return self_.into_bound_py_any(py);
+        }
+        let MemberDefaultArg::Value(pre_getattr) = pre_getattr else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "preget() requires a behavior or preget(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("preget")?;
         if mself.pre_getattr.is_some() {
             mself
                 .multiple_settings
@@ -790,12 +896,34 @@ impl MemberBuilder {
     /// The provided behavior is called after a value is retrieved from
     /// the instance; it can inspect or transform the value before it is
     /// returned to callers.
+    #[pyo3(signature = (post_getattr = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn postget<'py>(
         mut self_: PyRefMut<'py, Self>,
-        post_getattr: Bound<'py, PyAny>,
+        post_getattr: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid postget() reservation.",
+                ));
+            }
+            if matches!(post_getattr, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "postget(decorator=True) does not accept a behavior.",
+                ));
+            }
+            mself.reserve_decorator("postget")?;
+            return self_.into_bound_py_any(py);
+        }
+        let MemberDefaultArg::Value(post_getattr) = post_getattr else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "postget() requires a behavior or postget(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("postget")?;
         if mself.post_getattr.is_some() {
             mself
                 .multiple_settings
@@ -812,12 +940,34 @@ impl MemberBuilder {
     ///
     /// The provided behavior will be invoked prior to assigning a new
     /// value to the member, allowing validation or state adjustment.
+    #[pyo3(signature = (pre_setattr = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn preset<'py>(
         mut self_: PyRefMut<'py, Self>,
-        pre_setattr: Bound<'py, PyAny>,
+        pre_setattr: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid preset() reservation.",
+                ));
+            }
+            if matches!(pre_setattr, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "preset(decorator=True) does not accept a behavior.",
+                ));
+            }
+            mself.reserve_decorator("preset")?;
+            return self_.into_bound_py_any(py);
+        }
+        let MemberDefaultArg::Value(pre_setattr) = pre_setattr else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "preset() requires a behavior or preset(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("preset")?;
         if mself.pre_setattr.is_some() {
             mself
                 .multiple_settings
@@ -848,12 +998,34 @@ impl MemberBuilder {
     /// The provided behavior is invoked after a successful assignment
     /// and can be used to react to value changes (notifications,
     /// derived updates, etc.).
+    #[pyo3(signature = (post_setattr = MemberDefaultArg::Missing, *, decorator = None))]
     pub fn postset<'py>(
         mut self_: PyRefMut<'py, Self>,
-        post_setattr: Bound<'py, PyAny>,
+        post_setattr: MemberDefaultArg<'py>,
+        decorator: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let py = self_.py();
         let mself = &mut *self_;
+        if let Some(decorator) = decorator {
+            if !decorator {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "decorator=False is not a valid postset() reservation.",
+                ));
+            }
+            if matches!(post_setattr, MemberDefaultArg::Value(_)) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "postset(decorator=True) does not accept a behavior.",
+                ));
+            }
+            mself.reserve_decorator("postset")?;
+            return self_.into_bound_py_any(py);
+        }
+        let MemberDefaultArg::Value(post_setattr) = post_setattr else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "postset() requires a behavior or postset(decorator=True).",
+            ));
+        };
+        mself.ensure_direct_setting_allowed("postset")?;
         if mself.post_setattr.is_some() {
             mself
                 .multiple_settings
@@ -960,9 +1132,116 @@ impl MemberBuilder {
         mself.forward_ref_environment_factory = Some(fc);
         Ok(self_)
     }
+
+    /// Internal state transition used by standalone behavior decorators.
+    pub fn _consume_decorator<'py>(
+        mut self_: PyRefMut<'py, Self>,
+        method: Bound<'py, PyString>,
+        behavior: Bound<'py, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let method_name = method.extract::<String>()?;
+        let mself = &mut *self_;
+
+        match method_name.as_str() {
+            "default" => {
+                let b = behavior.cast::<DefaultBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.default = Some(b.as_any().extract()?);
+            }
+            "preget" => {
+                let b = behavior.cast::<PreGetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.pre_getattr = Some(b.as_any().extract()?);
+            }
+            "postget" => {
+                let b = behavior.cast::<PostGetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.post_getattr = Some(b.as_any().extract()?);
+            }
+            "preset" => {
+                let b = behavior.cast::<PreSetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.pre_setattr = Some(b.as_any().extract()?);
+            }
+            "postset" => {
+                let b = behavior.cast::<PostSetattrBehavior>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.post_setattr = Some(b.as_any().extract()?);
+            }
+            "coerce" => {
+                let b = behavior.cast::<Coercer>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.coerce = Some(b.as_any().extract()?);
+            }
+            "coerce_init" => {
+                let b = behavior.cast::<Coercer>()?;
+                mself.consume_decorator(&method_name)?;
+                mself.coerce_init = Some(b.as_any().extract()?);
+            }
+            "append_value_validator" => {
+                let b = behavior.cast::<ValueValidator>()?;
+                let validator = b.as_any().extract()?;
+                mself.consume_decorator(&method_name)?;
+                if let Some(validators) = &mut mself.value_validators {
+                    validators.push(validator);
+                } else {
+                    mself.value_validators = Some(vec![validator]);
+                }
+            }
+            _ => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Unknown decorator reservation method '{method_name}'."
+                )));
+            }
+        }
+        Ok(self_)
+    }
 }
 
 impl MemberBuilder {
+    fn reserve_decorator(&mut self, method: &str) -> PyResult<()> {
+        if !self.pending_decorator_methods.insert(method.to_string()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Member '{name}' already reserves decorator '{method}'.",
+                name = self.name.clone().unwrap_or_else(|| "<unknown>".to_string()),
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_direct_setting_allowed(&self, method: &str) -> PyResult<()> {
+        if self.pending_decorator_methods.contains(method) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Member '{name}' reserves the '{method}' decorator. \
+                 Use the matching @{method} decorator instead of calling .{method} directly.",
+                name = self.name.clone().unwrap_or_else(|| "<unknown>".to_string()),
+            )));
+        }
+        Ok(())
+    }
+
+    fn consume_decorator(&mut self, method: &str) -> PyResult<()> {
+        if !self.pending_decorator_methods.remove(method) {
+            let mut pending = self
+                .pending_decorator_methods
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            pending.sort();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Member '{name}' has no pending '{method}' decorator; \
+                 pending decorators: {pending:?}.",
+                name = self.name.clone().unwrap_or_else(|| "<unknown>".to_string()),
+            )));
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn pending_decorator_methods(&self) -> &HashSet<String> {
+        &self.pending_decorator_methods
+    }
+
     #[inline]
     pub fn should_inherit(&self) -> bool {
         self.inherit
@@ -1130,6 +1409,22 @@ impl MemberBuilder {
                 "Cannot build member {name} of {type_name} without a resolved pickle flag."
             )));
         };
+        if !self.pending_decorator_methods.is_empty() {
+            let mut pending = self
+                .pending_decorator_methods
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            pending.sort();
+            let decorators = pending
+                .iter()
+                .map(|method| format!("@{method}"))
+                .collect::<Vec<_>>();
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "Member '{name}' of {type_name} reserves {pending:?} for standalone \
+                 decorators, but the matching decorators were not found: {decorators:?}.",
+            )));
+        }
         let py = type_name.py();
         let mut warnings_warn: Option<Py<PyAny>> = None;
         let mut get_warnings_warn = || -> PyResult<Bound<'py, PyAny>> {
@@ -1239,6 +1534,7 @@ impl Clone for MemberBuilder {
             init: self.init,
             require_owner: self.require_owner,
             multiple_settings: self.multiple_settings.clone(),
+            pending_decorator_methods: self.pending_decorator_methods.clone(),
             pickle: self.pickle,
             pickle_explicit: self.pickle_explicit,
         }

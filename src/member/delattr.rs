@@ -26,10 +26,16 @@ impl DelattrBehavior {
         object: &Bound<'py, crate::class::base::AtorsBase>,
     ) -> PyResult<()> {
         match self {
-            Self::Slot {} => {
-                crate::class::base::del_slot(object, member.index());
-                Ok(())
-            }
+            Self::Slot {} => match crate::class::base::del_slot(object, member.index()) {
+                Ok(Some(old)) => {
+                    crate::class::base::notify_member_change(object, member.name(), Some(old), None)
+                }
+                Ok(None) => Ok(()),
+                Err(()) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "Cannot modify {} which is frozen.",
+                    object.repr()?
+                ))),
+            },
             Self::Undeletable {} => Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "The member {} from {} cannot be deleted",
                 member.name,

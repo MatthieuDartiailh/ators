@@ -60,21 +60,26 @@ impl PreSetattrBehavior {
             }
             Self::CallMemberObjectValue { callable } => {
                 let py = member.py();
+                let current = match current {
+                    Some(value) => value.bind(py).clone(),
+                    None => crate::get_unset(py)?,
+                };
                 callable
                     .0
                     .bind(py)
-                    // XXX should use sentinel value
-                    .call1((
-                        &member.name,
-                        object,
-                        current.map_or(&py.None(), |v| v).bind(py),
-                    ))
+                    .call1((&member.name, object, current))
                     .map(|_| ())
             }
-            Self::ObjectMethod { meth_name } => object
-                // XXX should use sentinel value
-                .call_method1(meth_name, (&member.name, current))
-                .map(|_| ()),
+            Self::ObjectMethod { meth_name } => {
+                let py = member.py();
+                let current = match current {
+                    Some(value) => value.bind(py).clone(),
+                    None => crate::get_unset(py)?,
+                };
+                object
+                    .call_method1(meth_name, (&member.name, current))
+                    .map(|_| ())
+            }
         }
     }
 }
@@ -124,16 +129,28 @@ impl PostSetattrBehavior {
     ) -> PyResult<()> {
         match self {
             Self::NoOp {} => Ok(()),
-            Self::CallMemberObjectOldNew { callable } => callable
-                .0
-                .bind(member.py())
-                // XXX should use sentinel value
-                .call1((member, object, old, new))
-                .map(|_| ()),
-            Self::ObjectMethod { meth_name } => object
-                // XXX should use sentinel value
-                .call_method1(meth_name, (member, old, new))
-                .map(|_| ()),
+            Self::CallMemberObjectOldNew { callable } => {
+                let py = member.py();
+                let old = match old {
+                    Some(value) => value.bind(py).clone(),
+                    None => crate::get_unset(py)?,
+                };
+                callable
+                    .0
+                    .bind(py)
+                    .call1((member, object, old, new))
+                    .map(|_| ())
+            }
+            Self::ObjectMethod { meth_name } => {
+                let py = member.py();
+                let old = match old {
+                    Some(value) => value.bind(py).clone(),
+                    None => crate::get_unset(py)?,
+                };
+                object
+                    .call_method1(meth_name, (member, old, new))
+                    .map(|_| ())
+            }
         }
     }
 }

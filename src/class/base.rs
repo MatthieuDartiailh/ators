@@ -480,12 +480,19 @@ pub(crate) fn replace_slot<'py>(
 
 /// Del the slot value at index
 #[inline]
-pub(crate) fn del_slot<'py>(object: &Bound<'py, AtorsBase>, index: u8) {
+pub(crate) fn del_slot<'py>(
+    object: &Bound<'py, AtorsBase>,
+    index: u8,
+) -> Result<Option<Py<PyAny>>, ()> {
     with_critical_section(object.as_any(), || {
         // Safety: we hold the critical section lock on this object. We write through the
         // raw pointer instead of creating a &mut T to avoid relying on Rust aliasing rules.
         unsafe {
-            (*object.get().inner.get()).slots[index as usize] = None;
+            let inner = &mut *object.get().inner.get();
+            if inner.frozen {
+                return Err(());
+            }
+            Ok(inner.slots[index as usize].take())
         }
     })
 }
@@ -536,8 +543,8 @@ pub(crate) fn get_observer_pool<'a, 'py>(
 pub(crate) fn notify_member_change<'py>(
     obj: &Bound<'py, AtorsBase>,
     member_name: &str,
-    oldvalue: Py<PyAny>,
-    newvalue: Py<PyAny>,
+    oldvalue: Option<Py<PyAny>>,
+    newvalue: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     // Fast path: check is_observable without a critical section.
     // is_observable is set once at construction and never mutated.
@@ -553,6 +560,14 @@ pub(crate) fn notify_member_change<'py>(
     // slots[0] is immutable after construction: no CS needed to get a reference to the pool.
     let pool = get_observer_pool(obj);
     let py = obj.py();
+    let oldvalue = match oldvalue {
+        Some(value) => value,
+        None => crate::get_unset(py)?.unbind(),
+    };
+    let newvalue = match newvalue {
+        Some(value) => value,
+        None => crate::get_unset(py)?.unbind(),
+    };
     let change = Bound::new(
         py,
         AtorsChange::new(

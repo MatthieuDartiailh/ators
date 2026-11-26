@@ -337,7 +337,9 @@ def test_method_coerce(init, inputs, called, expected):
 
     class A(Ators):
         # Use conditional type annotation to simplify test
-        a: int if init else Member[int, Any] = member()  # type: ignore
+        a: int if init else Member[int, Any] = getattr(
+            member(), "coerce_init" if init else "coerce"
+        )(decorator=True)  # type: ignore
 
         @(coerce_init if init else coerce)(a)
         def _coerce_a(self, m, v, init):

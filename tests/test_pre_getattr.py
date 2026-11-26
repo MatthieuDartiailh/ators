@@ -43,7 +43,7 @@ def test_method_preget():
     me = None
 
     class A(Ators):
-        a: int = member()
+        a: int = member().preget(decorator=True)
 
         @preget(a)
         def _preget_a(self, m):
