@@ -430,7 +430,7 @@ impl Coercer {
                     };
                     Ok(coerced.as_any().clone())
                 }
-                TypeValidator::OrderedDict { items } => {
+                TypeValidator::OrderedDict { items, .. } => {
                     // Coerce the value to a plain `collections.OrderedDict`.
                     // The subsequent type-validation step will then wrap it in
                     // `AtorsOrderedDict`.

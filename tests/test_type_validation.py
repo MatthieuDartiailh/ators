@@ -8,8 +8,7 @@
 """Test type validation for ators object"""
 
 from abc import ABC
-from collections import defaultdict
-from collections import OrderedDict as StdOrderedDict
+from collections import OrderedDict as StdOrderedDict, defaultdict
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -135,7 +134,11 @@ type MyInt = int
         ),
         (
             OrderedDict[str, int],
-            [StdOrderedDict(), StdOrderedDict({"a": 1}), StdOrderedDict({"a": 1, "b": 2})],
+            [
+                StdOrderedDict(),
+                StdOrderedDict({"a": 1}),
+                StdOrderedDict({"a": 1, "b": 2}),
+            ],
             [
                 1,
                 (),
@@ -642,7 +645,9 @@ def test_inherited_type_validator():
 
 @pytest.mark.parametrize("annotation", [defaultdict, DefaultDict])
 def test_bare_defaultdict_annotation_is_rejected(annotation):
-    with pytest.raises(TypeError, match="Failed to configure Member a from annotation") as exc_info:
+    with pytest.raises(
+        TypeError, match="Failed to configure Member a from annotation"
+    ) as exc_info:
 
         class A(Ators):
             a: annotation = member()
@@ -677,6 +682,7 @@ def test_type_alias_annotations_are_evaluated_before_validation():
 # ---------------------------------------------------------------------------
 # Constrained TypeVar tests
 # ---------------------------------------------------------------------------
+
 
 class ConstrainedBox[T: (int, str)](Ators):
     item: T = member()
@@ -822,6 +828,7 @@ def test_constrained_generic_partial_specialization_with_bound_within_constraint
 
 def test_constrained_generic_partial_specialization_rejects_bound_outside_constraints():
     with pytest.raises(TypeError, match="not within the constraints"):
+
         class FloatBound[T: float](ConstrainedGenericPair[T, str]):
             pass
 
@@ -892,6 +899,7 @@ def test_subclass_validation_with_generic_class():
 
     # This exercises Subclass validator error path
     # Rust: types.rs lines 650-700 (Subclass validation)
+
 
 def test_ordered_dict_annotation_produces_ators_ordered_dict():
     """OrderedDict[K, V] annotations must produce AtorsOrderedDict containers."""

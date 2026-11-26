@@ -375,9 +375,10 @@ pub enum TypeValidator {
         missing_factory: Option<Py<PyAny>>,
         validation_mode: ValidationMode,
     },
-    #[pyo3(constructor = (items))]
+    #[pyo3(constructor = (items, validation_mode))]
     OrderedDict {
         items: Option<(BoxedValidator, BoxedValidator)>,
+        validation_mode: ValidationMode,
     },
     // Sequence,
     // List,
@@ -441,6 +442,9 @@ impl TypeValidator {
                 validation_mode, ..
             }
             | Self::DefaultDict {
+                validation_mode, ..
+            }
+            | Self::OrderedDict {
                 validation_mode, ..
             } => *validation_mode == ValidationMode::CheckOnly,
             Self::NotifyingList { .. } | Self::NotifyingMap { .. } => false,
@@ -546,13 +550,17 @@ impl TypeValidator {
                     .map(|factory| factory.clone_ref(py)),
                 validation_mode: *validation_mode,
             },
-            Self::OrderedDict { items } => Self::OrderedDict {
+            Self::OrderedDict {
+                items,
+                validation_mode,
+            } => Self::OrderedDict {
                 items: items.as_ref().map(|(k, v)| {
                     (
                         BoxedValidator::from(k.with_owner(py, owner)),
                         BoxedValidator::from(v.with_owner(py, owner)),
                     )
                 }),
+                validation_mode: *validation_mode,
             },
             _ => self.clone(),
         }
@@ -1640,10 +1648,46 @@ impl TypeValidator {
             }
             Self::OrderedDict {
                 items: Some((key_v, val_v)),
+                validation_mode,
             } => {
                 let py = value.py();
                 let aod_type = crate::get_ators_ordered_dict_type(py)?;
                 let ordered_dict_type = crate::get_ordered_dict_type(py);
+
+                if *validation_mode == ValidationMode::CheckOnly {
+                    if !value.is_instance(ordered_dict_type.as_any())? {
+                        return validation_error!("OrderedDict", name, object, value);
+                    }
+                    let src_dict = value.cast::<PyDict>()?;
+                    for (tk, tv) in src_dict.iter() {
+                        key_v.validate(name, object, &tk).map_err(|err| {
+                            err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate key '{}' for the member {}.",
+                                    tk.repr()
+                                        .map(|r| r.to_string())
+                                        .unwrap_or_else(|_| format!("{tk:?}")),
+                                    name.unwrap_or("return"),
+                                )),
+                                err,
+                            )
+                        })?;
+                        val_v.validate(name, object, &tv).map_err(|err| {
+                            err_with_cause(
+                                py,
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "Failed to validate value '{}' with key '{}' for the member {}.",
+                                    tv.repr().map(|r| r.to_string()).unwrap_or_else(|_| format!("{tv:?}")),
+                                    tk.repr().map(|r| r.to_string()).unwrap_or_else(|_| format!("{tk:?}")),
+                                    name.unwrap_or("return"),
+                                )),
+                                err,
+                            )
+                        })?;
+                    }
+                    return Ok(value.clone());
+                }
 
                 // Fast path: already an AtorsOrderedDict assigned to the same context.
                 // We copy items without re-validation and return a fresh container.
@@ -1760,13 +1804,19 @@ impl TypeValidator {
                 }
                 aod_type.call_method1(intern!(py, "_from_core_and_items"), (new_core, py_items))
             }
-            Self::OrderedDict { items: None } => {
+            Self::OrderedDict {
+                items: None,
+                validation_mode,
+            } => {
                 let py = value.py();
                 let ordered_dict_type = crate::get_ordered_dict_type(py);
 
                 // Only accept OrderedDict (and subclasses); plain dict is rejected.
                 if !value.is_instance(ordered_dict_type.as_any())? {
                     return validation_error!("OrderedDict", name, object, value);
+                }
+                if *validation_mode == ValidationMode::CheckOnly {
+                    return Ok(value.clone());
                 }
 
                 let aod_type = crate::get_ators_ordered_dict_type(py)?;
@@ -2123,7 +2173,10 @@ impl TypeValidator {
                 missing_factory: _,
                 validation_mode: _,
             } => Mutability::Mutable,
-            Self::OrderedDict { items: _ } => Mutability::Mutable,
+            Self::OrderedDict {
+                items: _,
+                validation_mode: _,
+            } => Mutability::Mutable,
             Self::Typed { type_ } => {
                 let mm = get_type_mutability_map(py);
                 with_critical_section(mm.as_any(), || {
@@ -2234,8 +2287,12 @@ impl Clone for TypeValidator {
                     .map(|factory| factory.clone_ref(py)),
                 validation_mode: *validation_mode,
             },
-            Self::OrderedDict { items } => Self::OrderedDict {
+            Self::OrderedDict {
+                items,
+                validation_mode,
+            } => Self::OrderedDict {
                 items: items.clone(),
+                validation_mode: *validation_mode,
             },
             Self::Typed { type_ } => Self::Typed {
                 type_: type_.clone_ref(py),

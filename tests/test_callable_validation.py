@@ -9,14 +9,12 @@
 
 import asyncio
 import inspect
-from collections import defaultdict
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import ClassVar, DefaultDict, OrderedDict as TypingOrderedDict
 
 import pytest
 
-from ators import Member, validated
-from ators import AtorsOrderedDict
+from ators import AtorsOrderedDict, Member, validated
 from ators._ators import AtorsDefaultDict
 
 
@@ -224,7 +222,9 @@ def test_validated_defaultdict_argument_and_return_reject_invalid_items() -> Non
         make()
 
 
-def test_validated_ordered_dict_argument_and_return_are_checked_without_wrapping() -> None:
+def test_validated_ordered_dict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
     @validated
     def echo(
         value: TypingOrderedDict[str, int],
@@ -284,7 +284,9 @@ def test_validated_bare_defaultdict_argument_and_return_are_checked_without_wrap
 
 
 @pytest.mark.asyncio
-async def test_validated_async_ordered_dict_return_is_checked_without_wrapping() -> None:
+async def test_validated_async_ordered_dict_return_is_checked_without_wrapping() -> (
+    None
+):
     @validated
     async def make() -> TypingOrderedDict[str, int]:
         return OrderedDict([("a", 1)])
@@ -295,7 +297,9 @@ async def test_validated_async_ordered_dict_return_is_checked_without_wrapping()
     assert list(result.items()) == [("a", 1)]
 
 
-def test_validated_bare_ordered_dict_argument_and_return_are_checked_without_wrapping() -> None:
+def test_validated_bare_ordered_dict_argument_and_return_are_checked_without_wrapping() -> (
+    None
+):
     @validated
     def echo(value: OrderedDict) -> OrderedDict:
         assert not isinstance(value, AtorsOrderedDict)

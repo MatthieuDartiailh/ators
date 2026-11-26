@@ -720,6 +720,7 @@ pub fn build_validator_from_annotation<'py>(
                 Validator::new(
                     TypeValidator::OrderedDict {
                         items: items_validator,
+                        validation_mode,
                     },
                     None,
                     None,
@@ -915,7 +916,15 @@ pub fn build_validator_from_annotation<'py>(
         ))
     } else if ann.is(&tools.types.ordered_dict) {
         Ok((
-            Validator::new(TypeValidator::OrderedDict { items: None }, None, None, None),
+            Validator::new(
+                TypeValidator::OrderedDict {
+                    items: None,
+                    validation_mode,
+                },
+                None,
+                None,
+                None,
+            ),
             ValidatorBuildInfo::default(),
         ))
     } else if is_type_var(&ann)?
